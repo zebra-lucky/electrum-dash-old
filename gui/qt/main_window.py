@@ -143,7 +143,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, PrintError):
         tabs.addTab(self.create_addresses_tab(), _('Addresses') )
         tabs.addTab(self.create_contacts_tab(), _('Contacts') )
         # Disabled until API is stable.
-#        tabs.addTab(self.create_proposals_tab(), _('Budget Proposals'))
+        tabs.addTab(self.create_proposals_tab(), _('Budget Proposals'))
         tabs.addTab(self.create_console_tab(), _('Console') )
         tabs.setMinimumSize(833, 500)
         tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -169,15 +169,14 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, PrintError):
 
         self.connect(self, QtCore.SIGNAL('payment_request_ok'), self.payment_request_ok)
         self.connect(self, QtCore.SIGNAL('payment_request_error'), self.payment_request_error)
-#        self.connect(self, QtCore.SIGNAL('proposals_changed'), self.proposals_changed)
+        self.connect(self, QtCore.SIGNAL('proposals_changed'), self.proposals_changed)
         self.history_list.setFocus(True)
 
         # network callbacks
         if self.network:
             self.connect(self, QtCore.SIGNAL('network'), self.on_network_qt)
             interests = ['updated', 'new_transaction', 'status',
-                         'banner', 'verified']
-#                         'proposals']
+                         'banner', 'verified', 'proposals']
             # To avoid leaking references to "self" that prevent the
             # window from being GC-ed when closed, callbacks should be
             # methods of this class only, and specifically not be
