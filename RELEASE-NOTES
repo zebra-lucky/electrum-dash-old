@@ -1,3 +1,13 @@
+# Release 2.6.4.3
+ * Fix a vulnerability caused by Cross-Origin Resource Sharing (CORS)
+   in the JSONRPC interface. Previous versions of Electrum are
+   vulnerable to port scanning and deanonimization attacks from
+   malicious websites. Wallets that are not password-protected are
+   vulnerable to theft.
+# Release 2.6.4.2
+ * fix QT gui group titles, disabled button color
+# Release 2.6.4.1
+ * fix wine/osx build scripts
 # Release 2.6.4 (bugfixes)
  * fix coinchooser bug (#1703)
  * fix daemon JSONRPC (#1731)
