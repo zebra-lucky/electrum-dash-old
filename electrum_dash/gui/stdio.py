@@ -95,7 +95,8 @@ class ElectrumGui:
     def print_history(self):
         messages = []
 
-        hist_list = reversed(self.wallet.get_history(config=self.config))
+        hist_list, tx_groups = self.wallet.get_history(config=self.config)
+        hist_list = reversed(hist_list)
         show_dip2 = self.config.get('show_dip2_tx_type', False)
         if show_dip2:
             width = [20, 18, 22, 14, 14]
@@ -141,7 +142,7 @@ class ElectrumGui:
                 messages.append(msg)
         if show_dip2:
             self.print_list(messages[::-1],
-                            format_str % (_("Date"), 'DIP2',
+                            format_str % (_("Date"), 'Type',
                                           _("Description"), _("Amount"),
                                           _("Balance")))
         else:
@@ -247,7 +248,8 @@ class ElectrumGui:
 
         print(_("Please wait..."))
         try:
-            self.network.run_from_another_thread(self.network.broadcast_transaction(tx))
+            coro = self.wallet.psman.broadcast_transaction(tx)
+            self.network.run_from_another_thread(coro)
         except TxBroadcastError as e:
             msg = e.get_message_for_gui()
             print(msg)

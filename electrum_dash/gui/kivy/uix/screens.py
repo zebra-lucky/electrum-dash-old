@@ -9,9 +9,13 @@ from kivy.cache import Cache
 from kivy.clock import Clock
 from kivy.compat import string_types
 from kivy.properties import (ObjectProperty, DictProperty, NumericProperty,
-                             ListProperty, StringProperty)
+                             ListProperty, StringProperty, BooleanProperty)
 
-from kivy.uix.recycleview import RecycleView
+from kivy.uix.behaviors import FocusBehavior
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.recycleview.layout import LayoutSelectionBehavior
+from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.recycleboxlayout import RecycleBoxLayout
 from kivy.uix.label import Label
 
 from kivy.lang import Builder
@@ -20,6 +24,7 @@ from kivy.utils import platform
 
 from electrum_dash.util import profiler, parse_URI, format_time, InvalidPassword, NotEnoughFunds, Fiat
 from electrum_dash import bitcoin
+from electrum_dash.dash_tx import PSTxTypes, SPEC_TX_NAMES
 from electrum_dash.transaction import TxOutput, Transaction, tx_from_str
 from electrum_dash.util import send_exception_to_crash_reporter, parse_URI, InvalidBitcoinURI
 from electrum_dash.paymentrequest import PR_UNPAID, PR_PAID, PR_UNKNOWN, PR_EXPIRED
@@ -32,8 +37,40 @@ from .context_menu import ContextMenu
 
 from electrum_dash.gui.kivy.i18n import _
 
-class HistoryRecycleView(RecycleView):
-    pass
+
+class HistoryItem(RecycleDataViewBehavior, BoxLayout):
+    index = None
+    selected = BooleanProperty(False)
+
+    def refresh_view_attrs(self, rv, index, data):
+        self.index = index
+        return super(HistoryItem, self).refresh_view_attrs(rv, index, data)
+
+    def on_touch_down(self, touch):
+        if super(HistoryItem, self).on_touch_down(touch):
+            return True
+        if self.collide_point(*touch.pos):
+            return self.parent.select_with_touch(self.index, touch)
+
+    def apply_selection(self, rv, index, is_selected):
+        self.selected = is_selected
+
+
+class HistBoxLayout(FocusBehavior, LayoutSelectionBehavior, RecycleBoxLayout):
+    def select_node(self, node):
+        super(HistBoxLayout, self).select_node(node)
+        rv = self.recycleview
+        data = rv.data[node]
+        screen = data['screen']
+        screen.on_select_node(node, data)
+
+    def deselect_node(self, node):
+        super(HistBoxLayout, self).deselect_node(node)
+        rv = self.recycleview
+        data = rv.data[node]
+        screen = data['screen']
+        screen.on_deselect_node()
+
 
 class CScreen(Factory.Screen):
     __events__ = ('on_activate', 'on_deactivate', 'on_enter', 'on_leave')
@@ -83,13 +120,8 @@ class CScreen(Factory.Screen):
 
     def hide_menu(self):
         if self.context_menu is not None:
-            self.remove_widget(self.context_menu)
+            self.screen.cmbox.remove_widget(self.context_menu)
             self.context_menu = None
-
-    def show_menu(self, obj):
-        self.hide_menu()
-        self.context_menu = ContextMenu(obj, self.menu_actions)
-        self.add_widget(self.context_menu)
 
 
 # note: this list needs to be kept in sync with another in qt
@@ -116,18 +148,20 @@ class HistoryScreen(CScreen):
     def __init__(self, **kwargs):
         self.ra_dialog = None
         super(HistoryScreen, self).__init__(**kwargs)
-        self.menu_actions = [ ('Label', self.label_dialog), ('Details', self.show_tx)]
+        self.tx_groups = dict()
+        self.expanded_tx_groups = set()
+        self.selected_node = None
 
-    def show_tx(self, obj):
-        tx_hash = obj.tx_hash
+    def show_tx(self, data):
+        tx_hash = data['tx_hash']
         tx = self.app.wallet.db.get_transaction(tx_hash)
         if not tx:
             return
         self.app.tx_dialog(tx)
 
-    def label_dialog(self, obj):
+    def label_dialog(self, data):
         from .dialogs.label_dialog import LabelDialog
-        key = obj.tx_hash
+        key = data['tx_hash']
         text = self.app.wallet.get_label(key)
         def callback(text):
             self.app.wallet.set_label(key, text)
@@ -135,17 +169,78 @@ class HistoryScreen(CScreen):
         d = LabelDialog(_('Enter Transaction Label'), text, callback)
         d.open()
 
-    def get_card(self, tx_hash, tx_type, tx_mined_status, value, balance,
-                 islock):
+    def expand_tx_group(self, data):
+        group_txid = data['group_txid']
+        if group_txid not in self.expanded_tx_groups:
+            self.expanded_tx_groups.add(group_txid)
+            self.update()
+
+    def collapse_tx_group(self, data):
+        xgroup_txid = data['xgroup_txid']
+        if xgroup_txid in self.expanded_tx_groups:
+            self.expanded_tx_groups.remove(xgroup_txid)
+            self.update()
+
+    def on_deselect_node(self):
+        self.hide_menu()
+        self.selected_node = None
+
+    def clear_selection(self):
+        self.hide_menu()
+        container = self.screen.ids.history_container
+        container.layout_manager.clear_selection()
+
+    def on_select_node(self, node, data):
+        self.selected_node = node
+        menu_actions = []
+        group_txid = data['group_txid']
+        xgroup_txid = data['xgroup_txid']
+        if group_txid:
+            menu_actions.append(('Expand Tx Group', self.expand_tx_group))
+        elif xgroup_txid:
+            menu_actions.append(('Collapse Tx Group', self.collapse_tx_group))
+        if not group_txid:
+            menu_actions.append(('Label', self.label_dialog))
+        menu_actions.append(('Details', self.show_tx))
+        self.hide_menu()
+        self.context_menu = ContextMenu(data, menu_actions)
+        self.screen.cmbox.add_widget(self.context_menu)
+
+    def get_card(self, tx_hash, tx_type, tx_mined_status,
+                 value, balance, islock, label, group_txid):
+        atlas_path = 'atlas://electrum_dash/gui/kivy/theming/light/'
         status, status_str = self.app.wallet.get_tx_status(tx_hash,
                                                            tx_mined_status,
                                                            islock)
-        icon = "atlas://electrum_dash/gui/kivy/theming/light/" + TX_ICONS[status]
-        label = self.app.wallet.get_label(tx_hash) if tx_hash else _('Pruned transaction outputs')
+        icon = atlas_path + TX_ICONS[status]
+        if label is None:
+            label = (self.app.wallet.get_label(tx_hash) if tx_hash
+                        else _('Pruned transaction outputs'))
+
+        xgroup_txid = None
+        group_icn = atlas_path + 'kv_tx_group_empty'
+        if group_txid in self.expanded_tx_groups:
+            xgroup_txid = group_txid
+            gdelta, gbalance, group_txids = self.tx_groups[xgroup_txid]
+            if tx_hash == group_txids[0]:
+                group_icn = atlas_path + 'kv_tx_group_head'
+            elif tx_hash == group_txids[-1]:
+                group_icn = atlas_path + 'kv_tx_group_tail'
+            else:
+                group_icn = atlas_path + 'kv_tx_group_mid'
+            group_txid = None
+        elif group_txid:
+            group_icn = atlas_path + 'kv_tx_group_all'
+
+        tx_type_name = SPEC_TX_NAMES.get(tx_type, str(tx_type))
         ri = {}
         ri['screen'] = self
         ri['tx_hash'] = tx_hash
+        ri['group_txid'] = group_txid
+        ri['xgroup_txid'] = xgroup_txid
+        ri['tx_type'] = tx_type_name
         ri['icon'] = icon
+        ri['group_icn'] = group_icn
         ri['date'] = status_str
         ri['message'] = label
         ri['confirmations'] = tx_mined_status.conf
@@ -160,13 +255,65 @@ class HistoryScreen(CScreen):
                 ri['quote_text'] = fiat_value.to_ui_string()
         return ri
 
+    def process_tx_groups(self, history, tx_groups):
+        self.tx_groups = tx_groups
+
+        def find_tx_group_by_txid(groups, txid):
+            for group_txid, group_data in groups.items():
+                if group_txid == txid:
+                    return group_txid
+                group_delta, group_balance, group_txids = group_data
+                for txid2 in group_txids:
+                    if txid2 == txid:
+                        return group_txid
+
+        new_expanded_tx_groups = set()
+        for txid in self.expanded_tx_groups:
+            new_group_txid = find_tx_group_by_txid(self.tx_groups, txid)
+            if new_group_txid:
+                new_expanded_tx_groups.add(new_group_txid)
+        self.expanded_tx_groups = new_expanded_tx_groups
+
+        processed_txs = []
+        for txid, tx_type, tx_mined_status, value, balance, islock  in history:
+            label = None
+            group_txid = None
+            if txid in self.tx_groups:
+                if txid not in self.expanded_tx_groups:
+                    group_data = self.tx_groups[txid]
+                    group_delta, group_balance, group_txids = group_data
+                    tx_type = PSTxTypes.PS_MIXING_TXS
+                    label = _('Group of {} Txs').format(len(group_txids))
+                    value = group_delta
+                    balance = group_balance
+                group_txid = txid
+                processed_txs.append((txid, tx_type, tx_mined_status, value,
+                                      balance, islock, label, group_txid))
+                continue
+            group_txid = find_tx_group_by_txid(self.tx_groups, txid)
+            if group_txid and group_txid not in self.expanded_tx_groups:
+                continue
+            processed_txs.append((txid, tx_type, tx_mined_status, value,
+                                  balance, islock, label, group_txid))
+        return processed_txs
+
     def update(self, see_all=False):
         if self.app.wallet is None:
             return
         config = self.app.electrum_config
-        history = reversed(self.app.wallet.get_history(config=config))
+        group_ps = self.app.wallet.psman.group_history
+        history, tx_groups = self.app.wallet.get_history(config=config,
+                                                         group_ps=group_ps)
+        history = self.process_tx_groups(history, tx_groups)
+        history = reversed(history)
         history_card = self.screen.ids.history_container
+        if self.selected_node is not None:
+            selected_txid = history_card.data[self.selected_node]['tx_hash']
         history_card.data = [self.get_card(*item) for item in history]
+        if self.selected_node is not None:
+            new_selected_txid = history_card.data[self.selected_node]
+            if new_selected_txid != selected_txid:
+                self.clear_selection()
 
 
 class SendScreen(CScreen):
@@ -174,6 +321,8 @@ class SendScreen(CScreen):
     kvname = 'send'
     payment_request = None
     payment_request_queued = None
+    is_ps = False
+    spend_ps = False
 
     def set_URI(self, text):
         if not self.app.wallet:
@@ -188,6 +337,7 @@ class SendScreen(CScreen):
         self.screen.address = uri.get('address', '')
         self.screen.message = uri.get('message', '')
         self.screen.amount = self.app.format_amount_and_units(amount) if amount else ''
+        self.screen.ps_txt = self.privatesend_txt()
         self.payment_request = None
         self.screen.is_pr = False
 
@@ -198,6 +348,9 @@ class SendScreen(CScreen):
 
     def do_clear(self):
         self.screen.amount = ''
+        self.is_ps = False
+        self.spend_ps = False
+        self.screen.ps_txt = self.privatesend_txt()
         self.screen.message = ''
         self.screen.address = ''
         self.payment_request = None
@@ -277,14 +430,18 @@ class SendScreen(CScreen):
             outputs = [TxOutput(bitcoin.TYPE_ADDRESS, address, amount)]
         message = self.screen.message
         amount = sum(map(lambda x:x[2], outputs))
-        self._do_send(amount, message, outputs)
+        self._do_send(amount, message, outputs, self.spend_ps, self.is_ps)
 
-    def _do_send(self, amount, message, outputs):
+    def _do_send(self, amount, message, outputs, spend_ps=False, is_ps=False):
         # make unsigned transaction
         config = self.app.electrum_config
-        coins = self.app.wallet.get_spendable_coins(None, config)
+        wallet = self.app.wallet
+        mix_rounds = None if not is_ps else wallet.psman.mix_rounds
+        coins = wallet.get_spendable_coins(None, config, include_ps=spend_ps,
+                                           min_rounds=mix_rounds)
         try:
-            tx = self.app.wallet.make_unsigned_transaction(coins, outputs, config, None)
+            tx = wallet.make_unsigned_transaction(coins, outputs, config, None,
+                                                  min_rounds=mix_rounds)
         except NotEnoughFunds:
             self.app.show_error(_("Not enough funds"))
             return
@@ -324,6 +481,25 @@ class SendScreen(CScreen):
             self.app.sign_tx(tx, password, on_success, on_failure)
         else:
             self.app.tx_dialog(tx)
+
+    def privatesend_txt(self, is_ps=None):
+        if is_ps is None:
+            is_ps = self.is_ps
+        if is_ps:
+            return _('PrivateSend')
+        else:
+            return _('Regular Transaction')
+
+    def ps_dialog(self):
+        from .dialogs.checkbox_dialog import CheckBoxDialog
+        def ps_dialog_cb(key):
+            self.is_ps = key
+            self.spend_ps = False
+            self.screen.ps_txt = self.privatesend_txt()
+        d = CheckBoxDialog(_('PrivateSend'),
+                           _('Send coins as a PrivateSend transaction'),
+                           self.is_ps, ps_dialog_cb)
+        d.open()
 
 
 class ReceiveScreen(CScreen):

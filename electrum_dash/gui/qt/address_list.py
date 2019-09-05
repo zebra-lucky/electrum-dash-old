@@ -47,6 +47,7 @@ class AddressList(MyTreeView):
         COIN_BALANCE = 3
         FIAT_BALANCE = 4
         NUM_TXS = 5
+        PS_TYPE = 6
 
     filter_columns = [Columns.TYPE, Columns.ADDRESS, Columns.LABEL, Columns.COIN_BALANCE]
 
@@ -56,6 +57,7 @@ class AddressList(MyTreeView):
         self.setSortingEnabled(True)
         self.show_change = 0
         self.show_used = 0
+        self.show_ps = 0
         self.change_button = QComboBox(self)
         self.change_button.currentIndexChanged.connect(self.toggle_change)
         for t in [_('All'), _('Receiving'), _('Change')]:
@@ -64,15 +66,21 @@ class AddressList(MyTreeView):
         self.used_button.currentIndexChanged.connect(self.toggle_used)
         for t in [_('All'), _('Unused'), _('Funded'), _('Used')]:
             self.used_button.addItem(t)
+        self.ps_button = QComboBox(self)
+        self.ps_button.currentIndexChanged.connect(self.toggle_ps)
+        for t in [_('Regular'), _('PrivateSend'), _('All')]:
+            self.ps_button.addItem(t)
         self.setModel(QStandardItemModel(self))
         self.update()
 
     def get_toolbar_buttons(self):
-        return QLabel(_("Filter:")), self.change_button, self.used_button
+        return (QLabel(_("Filter:")),
+                self.change_button, self.used_button, self.ps_button)
 
     def on_hide_toolbar(self):
         self.show_change = 0
         self.show_used = 0
+        self.show_ps = 0
         self.update()
 
     def save_toolbar_state(self, state, config):
@@ -91,6 +99,7 @@ class AddressList(MyTreeView):
             self.Columns.COIN_BALANCE: _('Balance'),
             self.Columns.FIAT_BALANCE: ccy + ' ' + _('Balance'),
             self.Columns.NUM_TXS: _('Tx'),
+            self.Columns.PS_TYPE: _('PS Type'),
         }
         self.update_headers(headers)
 
@@ -106,16 +115,29 @@ class AddressList(MyTreeView):
         self.show_used = state
         self.update()
 
+    def toggle_ps(self, state):
+        if state == self.show_ps:
+            return
+        self.show_ps = state
+        self.update()
+
     @profiler
     def update(self):
         self.wallet = self.parent.wallet
         current_address = self.current_item_user_role(col=self.Columns.LABEL)
+        ps_addrs = self.wallet.db.get_ps_addresses()
         if self.show_change == 1:
-            addr_list = self.wallet.get_receiving_addresses()
+            all_addrs = self.wallet.get_receiving_addresses()
         elif self.show_change == 2:
-            addr_list = self.wallet.get_change_addresses()
+            all_addrs = self.wallet.get_change_addresses()
         else:
-            addr_list = self.wallet.get_addresses()
+            all_addrs = self.wallet.get_addresses()
+        if self.show_ps == 0:  # Regular
+            addr_list = [addr for addr in all_addrs if addr not in ps_addrs]
+        elif self.show_ps == 1:  # PrivateSend
+            addr_list = [addr for addr in all_addrs if addr in ps_addrs]
+        else:
+            addr_list = all_addrs
         self.model().clear()
         self.refresh_headers()
         fx = self.parent.fx
@@ -139,12 +161,15 @@ class AddressList(MyTreeView):
                 fiat_balance = fx.value_str(balance, rate)
             else:
                 fiat_balance = ''
-            labels = ['', address, label, balance_text, fiat_balance, "%d"%num]
+            is_ps = True if address in ps_addrs else False
+            labels = ['', address, label,
+                      balance_text, fiat_balance, "%d"%num, is_ps]
             address_item = [QStandardItem(e) for e in labels]
             # align text and set fonts
             for i, item in enumerate(address_item):
                 item.setTextAlignment(Qt.AlignVCenter)
-                if i not in (self.Columns.TYPE, self.Columns.LABEL):
+                if i not in (self.Columns.TYPE, self.Columns.LABEL,
+                             self.Columns.PS_TYPE):
                     item.setFont(QFont(MONOSPACE_FONT))
                 item.setEditable(i in self.editable_columns)
             address_item[self.Columns.FIAT_BALANCE].setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -161,6 +186,12 @@ class AddressList(MyTreeView):
                 address_item[self.Columns.ADDRESS].setBackground(ColorScheme.BLUE.as_color(True))
             if self.wallet.is_beyond_limit(address):
                 address_item[self.Columns.ADDRESS].setBackground(ColorScheme.RED.as_color(True))
+            # setup column 6
+            address_item[self.Columns.PS_TYPE].setData(is_ps)
+            if is_ps:
+                address_item[self.Columns.PS_TYPE].setText(_('PrivateSend'))
+            else:
+                address_item[self.Columns.PS_TYPE].setText(_('Regular'))
             # add item
             count = self.model().rowCount()
             self.model().insertRow(count, address_item)
@@ -194,6 +225,8 @@ class AddressList(MyTreeView):
             if not item:
                 return
             addr = addrs[0]
+            ps_type_idx = self.selected_in_column(self.Columns.PS_TYPE)[0]
+            is_ps = self.model().itemFromIndex(ps_type_idx).data()
 
             addr_column_title = self.model().horizontalHeaderItem(self.Columns.LABEL).text()
             addr_idx = idx.sibling(idx.row(), self.Columns.LABEL)
@@ -206,7 +239,9 @@ class AddressList(MyTreeView):
             menu.addAction(_('Details'), lambda: self.parent.show_address(addr))
             persistent = QPersistentModelIndex(addr_idx)
             menu.addAction(_("Edit {}").format(addr_column_title), lambda p=persistent: self.edit(QModelIndex(p)))
-            menu.addAction(_("Request payment"), lambda: self.parent.receive_at(addr))
+            if not is_ps:
+                menu.addAction(_("Request payment"),
+                               lambda: self.parent.receive_at(addr))
             if self.wallet.can_export():
                 menu.addAction(_("Private key"), lambda: self.parent.show_private_key(addr))
             if not is_multisig and not self.wallet.is_watching_only():
@@ -218,10 +253,15 @@ class AddressList(MyTreeView):
             if addr_URL:
                 menu.addAction(_("View on block explorer"), lambda: webopen(addr_URL))
 
-            if not self.wallet.is_frozen_address(addr):
-                menu.addAction(_("Freeze"), lambda: self.parent.set_frozen_state_of_addresses([addr], True))
-            else:
-                menu.addAction(_("Unfreeze"), lambda: self.parent.set_frozen_state_of_addresses([addr], False))
+            if not is_ps:
+                def set_frozen_state(addrs, state):
+                    self.parent.set_frozen_state_of_addresses(addrs, state)
+                if not self.wallet.is_frozen_address(addr):
+                    menu.addAction(_("Freeze"),
+                                   lambda: set_frozen_state([addr], True))
+                else:
+                    menu.addAction(_("Unfreeze"),
+                                   lambda: set_frozen_state([addr], False))
 
         coins = self.wallet.get_spendable_coins(addrs, config=self.config)
         if coins:

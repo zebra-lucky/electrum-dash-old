@@ -993,6 +993,7 @@ class Transaction:
 
     def sign(self, keypairs) -> None:
         # keypairs:  (x_)pubkey -> secret_bytes
+        signed_txins_cnt = 0
         for i, txin in enumerate(self.inputs()):
             pubkeys, x_pubkeys = self.get_sorted_pubkeys(txin)
             for j, (pubkey, x_pubkey) in enumerate(zip(pubkeys, x_pubkeys)):
@@ -1008,9 +1009,11 @@ class Transaction:
                 sec, compressed = keypairs.get(_pubkey)
                 sig = self.sign_txin(i, sec)
                 self.add_signature_to_txin(i, j, sig)
+                signed_txins_cnt += 1
 
         _logger.info(f"is_complete {self.is_complete()}")
         self.raw = self.serialize()
+        return signed_txins_cnt
 
     def sign_txin(self, txin_index, privkey_bytes) -> str:
         pre_hash = sha256d(bfh(self.serialize_preimage(txin_index)))

@@ -120,7 +120,7 @@ class ElectrumGui:
                           "%" + "%d" % (width[2] + delta) + "s" +
                           "%" + "%d" % (width[3] + delta) + "s" +
                           "%" + "%d" % (width[4] + delta) + "s")
-            headers = (format_str % (_("Date"), 'DIP2',  _("Description"),
+            headers = (format_str % (_("Date"), 'Type',  _("Description"),
                                      _("Amount"), _("Balance")))
         else:
             width = [20, 40, 14, 14]
@@ -136,7 +136,7 @@ class ElectrumGui:
     def update_history(self):
         b = 0
         self.history = []
-        hist_list = self.wallet.get_history(config=self.config)
+        hist_list, tx_groups = self.wallet.get_history(config=self.config)
         for (tx_hash, tx_type, tx_mined_status, value, balance,
              islock) in hist_list:
             if tx_mined_status.conf:
@@ -420,7 +420,8 @@ class ElectrumGui:
 
         self.show_message(_("Please wait..."), getchar=False)
         try:
-            self.network.run_from_another_thread(self.network.broadcast_transaction(tx))
+            coro = self.wallet.psman.broadcast_transaction(tx)
+            self.network.run_from_another_thread(coro)
         except TxBroadcastError as e:
             msg = e.get_message_for_gui()
             self.show_message(msg)

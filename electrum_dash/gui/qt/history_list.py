@@ -40,6 +40,7 @@ from PyQt5.QtWidgets import (QMenu, QHeaderView, QLabel, QMessageBox,
                              QGridLayout)
 
 from electrum_dash.address_synchronizer import TX_HEIGHT_LOCAL
+from electrum_dash.dash_tx import PSTxTypes, SPEC_TX_NAMES
 from electrum_dash.i18n import _
 from electrum_dash.util import (block_explorer_URL, profiler, TxMinedInfo,
                                 OrderedDictWithIndex, timestamp_to_datetime)
@@ -78,16 +79,17 @@ TX_ICONS = [
 ]
 
 class HistoryColumns(IntEnum):
-    STATUS_ICON = 0
-    STATUS_TEXT = 1
-    DIP2 = 2
-    DESCRIPTION = 3
-    COIN_VALUE = 4
-    RUNNING_COIN_BALANCE = 5
-    FIAT_VALUE = 6
-    FIAT_ACQ_PRICE = 7
-    FIAT_CAP_GAINS = 8
-    TXID = 9
+    TX_GROUP = 0
+    STATUS_ICON = 1
+    STATUS_TEXT = 2
+    DIP2 = 3
+    DESCRIPTION = 4
+    COIN_VALUE = 5
+    RUNNING_COIN_BALANCE = 6
+    FIAT_VALUE = 7
+    FIAT_ACQ_PRICE = 8
+    FIAT_CAP_GAINS = 9
+    TXID = 10
 
 class HistorySortModel(QSortFilterProxyModel):
     def lessThan(self, source_left: QModelIndex, source_right: QModelIndex):
@@ -114,6 +116,13 @@ class HistoryModel(QAbstractItemModel, Logger):
         self.transactions = OrderedDictWithIndex()
         self.tx_status_cache = {}  # type: Dict[str, Tuple[int, str]]
         self.summary = None
+        self.tx_groups = dict()
+        self.expanded_tx_groups = set()
+        # read icons
+        self.tx_group_expand_icn = read_QIcon('tx_group_expand.png')
+        self.tx_group_collapse_icn = read_QIcon('tx_group_collapse.png')
+        self.tx_group_mid_icn = read_QIcon('tx_group_mid.png')
+        self.tx_group_tail_icn = read_QIcon('tx_group_tail.png')
 
     def set_view(self, history_list: 'HistoryList'):
         # FIXME HistoryModel and HistoryList mutually depend on each other.
@@ -141,6 +150,21 @@ class HistoryModel(QAbstractItemModel, Logger):
         txpos = tx_item['txpos_in_block'] or 0
         height = tx_item['height']
         islock = tx_item['islock']
+        group_txid = tx_item.get('group_txid')
+        tx_group_icon = None
+        xgroup_txid = None
+        if group_txid in self.expanded_tx_groups:
+            xgroup_txid = group_txid
+            gdelta, gbalance, group_txids = self.tx_groups[xgroup_txid]
+            if tx_hash == group_txids[0]:
+                tx_group_icon = self.tx_group_collapse_icn
+            elif tx_hash == group_txids[-1]:
+                tx_group_icon = self.tx_group_tail_icn
+            else:
+                tx_group_icon = self.tx_group_mid_icn
+            group_txid = None
+        elif group_txid:
+            tx_group_icon = self.tx_group_expand_icn
         try:
             status, status_str = self.tx_status_cache[tx_hash]
         except KeyError:
@@ -149,13 +173,21 @@ class HistoryModel(QAbstractItemModel, Logger):
         if role == Qt.UserRole:
             # for sorting
             now = int(time.time())
+            # height breaks ties for unverified txns
+            # txpos breaks ties for verified same block txns
+            if xgroup_txid:
+                group_data = self.tx_groups[xgroup_txid]
+                group_delta, group_balance, group_txids = group_data
+                group_order = group_txids.index(tx_hash)
+            else:
+                group_order = 1e9
+            if not conf and islock:  # one more to be gt -status (-0)
+                status_sort = (conf, now - islock + 1, group_order)
+            else:
+                status_sort = (conf, -status, -height, -txpos, group_order)
             d = {
-                HistoryColumns.STATUS_ICON:
-                    # height breaks ties for unverified txns
-                    # txpos breaks ties for verified same block txns
-                    ((conf, now - islock + 1)  # one more to be gt -status (-0)
-                     if not conf and islock else
-                     (conf, -status, -height, -txpos)),
+                HistoryColumns.STATUS_ICON: status_sort,
+                HistoryColumns.TX_GROUP: '',
                 HistoryColumns.STATUS_TEXT: status_str,
                 HistoryColumns.DIP2: tx_item.get('dip2', ''),
                 HistoryColumns.DESCRIPTION: tx_item['label'],
@@ -173,6 +205,9 @@ class HistoryModel(QAbstractItemModel, Logger):
         if role not in (Qt.DisplayRole, Qt.EditRole):
             if col == HistoryColumns.STATUS_ICON and role == Qt.DecorationRole:
                 return QVariant(read_QIcon(TX_ICONS[status]))
+            if col == HistoryColumns.TX_GROUP and role == Qt.DecorationRole:
+                if tx_group_icon:
+                    return QVariant(tx_group_icon)
             elif col == HistoryColumns.STATUS_ICON and role == Qt.ToolTipRole:
                 c = str(conf) + _(' confirmation' + ('s' if conf != 1 else ''))
                 if conf < 6 and islock:
@@ -180,7 +215,8 @@ class HistoryModel(QAbstractItemModel, Logger):
                 else:
                     res = c
                 return QVariant(res)
-            elif col != HistoryColumns.DESCRIPTION and role == Qt.TextAlignmentRole:
+            elif col not in [HistoryColumns.DESCRIPTION,
+                             HistoryColumns.DIP2] and role == Qt.TextAlignmentRole:
                 return QVariant(Qt.AlignRight | Qt.AlignVCenter)
             elif col != HistoryColumns.DESCRIPTION and role == Qt.FontRole:
                 monospace_font = QFont(MONOSPACE_FONT)
@@ -238,12 +274,54 @@ class HistoryModel(QAbstractItemModel, Logger):
     def update_label(self, row):
         tx_item = self.transactions.value_from_pos(row)
         tx_item['label'] = self.parent.wallet.get_label(tx_item['txid'])
-        topLeft = bottomRight = self.createIndex(row, 2)
-        self.dataChanged.emit(topLeft, bottomRight, [Qt.DisplayRole])
+        topLeft = botRight = self.createIndex(row, HistoryColumns.DESCRIPTION)
+        self.dataChanged.emit(topLeft, botRight, [Qt.DisplayRole])
 
     def get_domain(self):
         '''Overridden in address_dialog.py'''
         return self.parent.wallet.get_addresses()
+
+    def process_tx_groups(self, r):
+        self.tx_groups = r['summary'].get('tx_groups', {})
+        unprocessed_txs = r['transactions']
+
+        def find_tx_group_by_txid(groups, txid):
+            for group_txid, group_data in groups.items():
+                if group_txid == txid:
+                    return group_txid
+                group_delta, group_balance, group_txids = group_data
+                for txid2 in group_txids:
+                    if txid2 == txid:
+                        return group_txid
+
+        new_expanded_tx_groups = set()
+        for txid in self.expanded_tx_groups:
+            new_group_txid = find_tx_group_by_txid(self.tx_groups, txid)
+            if new_group_txid:
+                new_expanded_tx_groups.add(new_group_txid)
+        self.expanded_tx_groups = new_expanded_tx_groups
+
+        processed_txs = []
+        for tx in unprocessed_txs:
+            txid = tx['txid']
+            if txid in self.tx_groups:
+                if txid not in self.expanded_tx_groups:
+                    group_data = self.tx_groups[txid]
+                    group_delta, group_balance, group_txids = group_data
+                    tx['dip2'] = SPEC_TX_NAMES[PSTxTypes.PS_MIXING_TXS]
+                    tx['label'] = _('Group of {} Txs').format(len(group_txids))
+                    tx['value'] = group_delta
+                    tx['balance'] = group_balance
+                tx['group_txid'] = txid
+                processed_txs.append(tx)
+                continue
+            group_txid = find_tx_group_by_txid(self.tx_groups, txid)
+            if group_txid and group_txid not in self.expanded_tx_groups:
+                continue
+            tx['group_txid'] = group_txid
+            processed_txs.append(tx)
+        r['transactions'] = processed_txs
+        return r
 
     @profiler
     def refresh(self, reason: str):
@@ -256,11 +334,14 @@ class HistoryModel(QAbstractItemModel, Logger):
             selected_row = selected.row()
         fx = self.parent.fx
         if fx: fx.history_used_spot = False
+        group_ps = self.parent.wallet.psman.group_history
         r = self.parent.wallet.get_full_history(domain=self.get_domain(),
                                                 from_timestamp=None,
                                                 to_timestamp=None,
                                                 fx=fx,
-                                                config=self.parent.config)
+                                                config=self.parent.config,
+                                                group_ps=group_ps)
+        r = self.process_tx_groups(r)
         self.set_visibility_of_columns()
         if r['transactions'] == list(self.transactions.values()):
             return
@@ -275,7 +356,10 @@ class HistoryModel(QAbstractItemModel, Logger):
             self.transactions[txid] = tx_item
         self.endInsertRows()
         if selected_row:
-            self.view.selectionModel().select(self.createIndex(selected_row, 0), QItemSelectionModel.Rows | QItemSelectionModel.SelectCurrent)
+            sel_model = self.view.selectionModel()
+            SEL_CUR_ROW = (QItemSelectionModel.Rows |
+                           QItemSelectionModel.SelectCurrent)
+            sel_model.select(self.createIndex(selected_row, 0), SEL_CUR_ROW)
         self.view.filter()
         # update summary
         self.summary = r['summary']
@@ -307,6 +391,8 @@ class HistoryModel(QAbstractItemModel, Logger):
         set_visible(HistoryColumns.FIAT_CAP_GAINS, history and cap_gains)
         show_dip2 = self.view.config.get('show_dip2_tx_type', False)
         set_visible(HistoryColumns.DIP2, show_dip2)
+        group_ps = self.view.wallet.psman.group_history
+        set_visible(HistoryColumns.TX_GROUP, group_ps)
 
     def update_fiat(self, row, idx):
         tx_item = self.transactions.value_from_pos(row)
@@ -357,8 +443,9 @@ class HistoryModel(QAbstractItemModel, Logger):
             fiat_cg_title =  '%s '%fx.ccy + _('Capital Gains')
         return {
             HistoryColumns.STATUS_ICON: '',
+            HistoryColumns.TX_GROUP: '',
             HistoryColumns.STATUS_TEXT: _('Date'),
-            HistoryColumns.DIP2: _('DIP2'),
+            HistoryColumns.DIP2: _('Type'),
             HistoryColumns.DESCRIPTION: _('Description'),
             HistoryColumns.COIN_VALUE: _('Amount'),
             HistoryColumns.RUNNING_COIN_BALANCE: _('Balance'),
@@ -421,6 +508,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         self.editable_columns |= {HistoryColumns.FIAT_VALUE}
 
         self.header().setStretchLastSection(False)
+        self.header().setMinimumSectionSize(32)
         for col in HistoryColumns:
             sm = QHeaderView.Stretch if col == self.stretch_column else QHeaderView.ResizeToContents
             self.header().setSectionResizeMode(col, sm)
@@ -574,8 +662,27 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         tx_item = self.tx_item_from_proxy_row(idx.row())
         if self.hm.flags(self.model().mapToSource(idx)) & Qt.ItemIsEditable:
             super().mouseDoubleClickEvent(event)
+        elif idx.column() == HistoryColumns.TX_GROUP:
+            return
         else:
             self.show_transaction(tx_item['txid'])
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            org_idx = self.indexAt(event.pos())
+            idx = self.proxy.mapToSource(org_idx)
+            if idx.isValid() and idx.column() == HistoryColumns.TX_GROUP:
+                tx_item = self.hm.transactions.value_from_pos(idx.row())
+                group_txid = tx_item.get('group_txid')
+                if group_txid in self.hm.expanded_tx_groups:
+                    self.collapse_tx_group(group_txid)
+                    event.ignore()
+                    return
+                elif group_txid:
+                    self.expand_tx_group(group_txid)
+                    event.ignore()
+                    return
+        super().mousePressEvent(event)
 
     def show_transaction(self, tx_hash):
         tx = self.wallet.db.get_transaction(tx_hash)
@@ -591,6 +698,11 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             # can happen e.g. before list is populated for the first time
             return
         tx_item = self.hm.transactions.value_from_pos(idx.row())
+        group_txid = tx_item.get('group_txid')
+        xgroup_txid = None
+        if group_txid in self.hm.expanded_tx_groups:
+            xgroup_txid = group_txid
+            group_txid = None
         column = idx.column()
         if column == HistoryColumns.STATUS_ICON:
             column_title = _('Transaction ID')
@@ -608,7 +720,13 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         is_unconfirmed = height <= 0
         pr_key = self.wallet.invoices.paid.get(tx_hash)
         menu = QMenu()
-        if height == TX_HEIGHT_LOCAL:
+        if group_txid:
+            expand_m = lambda: self.expand_tx_group(group_txid)
+            menu.addAction(_("Expand Tx Group"), expand_m)
+        elif xgroup_txid:
+            collapse_m = lambda: self.collapse_tx_group(xgroup_txid)
+            menu.addAction(_("Collapse Tx Group"), collapse_m)
+        if height == TX_HEIGHT_LOCAL and not group_txid:
             menu.addAction(_("Remove"), lambda: self.remove_local_tx(tx_hash))
 
         amount_columns = [HistoryColumns.COIN_VALUE, HistoryColumns.RUNNING_COIN_BALANCE, HistoryColumns.FIAT_VALUE, HistoryColumns.FIAT_ACQ_PRICE, HistoryColumns.FIAT_CAP_GAINS]
@@ -617,17 +735,29 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         menu.addAction(_("Copy {}").format(column_title), lambda: self.parent.app.clipboard().setText(column_data))
 
         for c in self.editable_columns:
+            if group_txid and c == HistoryColumns.DESCRIPTION: continue
             if self.isColumnHidden(c): continue
             label = self.hm.headerData(c, Qt.Horizontal, Qt.DisplayRole)
             # TODO use siblingAtColumn when min Qt version is >=5.11
             persistent = QPersistentModelIndex(org_idx.sibling(org_idx.row(), c))
             menu.addAction(_("Edit {}").format(label), lambda p=persistent: self.edit(QModelIndex(p)))
-        menu.addAction(_("Details"), lambda: self.show_transaction(tx_hash))
+        details_m = lambda: self.show_transaction(tx_hash)
+        menu.addAction(_("Details"), details_m)
         if pr_key:
             menu.addAction(read_QIcon("seal"), _("View invoice"), lambda: self.parent.show_invoice(pr_key))
         if tx_URL:
             menu.addAction(_("View on block explorer"), lambda: webopen(tx_URL))
         menu.exec_(self.viewport().mapToGlobal(position))
+
+    def expand_tx_group(self, group_txid):
+        if group_txid not in self.hm.expanded_tx_groups:
+            self.hm.expanded_tx_groups.add(group_txid)
+            self.hm.refresh(f'Expand tx group {group_txid}')
+
+    def collapse_tx_group(self, group_txid):
+        if group_txid in self.hm.expanded_tx_groups:
+            self.hm.expanded_tx_groups.remove(group_txid)
+            self.hm.refresh(f'Collapse tx group {group_txid}')
 
     def remove_local_tx(self, delete_tx):
         to_delete = {delete_tx}

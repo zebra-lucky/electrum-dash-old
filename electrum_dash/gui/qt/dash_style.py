@@ -516,6 +516,22 @@ QSlider::handle:horizontal {
     border-radius: 2px;
 }
 
+
+QProgressBar {
+    color: #333;
+}
+
+QProgressBar:horizontal {
+    border: 1px solid #1c75bc;
+    background-color: #fff;
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background-color: #ccc;
+}
+
+
 /**********************/
 /* 6. Table Headers */
 
@@ -763,7 +779,7 @@ Dip3TabWidget::pane {
     background:qradialgradient(cx:0.5, cy:0.5, radius: 0.5, fx:0.5, fy:0.5, stop:0 rgba(255, 255, 255, 255), stop: 1 rgba(246, 246, 246, 255));
 }
 
-Dip3TabWidget Dip3TabBar::tab {
+QTabWidget VTabBar::tab {
     background-color:#f2f0f0;
     color:#333;
     padding-left:10px;
@@ -773,15 +789,15 @@ Dip3TabWidget Dip3TabBar::tab {
     border-top: 1px solid #d7d7d7;
 }
 
-Dip3TabWidget Dip3TabBar::tab:first {
+QTabWidget VTabBar::tab:first {
     border-left: 1px solid #d7d7d7;
 }
 
-Dip3TabWidget Dip3TabBar::tab:last {
+QTabWidget VTabBar::tab:last {
     border-right: 1px solid #d7d7d7;
 }
 
-Dip3TabWidget Dip3TabBar::tab:selected, Dip3TabWidget Dip3TabBar::tab:hover {
+QTabWidget VTabBar::tab:selected, QTabWidget VTabBar::tab:hover {
     background-color:#ffffff;
     color:#333;
 }

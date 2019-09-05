@@ -62,8 +62,9 @@ class DashPeersWidget(QTreeWidget):
         dash_net = self.parent.network.dash_net
         dash_peer = dash_net.peers.get(peer)
         if dash_peer:
-            coro = dash_net.connection_down(dash_peer, msg)
-            dash_net.run_from_another_thread(coro)
+            if msg:
+                dash_peer.ban(msg)
+            dash_peer.close()
 
     def update(self, event=None, args=None):
         dash_net = self.parent.network.dash_net
@@ -115,6 +116,7 @@ class DashPeersWidget(QTreeWidget):
                 self.addTopLevelItem(peers_item)
         else:
             self.addTopLevelItem(peers_item)
+
 
 class SporksWidget(QTreeWidget):
     class Columns(IntEnum):
@@ -240,10 +242,13 @@ class DashNetDialogLayout(object):
             self.min_t = 1000
             self.max_t = 0
             self.n_measures = -1
+
             def min_str():
                 return _('Min time') + f': {self.min_t}'
+
             def max_str():
                 return _('Max time') + f': {self.max_t}'
+
             self.min_label = QLabel(min_str())
             self.max_label = QLabel(max_str())
             vbox = QVBoxLayout(bls_speed_tab)
@@ -262,7 +267,7 @@ class DashNetDialogLayout(object):
                     self.max_t = max(self.max_t, res_t)
                     self.min_label.setText(min_str())
                     self.max_label.setText(max_str())
-                    self.n_measures +=1
+                    self.n_measures += 1
                     if self.n_measures >= 100:
                         self.timer.stop()
             self.timer.timeout.connect(update_bls_speed)
@@ -292,10 +297,12 @@ class DashNetDialogLayout(object):
         self.run_dash_net_cb.setChecked(self.config.get('run_dash_net', True))
         run_dash_net_modifiable = self.config.is_modifiable('run_dash_net')
         self.run_dash_net_cb.setEnabled(run_dash_net_modifiable)
+
         def on_run_dash_net_cb_clicked(run_dash_net):
             self.config.set_key('run_dash_net', run_dash_net, True)
             net.run_from_another_thread(net.dash_net.set_parameters())
         self.run_dash_net_cb.clicked.connect(on_run_dash_net_cb_clicked)
+
         grid.addWidget(self.run_dash_net_cb, 0, 6, 1, 2)
 
         # row 1
@@ -308,6 +315,7 @@ class DashNetDialogLayout(object):
         self.dash_peers_e = QLineEdit()
         self.dash_peers_e.setText(dash_net.dash_peers_as_str())
         self.dash_peers_e.setReadOnly(is_cmd_dash_peers)
+
         def on_dash_peers_editing_end():
             if is_cmd_dash_peers:
                 return
@@ -318,19 +326,23 @@ class DashNetDialogLayout(object):
                 self.config.set_key('dash_peers', res, True)
                 if dash_net.use_static_peers:
                     net.run_from_another_thread(net.dash_net.set_parameters())
+        self.dash_peers_e.editingFinished.connect(on_dash_peers_editing_end)
+
         def on_dash_peers_changed():
             self.err_label.setText('')
-        self.dash_peers_e.editingFinished.connect(on_dash_peers_editing_end)
         self.dash_peers_e.textChanged.connect(on_dash_peers_changed)
+
         grid.addWidget(self.dash_peers_e, 1, 1, 1, 5)
 
         self.use_static_cb = QCheckBox(_('Use Static Peers'))
         self.use_static_cb.setChecked(use_static_peers)
         self.use_static_cb.setEnabled(not is_cmd_dash_peers)
+
         def on_use_static_cb_clicked(use_static):
             self.config.set_key('dash_use_static_peers', use_static, True)
             net.run_from_another_thread(net.dash_net.set_parameters())
         self.use_static_cb.clicked.connect(on_use_static_cb_clicked)
+
         grid.addWidget(self.use_static_cb, 1, 6, 1, 2)
         # row 2 with error msg
         self.err_label = QLabel('')
@@ -347,6 +359,7 @@ class DashNetDialogLayout(object):
         self.max_peers.setValue(dash_net.max_peers)
         self.max_peers.setRange(MIN_PEERS_LIMIT, MAX_PEERS_LIMIT)
         grid.addWidget(self.max_peers, 3, 7, 1, 1)
+
         def on_change_max_peers(max_peers):
             dash_net.max_peers = max_peers
         self.max_peers.valueChanged.connect(on_change_max_peers)

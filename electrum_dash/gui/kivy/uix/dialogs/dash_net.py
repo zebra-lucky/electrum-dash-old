@@ -555,36 +555,42 @@ class DashNetDialog(Factory.Popup):
 
     def open(self, *args, **kwargs):
         super(DashNetDialog, self).open(*args, **kwargs)
-        self.dash_net.register_callback(self.on_dash_net_activity,
+        self.dash_net.register_callback(self.on_dash_net_activity_cb,
                                         ['dash-net-activity'])
-        self.dash_net.register_callback(self.on_sporks_activity,
+        self.dash_net.register_callback(self.on_sporks_activity_cb,
                                         ['sporks-activity'])
-        self.dash_net.register_callback(self.on_dash_peers_updated,
+        self.dash_net.register_callback(self.on_dash_peers_updated_cb,
                                         ['dash-peers-updated'])
-        self.dash_net.register_callback(self.on_dash_banlist_updated,
+        self.dash_net.register_callback(self.on_dash_banlist_updated_cb,
                                         ['dash-banlist-updated'])
-        self.mn_list.register_callback(self.on_mn_list_diff_updated,
+        self.mn_list.register_callback(self.on_mn_list_diff_updated_cb,
                                        ['mn-list-diff-updated'])
-        self.net.register_callback(self.on_network_updated,
+        self.net.register_callback(self.on_network_updated_cb,
                                    ['network_updated'])
 
     def dismiss(self, *args, **kwargs):
         super(DashNetDialog, self).dismiss(*args, **kwargs)
-        self.dash_net.unregister_callback(self.on_dash_net_activity)
-        self.dash_net.unregister_callback(self.on_sporks_activity)
-        self.dash_net.unregister_callback(self.on_dash_peers_updated)
-        self.dash_net.unregister_callback(self.on_dash_banlist_updated)
-        self.mn_list.unregister_callback(self.on_mn_list_diff_updated)
-        self.net.unregister_callback(self.on_network_updated)
+        self.dash_net.unregister_callback(self.on_dash_net_activity_cb)
+        self.dash_net.unregister_callback(self.on_sporks_activity_cb)
+        self.dash_net.unregister_callback(self.on_dash_peers_updated_cb)
+        self.dash_net.unregister_callback(self.on_dash_banlist_updated_cb)
+        self.mn_list.unregister_callback(self.on_mn_list_diff_updated_cb)
+        self.net.unregister_callback(self.on_network_updated_cb)
 
-    def on_dash_net_activity(self, *args, **kwargs):
+    def on_dash_net_activity_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_dash_net_activity())
+
+    def on_dash_net_activity(self):
         read_bytes = self.dash_net.read_bytes
         write_bytes = self.dash_net.write_bytes
         self.total = round((write_bytes + read_bytes)/1024, 1)
         self.received = round(read_bytes/1024, 1)
         self.sent = round(write_bytes/1024, 1)
 
-    def on_sporks_activity(self, *args, **kwargs):
+    def on_sporks_activity_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_sporks_activity())
+
+    def on_sporks_activity(self):
         sporks_dict = self.dash_net.sporks.as_dict()
         self.sporks = []
         for k in sorted(list(sporks_dict.keys())):
@@ -597,22 +603,34 @@ class DashNetDialog(Factory.Popup):
             spork_item = [name, active, value]
             self.sporks.append(spork_item)
 
-    def on_dash_peers_updated(self, *args, **kwargs):
+    def on_dash_peers_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_dash_peers_updated())
+
+    def on_dash_peers_updated(self):
         self.peers = []
         for peer, dash_peer in self.dash_net.peers.items():
             ua = dash_peer.version.user_agent.decode('utf-8')
             self.peers.append((peer, ua))
 
-    def on_dash_banlist_updated(self, *args, **kwargs):
+    def on_dash_banlist_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_dash_banlist_updated())
+
+    def on_dash_banlist_updated(self):
         banlist = self.dash_net.banlist
         self.banlist = []
         for peer, banned in sorted(list(banlist.items())):
             self.banlist.append((peer, banned['ua']))
 
-    def on_mn_list_diff_updated(self, *args, **kwargs):
+    def on_mn_list_diff_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_mn_list_diff_updated())
+
+    def on_mn_list_diff_updated(self):
         self.llmq_height = self.mn_list.llmq_human_height
 
-    def on_network_updated(self, *args, **kwargs):
+    def on_network_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_network_updated())
+
+    def on_network_updated(self):
         self.local_height = self.net.get_local_height()
 
     def toggle_dash_net(self, *args):
