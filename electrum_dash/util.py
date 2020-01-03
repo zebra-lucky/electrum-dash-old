@@ -70,6 +70,7 @@ base_units_inverse = inv_dict(base_units)
 base_units_list = ['DASH', 'mDASH', 'uDASH', 'duffs']  # list(dict) does not guarantee order
 
 DECIMAL_POINT_DEFAULT = 8  # DASH
+VERSION_PATTERN = re.compile('^([^A-Za-z]+).*')  # simpliified PEP440 versions
 
 
 class UnknownBaseUnit(Exception): pass
@@ -878,6 +879,7 @@ def send_exception_to_crash_reporter(e: BaseException):
 
 
 def versiontuple(v):
+    v = VERSION_PATTERN.match(v).group(1)
     return tuple(map(int, (v.split("."))))
 
 
