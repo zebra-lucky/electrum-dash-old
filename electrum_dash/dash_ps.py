@@ -647,8 +647,6 @@ class PSManager(Logger):
         self.pay_collateral_wfl_lock = threading.Lock()
         self.denominate_wfl_lock = threading.Lock()
 
-        # this flags can set during new denoms/collateral tx creation
-        # and reset during rerun of _start_mixing
         # _ps_denoms_amount_cache recalculated in add_ps_denom/pop_ps_denom
         self._ps_denoms_amount_cache = 0
         denoms = wallet.db.get_ps_denoms()
