@@ -68,7 +68,7 @@ class AddressList(MyTreeView):
             self.used_button.addItem(t)
         self.ps_button = QComboBox(self)
         self.ps_button.currentIndexChanged.connect(self.toggle_ps)
-        for t in [_('Regular'), _('PrivateSend'), _('All')]:
+        for t in [_('All'), _('PrivateSend'), _('Regular')]:
             self.ps_button.addItem(t)
         self.setModel(QStandardItemModel(self))
         self.update()
@@ -132,12 +132,12 @@ class AddressList(MyTreeView):
             all_addrs = self.wallet.get_change_addresses()
         else:
             all_addrs = self.wallet.get_addresses()
-        if self.show_ps == 0:  # Regular
-            addr_list = [addr for addr in all_addrs if addr not in ps_addrs]
+        if self.show_ps == 0:  # All
+            addr_list = all_addrs
         elif self.show_ps == 1:  # PrivateSend
             addr_list = [addr for addr in all_addrs if addr in ps_addrs]
-        else:
-            addr_list = all_addrs
+        else:  # Regular
+            addr_list = [addr for addr in all_addrs if addr not in ps_addrs]
         self.model().clear()
         self.refresh_headers()
         fx = self.parent.fx

@@ -75,7 +75,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         with open(self.wallet_path, 'w') as wfh:
             wfh.write(wallet_data)
         self.config = SimpleConfig({'electrum_path': self.user_dir})
-        self.config.set_key('show_dip2_tx_type', True, True)
         self.config.set_key('dynamic_fees', False, True)
         self.storage = WalletStorage(self.wallet_path)
         self.wallet = Wallet(self.storage)
@@ -271,8 +270,97 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_ps_history_show_all(self):
         psman = self.wallet.psman
         psman.find_untracked_ps_txs(log=False)
+        # check with show_dip2_tx_type on
+        self.config.set_key('show_dip2_tx_type', True, True)
         h = self.wallet.get_full_history(config=self.config)
         assert h['summary']['end_balance'] == Satoshis(1484831773)
+        txs = h['transactions']
+        assert len(txs) == 88
+        for i in [1, 6, 7, 10, 11, 83, 84, 85, 86]:
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
+        for i in [51]:
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
+        for i in [2, 3, 4, 5, 8, 9, 12, 13, 14, 15, 16, 81]:
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+        for i in range(18, 36):
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+        for i in range(37, 49):
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+        for i in range(52, 64):
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+        for i in range(65, 80):
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+        for i in [17, 36, 49, 50, 64, 80]:
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
+        for i in [82]:
+            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
+        for i, tx in enumerate(txs):
+            assert txs[i]['group_txid'] == None
+            assert txs[i]['group_data'] == []
+        # check with show_dip2_tx_type off
+        self.config.set_key('show_dip2_tx_type', False, True)
+        h = self.wallet.get_full_history(config=self.config)
+        assert h['summary']['end_balance'] == Satoshis(1484831773)
+        txs = h['transactions']
+        assert len(txs) == 88
+        for i, tx in enumerate(txs):
+            assert txs[i]['group_txid'] == None
+            assert txs[i]['group_data'] == []
+
+    def test_ps_history_show_grouped(self):
+        psman = self.wallet.psman
+        psman.find_untracked_ps_txs(log=False)
+
+        # check with show_dip2_tx_type off
+        self.config.set_key('show_dip2_tx_type', False, True)
+        h = self.wallet.get_full_history(config=self.config, group_ps=True)
+        end_balance = Satoshis(1484831773)
+        assert h['summary']['end_balance'] == end_balance
+        txs = h['transactions']
+        group0_group_tx = ('7777bed26bc4805bd892f9e7784a8cd6'
+                           'ea2c80bfca8d866b6ab5509b8f9ea110')
+        group0 = txs[81]['group_data']
+        group0_val = Satoshis(-64144)
+        group0_balance = Satoshis(1599935856)
+        group0_txs_cnt = 81
+        group1_group_tx = ('d9565c9cf5d819acb0f94eca4522c442'
+                           'f40d8ebee973f6f0896763af5868db4b')
+        group1 = txs[86]['group_data']
+        group1_txs = ['d9565c9cf5d819acb0f94eca4522c442'
+                      'f40d8ebee973f6f0896763af5868db4b',
+                      '4a256db62ff0c1764d6eeb8708b87d8a'
+                      'c61c6c0f8c17db76d8a0c11dcb6477cb',
+                      'a58b8396f95489e2f47769ac085e7fb9'
+                      '4a2502ed8e32f617927c2f818c41b099',
+                      '612bee0394963117251c006c64676c16'
+                      '2aa98bd257094f017ae99b4003dfbbab']
+        group1_val = Satoshis(-2570)
+        group1_balance = Satoshis(1484832135)
+        group1_txs_cnt = 4
+
+        # group is tuple: (val, balance, ['txid1', 'txid2, ...])
+        assert group0[0] == group0_val
+        assert group0[1] == group0_balance
+        assert len(group0[2]) == group0_txs_cnt
+        assert group1[0] == group1_val
+        assert group1[1] == group1_balance
+        assert len(group1[2]) == group1_txs_cnt
+        assert group1[2] == group1_txs
+
+        for i, tx in enumerate(txs):
+            if i not in [81, 86]:
+                assert txs[i]['group_data'] == []
+            if i in [0, 81, 82, 86, 87]:
+                assert txs[i]['group_txid'] == None
+            if i in range(1, 81):
+                assert txs[i]['group_txid'] == txs[81]['txid']
+            if i in range(83, 86):
+                assert txs[i]['group_txid'] == txs[86]['txid']
+
+        # check with show_dip2_tx_type on
+        self.config.set_key('show_dip2_tx_type', True, True)
+        h = self.wallet.get_full_history(config=self.config, group_ps=True)
+        assert h['summary']['end_balance'] == end_balance
         txs = h['transactions']
         for i in [1, 6, 7, 10, 11, 83, 84, 85, 86]:
             assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
@@ -293,50 +381,25 @@ class PSWalletTestCase(TestCaseForTestnet):
         for i in [82]:
             assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
 
-    def test_ps_history_show_grouped(self):
-        psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
-        h = self.wallet.get_full_history(config=self.config, group_ps=True)
-        assert h['summary']['end_balance'] == Satoshis(1484831773)
-        txs = h['transactions']
-        for i in [1, 6, 7, 10, 11, 83, 84, 85, 86]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
-        for i in [51]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
-        for i in [2, 3, 4, 5, 8, 9, 12, 13, 14, 15, 16, 81]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
-        for i in range(18, 36):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
-        for i in range(37, 49):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
-        for i in range(52, 64):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
-        for i in range(65, 80):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
-        for i in [17, 36, 49, 50, 64, 80]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
-        for i in [82]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
-        tx_groups = h['summary']['tx_groups']
-        assert len(tx_groups) == 2
-        group0 = tx_groups['7777bed26bc4805bd892f9e7784a8cd6'
-                           'ea2c80bfca8d866b6ab5509b8f9ea110']
-        group1 = tx_groups['d9565c9cf5d819acb0f94eca4522c442'
-                           'f40d8ebee973f6f0896763af5868db4b']
-        assert group0[0] == Satoshis(-64144)  # value
-        assert group0[1] == Satoshis(1599935856)  # balance
-        assert len(group0[2]) == 81
-        assert group1[0] == Satoshis(-2570)  # value
-        assert group1[1] == Satoshis(1484832135)  # balance
-        assert len(group1[2]) == 4
-        assert group1[2] == ['d9565c9cf5d819acb0f94eca4522c442'
-                             'f40d8ebee973f6f0896763af5868db4b',
-                             '4a256db62ff0c1764d6eeb8708b87d8a'
-                             'c61c6c0f8c17db76d8a0c11dcb6477cb',
-                             'a58b8396f95489e2f47769ac085e7fb9'
-                             '4a2502ed8e32f617927c2f818c41b099',
-                             '612bee0394963117251c006c64676c16'
-                             '2aa98bd257094f017ae99b4003dfbbab']
+        group0 = txs[81]['group_data']
+        group1 = txs[86]['group_data']
+        assert group0[0] == group0_val
+        assert group0[1] == group0_balance
+        assert len(group0[2]) == group0_txs_cnt
+        assert group1[0] == group1_val
+        assert group1[1] == group1_balance
+        assert len(group1[2]) == group1_txs_cnt
+        assert group1[2] == group1_txs
+
+        for i, tx in enumerate(txs):
+            if i not in [81, 86]:
+                assert txs[i]['group_data'] == []
+            if i in [0, 81, 82, 86, 87]:
+                assert txs[i]['group_txid'] == None
+            if i in range(1, 81):
+                assert txs[i]['group_txid'] == txs[81]['txid']
+            if i in range(83, 86):
+                assert txs[i]['group_txid'] == txs[86]['txid']
 
     def test_ps_get_utxos_all(self):
         psman = self.wallet.psman

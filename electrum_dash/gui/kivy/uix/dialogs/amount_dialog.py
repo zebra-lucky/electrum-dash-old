@@ -25,15 +25,6 @@ Builder.load_string('''
                 orientation: 'vertical'
                 size_hint: 0.9, 1
                 BoxLayout:
-                    id: mix_ps_box
-                    orientation: 'vertical'
-                    size_hint: 1, 0.2
-                    Widget:
-                        size_hint: 1, 0.1
-                    Button:
-                        text: _('Mix PrivateSend Coins')
-                        on_release: root.app.privatesend_dialog()
-                BoxLayout:
                     id: spend_ps_box
                     orientation: 'horizontal'
                     size_hint: 1, 0.2
@@ -173,27 +164,24 @@ class AmountDialog(Factory.Popup):
         if amount:
             self.ids.kb.amount = amount
 
-        if spend_ps is not None:
+        if spend_ps is not None:  # is amount dialog in send screen
             self.is_spend = True
             self.is_ps = is_ps
             self.spend_ps = spend_ps
-        else:
+        else:  # is amount dialog in receive screen
             self.is_spend = False
 
         main_box = self.ids.main_box
         spend_ps_box = self.ids.spend_ps_box
         available_amount_box = self.ids.available_amount_box
-        mix_ps_box = self.ids.mix_ps_box
         if not self.is_spend:
             main_box.remove_widget(spend_ps_box)
             main_box.remove_widget(available_amount_box)
-            main_box.remove_widget(mix_ps_box)
-        elif is_ps:
-            self.recalc_available_amount()
-            main_box.remove_widget(spend_ps_box)
         else:
+            wallet = self.app.wallet
+            if is_ps or not wallet.psman.enabled:
+                main_box.remove_widget(spend_ps_box)
             self.recalc_available_amount()
-            main_box.remove_widget(mix_ps_box)
 
     def update_amount(self, c):
         kb = self.ids.kb
@@ -246,11 +234,14 @@ class AmountDialog(Factory.Popup):
         kb = self.ids.kb
         max_amount = app.get_max_amount(include_ps=self.spend_ps,
                                         is_ps=self.is_ps)
-        max_amount = COIN * Decimal(max_amount)
-        if kb.is_fiat:
-            max_amount = app.fx.format_amount(max_amount)
-            ccy = app.fx.ccy
-            max_amount = f'{max_amount} {ccy}'
+        if max_amount:
+            max_amount = COIN * Decimal(max_amount)
+            if kb.is_fiat:
+                max_amount = app.fx.format_amount(max_amount)
+                ccy = app.fx.ccy
+                max_amount = f'{max_amount} {ccy}'
+            else:
+                max_amount = app.format_amount_and_units(max_amount)
+            self.available_amount = max_amount
         else:
-            max_amount = app.format_amount_and_units(max_amount)
-        self.available_amount = max_amount
+            self.available_amount = ''

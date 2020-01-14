@@ -430,21 +430,28 @@ class DashNetDialog(QDialog):
         self.setWindowTitle(_('Dash Network'))
         self.setMinimumSize(700, 400)
         self.is_testnet = constants.net.TESTNET
+        self.network = network
         self.dnlayout = DashNetDialogLayout(network, config, self)
         self.dash_net_sobj = dash_net_sobj
         vbox = QVBoxLayout(self)
         vbox.addLayout(self.dnlayout.layout())
         vbox.addLayout(Buttons(CloseButton(self)))
         self.dash_net_sobj.dlg.connect(self.on_updated)
-        network.dash_net.register_callback(self.on_dash_net,
-                                           ['dash-peers-updated',
-                                            'dash-net-activity',
-                                            'sporks-activity',
-                                            'dash-banlist-updated'])
+
+    def show(self):
+        super(DashNetDialog, self).show()
+        if self.network:
+            self.network.dash_net.register_callback(self.on_dash_net,
+                                                    ['dash-peers-updated',
+                                                     'dash-net-activity',
+                                                     'sporks-activity',
+                                                     'dash-banlist-updated'])
 
     def closeEvent(self, e):
         if self.dnlayout.err_label.text():
             e.ignore()
+        if self.network:
+            self.network.dash_net.unregister_callback(self.on_dash_net)
 
     def on_dash_net(self, event, *args):
         self.dash_net_sobj.dlg.emit(event, args)

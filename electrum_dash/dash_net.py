@@ -234,7 +234,6 @@ class DashNet(Logger):
         # Recent broadcasted dsq data
         self.recent_dsq = deque([], 100)
         self.recent_dsq_hashes = deque([], 50)  # added from network broadcasts
-        self.recent_mixes_mns = deque([], 250)  # added from mixing sessions
 
         # Activity data
         self.read_bytes = 0
@@ -372,7 +371,7 @@ class DashNet(Logger):
         mn_list = self.network.mn_list
         quorum = mn_list.calc_responsible_quorum(IS_LLMQ_TYPE, request_id)
         if quorum is None:
-            self.logger.info('no fourm found to verify islock')
+            self.logger.info('no forum found to verify islock')
             return
         txid = bh2u(islock.txid[::-1])
         with self.recent_islocks_lock:
@@ -418,7 +417,7 @@ class DashNet(Logger):
         self.logger.info(f'added recent dsq, queue length:'
                          f' {len(self.recent_dsq)}')
 
-    def is_suitable_dsq(self, dsq):
+    def is_suitable_dsq(self, dsq, recent_mixes_mns):
         now = time.time()
         if now - dsq.nTime > PRIVATESEND_QUEUE_TIMEOUT:
             self.logger.info(f'is_suitable_dsq: to late to use'
@@ -431,17 +430,17 @@ class DashNet(Logger):
                              f' outpoint {dsq.masternodeOutPoint}')
             return False
         peer_str = f'{str_ip(sml_entry.ipAddress)}:{sml_entry.port}'
-        if peer_str in self.recent_mixes_mns:
+        if peer_str in recent_mixes_mns:
             self.logger.info(f'is_suitable_dsq: recently used'
                              f' for mixing {peer_str}')
             return False
         return True
 
-    async def get_recent_dsq(self):
+    async def get_recent_dsq(self, recent_mixes_mns):
         while True:
             while len(self.recent_dsq) > 0:
                 dsq = self.recent_dsq.popleft()
-                if self.is_suitable_dsq(dsq):
+                if self.is_suitable_dsq(dsq, recent_mixes_mns):
                     return dsq
             await asyncio.sleep(0.2)
 
@@ -682,7 +681,7 @@ class DashNet(Logger):
         timeout = self.network.get_network_timeout_seconds()
         try:
             await asyncio.wait_for(dash_peer.ready, timeout)
-        except asyncio.CancelledError:
+        except (asyncio.TimeoutError, asyncio.CancelledError):
             self.logger.info(f'could not connect peer {peer}')
             dash_peer.close()
             return
@@ -705,7 +704,12 @@ class DashNet(Logger):
                              sml_entry=sml_entry, mix_session=mix_session)
         # note: using longer timeouts here as DNS can sometimes be slow!
         timeout = self.network.get_network_timeout_seconds()
-        await asyncio.wait_for(dash_peer.ready, timeout)
+        try:
+            await asyncio.wait_for(dash_peer.ready, timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            self.logger.info(f'could not connect peer {peer}')
+            dash_peer.close()
+            return
         return dash_peer
 
     async def getmnlistd(self, get_mns=False):

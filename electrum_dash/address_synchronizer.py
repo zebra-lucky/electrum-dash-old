@@ -97,7 +97,7 @@ class AddressSynchronizer(Logger):
         self.check_history()
         self.load_unverified_transactions()
         self.remove_local_transactions_we_dont_have()
-        self.psman.check_ps_txs()
+        self.psman.load_and_cleanup()
         self.protx_manager.load()
 
     def is_mine(self, address):
@@ -509,10 +509,11 @@ class AddressSynchronizer(Logger):
         c, u, x = self.get_balance(domain)
         balance = c + u + x
         h2 = []
-        show_dip2 = config.get('show_dip2_tx_type', False) if config else False
-        tx_groups = {}
-        group_txids = []
+        show_dip2 = config.get('show_dip2_tx_type', True) if config else True
+        group_size = 0
         group_txid = None
+        group_txids = []
+        group_data = []
         group_delta = None
         group_balance = None
         hist_len = len(history)
@@ -522,11 +523,13 @@ class AddressSynchronizer(Logger):
                 tx = self.db.get_transaction(tx_hash)
                 if tx:
                     tx_type = tx_header_to_tx_type(bfh(tx.raw[:8]))
-            if show_dip2 or group_ps and not tx_type:  # prefer ProTx type
+            if (group_ps or show_dip2) and not tx_type:  # prefer ProTx type
                 tx_type, completed = self.db.get_ps_tx(tx_hash)
 
             if group_ps and tx_type in PS_MIXING_TX_TYPES:
-                if not group_txids:
+                group_size += 1
+                group_txids.append(tx_hash)
+                if group_size == 1:
                     group_txid = tx_hash
                     group_balance = balance
                 if delta is not None:
@@ -534,22 +537,32 @@ class AddressSynchronizer(Logger):
                         group_delta = delta
                     else:
                         group_delta += delta
-                group_txids.append(tx_hash)
                 if i == hist_len - 1:  # last entry in the history
-                    if group_txids:
-                        tx_groups[group_txid] = (group_delta, group_balance,
-                                                 group_txids)
+                    if group_size > 1:
+                        group_data.append((group_delta, group_balance,
+                                           group_txids))
             else:
-                if group_txids:
-                    if len(group_txids) > 1:
-                        tx_groups[group_txid] = (group_delta, group_balance,
-                                                 group_txids)
-                    group_txids = []
+                if group_size > 0:
+                    if group_size > 1:
+                        group_data.append((group_delta, group_balance,
+                                           group_txids))
+                    group_size = 0
                     group_txid = None
+                    group_txids = []
+                    group_data = []
                     group_delta = None
                     group_balance = None
-            h2.append((tx_hash, tx_type, tx_mined_status,
-                       delta, balance, islock))
+
+            if group_size == 0:
+                h2.append((tx_hash, tx_type, tx_mined_status,
+                           delta, balance, islock, None, []))
+            elif group_size == 1:
+                h2.append((tx_hash, tx_type, tx_mined_status,
+                           delta, balance, islock, None, group_data))
+            else:
+                h2.append((tx_hash, tx_type, tx_mined_status,
+                           delta, balance, islock, group_txid, []))
+
             if balance is None or delta is None:
                 balance = None
             else:
@@ -558,9 +571,9 @@ class AddressSynchronizer(Logger):
         # fixme: this may happen if history is incomplete
         if balance not in [None, 0]:
             self.logger.info("Error: history not synchronized")
-            return [], []
+            return []
 
-        return h2, tx_groups
+        return h2
 
     def _add_tx_to_local_history(self, txid):
         with self.transaction_lock:

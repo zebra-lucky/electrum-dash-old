@@ -18,6 +18,15 @@ def get_ps_tab_widgets(mwin):
 
     wallet = mwin.wallet
     psman = wallet.psman
+    if not psman.enabled:
+        ps_disabled_label = QLabel(psman.disabled_msg)
+        ps_disabled_label.setWordWrap(True)
+        w.append((ps_disabled_label, None))
+
+        def dlg_on_ps_signal(event, args):
+            pass
+        return w, dlg_on_ps_signal
+
     # keep_amount
     keep_amount_text = psman.keep_amount_data(short_txt=True)
     keep_amount_help = psman.keep_amount_data(full_txt=True)

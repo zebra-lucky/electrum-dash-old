@@ -684,9 +684,12 @@ class ElectrumWindow(App):
         self._dash_net_dialog.open()
 
     def privatesend_dialog(self):
-        from .uix.dialogs.privatesend import PrivateSendDialog
+        if self.wallet.psman.enabled:
+            from .uix.dialogs.privatesend import PrivateSendDialog as psdlg
+        else:
+            from .uix.dialogs.privatesend import PrivateSendDialogNoPS as psdlg
         if self._privatesend_dialog is None:
-            self._privatesend_dialog = PrivateSendDialog(self)
+            self._privatesend_dialog = psdlg(self)
         self._privatesend_dialog.open()
 
     def popup_dialog(self, name):
@@ -749,6 +752,9 @@ class ElectrumWindow(App):
             self.icon = 'electrum_dash/gui/icons/electrum-dash-testnet.png'
         else:
             self.icon = 'electrum_dash/gui/icons/electrum-dash.png'
+        self.ps_icon = 'electrum_dash/gui/icons/privatesend.png'
+        self.ps_icon_active = 'electrum_dash/gui/icons/privatesend_active.png'
+        self.root.ids.ps_button.icon = self.ps_icon
         self.tabs = self.root.ids['tabs']
 
     def update_interfaces(self, dt):
@@ -794,12 +800,22 @@ class ElectrumWindow(App):
     def on_ps_event(self, event, *args):
         if event == 'ps-mixing-changes':
             wallet, msg = args
-            if wallet == self.wallet and msg:
-                WarnDialog(msg, title=_('PrivateSend')).open()
+            if wallet == self.wallet:
+                self.update_ps_btn()
+                if msg:
+                    WarnDialog(msg, title=_('PrivateSend')).open()
         elif event == 'ps-data-updated':
             wallet = args[0]
             if wallet == self.wallet:
                 self._trigger_update_wallet()
+
+    def update_ps_btn(self):
+        ps_button = self.root.ids.ps_button
+        wallet = self.wallet
+        if wallet and wallet.psman.is_mixing_run:
+            ps_button.icon = self.ps_icon_active
+        else:
+            ps_button.icon = self.ps_icon
 
     @profiler
     def load_wallet(self, wallet):

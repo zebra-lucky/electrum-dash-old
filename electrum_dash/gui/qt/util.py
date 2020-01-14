@@ -452,10 +452,12 @@ class ElectrumItemDelegate(QStyledItemDelegate):
             new_text = editor.text()
             idx = QModelIndex(self.opened)
             row, col = idx.row(), idx.column()
-            _prior_text, user_role = self.tv.text_txid_from_coordinate(row, col)
+            _prior_text, user_role = \
+                self.tv.text_txid_from_coordinate(row, col, idx)
             # check that we didn't forget to set UserRole on an editable field
-            assert user_role is not None, (row, col)
-            self.tv.on_edited(idx, user_role, new_text)
+            if _prior_text is not None:
+                assert user_role is not None, (row, col)
+                self.tv.on_edited(idx, user_role, new_text)
         self.closeEditor.connect(on_closeEditor)
         self.commitData.connect(on_commitData)
 
@@ -561,7 +563,7 @@ class MyTreeView(QTreeView):
         """
         return False
 
-    def text_txid_from_coordinate(self, row_num, column):
+    def text_txid_from_coordinate(self, row_num, column, index=None):
         assert not isinstance(self.model(), QSortFilterProxyModel)
         idx = self.model().index(row_num, column)
         item = self.model().itemFromIndex(idx)

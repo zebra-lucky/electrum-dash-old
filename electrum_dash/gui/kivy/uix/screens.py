@@ -61,15 +61,12 @@ class HistBoxLayout(FocusBehavior, LayoutSelectionBehavior, RecycleBoxLayout):
         super(HistBoxLayout, self).select_node(node)
         rv = self.recycleview
         data = rv.data[node]
-        screen = data['screen']
-        screen.on_select_node(node, data)
+        rv.hist_screen.on_select_node(node, data)
 
     def deselect_node(self, node):
         super(HistBoxLayout, self).deselect_node(node)
         rv = self.recycleview
-        data = rv.data[node]
-        screen = data['screen']
-        screen.on_deselect_node()
+        rv.hist_screen.on_deselect_node()
 
 
 class CScreen(Factory.Screen):
@@ -148,8 +145,15 @@ class HistoryScreen(CScreen):
     def __init__(self, **kwargs):
         self.ra_dialog = None
         super(HistoryScreen, self).__init__(**kwargs)
-        self.tx_groups = dict()
-        self.expanded_tx_groups = set()
+        atlas_path = 'atlas://electrum_dash/gui/kivy/theming/light/'
+        self.atlas_path = atlas_path
+        self.group_icn_empty = atlas_path + 'kv_tx_group_empty'
+        self.group_icn_head = atlas_path + 'kv_tx_group_head'
+        self.group_icn_tail = atlas_path + 'kv_tx_group_tail'
+        self.group_icn_mid = atlas_path + 'kv_tx_group_mid'
+        self.group_icn_all = atlas_path + 'kv_tx_group_all'
+        self.expanded_groups = set()
+        self.history = []
         self.selected_node = None
 
     def show_tx(self, data):
@@ -171,15 +175,15 @@ class HistoryScreen(CScreen):
 
     def expand_tx_group(self, data):
         group_txid = data['group_txid']
-        if group_txid not in self.expanded_tx_groups:
-            self.expanded_tx_groups.add(group_txid)
-            self.update()
+        if group_txid and group_txid not in self.expanded_groups:
+            self.expanded_groups.add(group_txid)
+            self.update(reload_history=False)
 
     def collapse_tx_group(self, data):
-        xgroup_txid = data['xgroup_txid']
-        if xgroup_txid in self.expanded_tx_groups:
-            self.expanded_tx_groups.remove(xgroup_txid)
-            self.update()
+        group_txid = data['group_txid']
+        if group_txid and group_txid in self.expanded_groups:
+            self.expanded_groups.remove(group_txid)
+            self.update(reload_history=False)
 
     def on_deselect_node(self):
         self.hide_menu()
@@ -194,12 +198,11 @@ class HistoryScreen(CScreen):
         self.selected_node = node
         menu_actions = []
         group_txid = data['group_txid']
-        xgroup_txid = data['xgroup_txid']
-        if group_txid:
+        if group_txid and group_txid not in self.expanded_groups:
             menu_actions.append(('Expand Tx Group', self.expand_tx_group))
-        elif xgroup_txid:
+        elif group_txid and group_txid in self.expanded_groups:
             menu_actions.append(('Collapse Tx Group', self.collapse_tx_group))
-        if not group_txid:
+        if not group_txid or group_txid in self.expanded_groups:
             menu_actions.append(('Label', self.label_dialog))
         menu_actions.append(('Details', self.show_tx))
         self.hide_menu()
@@ -207,40 +210,20 @@ class HistoryScreen(CScreen):
         self.screen.cmbox.add_widget(self.context_menu)
 
     def get_card(self, tx_hash, tx_type, tx_mined_status,
-                 value, balance, islock, label, group_txid):
-        atlas_path = 'atlas://electrum_dash/gui/kivy/theming/light/'
+                 value, balance, islock, label, group_txid, group_icn):
         status, status_str = self.app.wallet.get_tx_status(tx_hash,
                                                            tx_mined_status,
                                                            islock)
-        icon = atlas_path + TX_ICONS[status]
         if label is None:
             label = (self.app.wallet.get_label(tx_hash) if tx_hash
-                        else _('Pruned transaction outputs'))
-
-        xgroup_txid = None
-        group_icn = atlas_path + 'kv_tx_group_empty'
-        if group_txid in self.expanded_tx_groups:
-            xgroup_txid = group_txid
-            gdelta, gbalance, group_txids = self.tx_groups[xgroup_txid]
-            if tx_hash == group_txids[0]:
-                group_icn = atlas_path + 'kv_tx_group_head'
-            elif tx_hash == group_txids[-1]:
-                group_icn = atlas_path + 'kv_tx_group_tail'
-            else:
-                group_icn = atlas_path + 'kv_tx_group_mid'
-            group_txid = None
-        elif group_txid:
-            group_icn = atlas_path + 'kv_tx_group_all'
-
-        tx_type_name = SPEC_TX_NAMES.get(tx_type, str(tx_type))
+                     else _('Pruned transaction outputs'))
         ri = {}
         ri['screen'] = self
         ri['tx_hash'] = tx_hash
-        ri['group_txid'] = group_txid
-        ri['xgroup_txid'] = xgroup_txid
-        ri['tx_type'] = tx_type_name
-        ri['icon'] = icon
+        ri['tx_type'] = SPEC_TX_NAMES.get(tx_type, str(tx_type))
+        ri['icon'] = icon = self.atlas_path + TX_ICONS[status]
         ri['group_icn'] = group_icn
+        ri['group_txid'] = group_txid
         ri['date'] = status_str
         ri['message'] = label
         ri['confirmations'] = tx_mined_status.conf
@@ -255,64 +238,63 @@ class HistoryScreen(CScreen):
                 ri['quote_text'] = fiat_value.to_ui_string()
         return ri
 
-    def process_tx_groups(self, history, tx_groups):
-        self.tx_groups = tx_groups
-
-        def find_tx_group_by_txid(groups, txid):
-            for group_txid, group_data in groups.items():
-                if group_txid == txid:
-                    return group_txid
-                group_delta, group_balance, group_txids = group_data
-                for txid2 in group_txids:
-                    if txid2 == txid:
-                        return group_txid
-
-        new_expanded_tx_groups = set()
-        for txid in self.expanded_tx_groups:
-            new_group_txid = find_tx_group_by_txid(self.tx_groups, txid)
-            if new_group_txid:
-                new_expanded_tx_groups.add(new_group_txid)
-        self.expanded_tx_groups = new_expanded_tx_groups
-
-        processed_txs = []
-        for txid, tx_type, tx_mined_status, value, balance, islock  in history:
-            label = None
-            group_txid = None
-            if txid in self.tx_groups:
-                if txid not in self.expanded_tx_groups:
-                    group_data = self.tx_groups[txid]
-                    group_delta, group_balance, group_txids = group_data
+    def process_tx_groups(self, history):
+        txs = []
+        group_txs = []
+        expanded_groups = set()
+        for (txid, tx_type, tx_mined_status, value, balance,
+             islock, group_txid, group_data)  in history:
+            if txid in self.expanded_groups and txid not in expanded_groups:
+                expanded_groups.add(txid)
+            if group_txid is None and not group_data:
+                txs.append((txid, tx_type, tx_mined_status, value, balance,
+                            islock, None, group_txid, self.group_icn_empty))
+            elif group_txid:
+                if not group_txs:
+                    tx = (txid, tx_type, tx_mined_status, value, balance,
+                          islock, None, group_txid, self.group_icn_tail)
+                else:
+                    tx = (txid, tx_type, tx_mined_status, value, balance,
+                          islock, None, group_txid, self.group_icn_mid)
+                group_txs.append(tx)
+            else:
+                if txid in expanded_groups:
+                    txs.extend(group_txs)
+                    txs.append((txid, tx_type, tx_mined_status, value, balance,
+                                islock, None, txid, self.group_icn_head))
+                else:
+                    value, balance, group_txids = group_data[0]
                     tx_type = PSTxTypes.PS_MIXING_TXS
                     label = _('Group of {} Txs').format(len(group_txids))
-                    value = group_delta
-                    balance = group_balance
-                group_txid = txid
-                processed_txs.append((txid, tx_type, tx_mined_status, value,
-                                      balance, islock, label, group_txid))
-                continue
-            group_txid = find_tx_group_by_txid(self.tx_groups, txid)
-            if group_txid and group_txid not in self.expanded_tx_groups:
-                continue
-            processed_txs.append((txid, tx_type, tx_mined_status, value,
-                                  balance, islock, label, group_txid))
-        return processed_txs
+                    txs.append((txid, tx_type, tx_mined_status, value, balance,
+                                islock, None, txid, self.group_icn_all))
+                group_txs = []
+        self.expanded_groups = expanded_groups
+        return txs
 
-    def update(self, see_all=False):
+    def update(self, reload_history=True):
         if self.app.wallet is None:
             return
-        config = self.app.electrum_config
-        group_ps = self.app.wallet.psman.group_history
-        history, tx_groups = self.app.wallet.get_history(config=config,
-                                                         group_ps=group_ps)
-        history = self.process_tx_groups(history, tx_groups)
+        if reload_history:
+            config = self.app.electrum_config
+            group_ps = self.app.wallet.psman.group_history
+            self.history = self.app.wallet.get_history(config=config,
+                                                       group_ps=group_ps)
+        history = self.process_tx_groups(self.history)
         history = reversed(history)
         history_card = self.screen.ids.history_container
         if self.selected_node is not None:
-            selected_txid = history_card.data[self.selected_node]['tx_hash']
+            card = history_card.data[self.selected_node]
+            selected_txid = card['tx_hash']
         history_card.data = [self.get_card(*item) for item in history]
         if self.selected_node is not None:
-            new_selected_txid = history_card.data[self.selected_node]
-            if new_selected_txid != selected_txid:
+            if self.selected_node <= len(history_card.data) - 1:
+                card = history_card.data[self.selected_node]
+                if card['tx_hash'] == selected_txid:
+                    self.on_select_node(self.selected_node, card)
+                else:
+                    selected_txid = None
+            if not selected_txid:
                 self.clear_selection()
 
 
@@ -499,6 +481,9 @@ class SendScreen(CScreen):
         d = CheckBoxDialog(_('PrivateSend'),
                            _('Send coins as a PrivateSend transaction'),
                            self.is_ps, ps_dialog_cb)
+        wallet = self.app.wallet
+        if not wallet or not wallet.psman.enabled:
+            d.ids.cb.disabled = True
         d.open()
 
 

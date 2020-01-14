@@ -107,6 +107,19 @@ Builder.load_string('''
             padding: dp(5), dp(5)
 
 
+<PrivateSendDialogNoPS@Popup>
+    title: _('PrivateSend')
+    data: data
+    Label:
+        id: data
+        text: ''
+        halign: 'left'
+        valign: 'top'
+        text_size: self.width, None
+        height: self.texture_size[1]
+        padding: dp(5), dp(5)
+
+
 <PrivateSendDialog@Popup>
     title: _('PrivateSend')
     BoxLayout:
@@ -260,6 +273,14 @@ class MixingProgressPopup(Factory.Popup):
         self.data.text = res
 
 
+class PrivateSendDialogNoPS(Factory.Popup):
+
+    def __init__(self, app):
+        Factory.Popup.__init__(self)
+        psman = app.wallet.psman
+        self.data.text = psman.disabled_msg
+
+
 class PrivateSendDialog(Factory.Popup):
 
     keep_amount = NumericProperty()
@@ -346,7 +367,7 @@ class PrivateSendDialog(Factory.Popup):
     def on_ps_event(self, event, *args):
         if event == 'ps-mixing-changes':
             wallet, msg = args
-            if wallet == self.wallet and msg:
+            if wallet == self.wallet:
                 self.is_mixing_run_text = \
                     self.psman.is_mixing_run_data(short_txt=True)
         elif event == 'ps-data-updated':
@@ -389,7 +410,6 @@ class PrivateSendDialog(Factory.Popup):
                                self._start_mixing, ())
         else:
             psman.stop_mixing()
-        self.is_mixing_run_text = psman.is_mixing_run_data(short_txt=True)
 
     def _start_mixing(self, password):
         psman = self.psman

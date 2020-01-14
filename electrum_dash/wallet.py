@@ -482,9 +482,10 @@ class Abstract_Wallet(AddressSynchronizer):
     def balance_at_timestamp(self, domain, target_timestamp):
         # we assume that get_history returns items ordered by block height
         # we also assume that block timestamps are monotonic (which is false...!)
-        h, tx_groups = self.get_history(domain)
+        h = self.get_history(domain)
         balance = 0
-        for tx_hash, tx_type, tx_mined_status, value, balance, islock in h:
+        for (tx_hash, tx_type, tx_mined_status, value, balance,
+             islock, group_txid, group_data) in h:
             mined_ts = tx_mined_status.timestamp
             if not mined_ts and islock:
                 mined_ts = islock
@@ -507,11 +508,11 @@ class Abstract_Wallet(AddressSynchronizer):
         capital_gains = Decimal(0)
         fiat_income = Decimal(0)
         fiat_expenditures = Decimal(0)
-        h, tx_groups = self.get_history(domain, config=config,
-                                        group_ps=group_ps)
+        h = self.get_history(domain, config=config, group_ps=group_ps)
         now = time.time()
-        show_dip2 = config.get('show_dip2_tx_type', False) if config else False
-        for tx_hash, tx_type, tx_mined_status, value, balance, islock in h:
+        show_dip2 = config.get('show_dip2_tx_type', True) if config else True
+        for (tx_hash, tx_type, tx_mined_status, value, balance,
+             islock, group_txid, group_data) in h:
             timestamp = tx_mined_status.timestamp
             if not timestamp and islock:
                 timestamp = islock
@@ -526,6 +527,11 @@ class Abstract_Wallet(AddressSynchronizer):
                 continue
             tx = self.db.get_transaction(tx_hash)
             tx_label = self.get_label(tx_hash)
+            if group_data:
+                group_delta, group_balance, group_txids = group_data[0]
+                group_delta_sat = Satoshis(group_delta)
+                group_balance_sat = Satoshis(group_balance)
+                group_data = (group_delta_sat, group_balance_sat, group_txids)
             item = {
                 'txid': tx_hash,
                 'height': height,
@@ -538,6 +544,8 @@ class Abstract_Wallet(AddressSynchronizer):
                 'label': tx_label,
                 'txpos_in_block': tx_mined_status.txpos,
                 'islock': islock,
+                'group_txid': group_txid,
+                'group_data': group_data,
             }
             if show_dip2:
                 tx_type_name = SPEC_TX_NAMES.get(tx_type, str(tx_type))
@@ -580,11 +588,6 @@ class Abstract_Wallet(AddressSynchronizer):
             else:
                 start_date = None
                 end_date = None
-            for group_txid, group_data in tx_groups.items():
-                group_delta, group_balance, group_txids = group_data
-                gdelta_sat = Satoshis(group_delta)
-                gbalance_sat = Satoshis(group_balance)
-                tx_groups[group_txid] = (gdelta_sat, gbalance_sat, group_txids)
             summary = {
                 'start_date': start_date,
                 'end_date': end_date,
@@ -594,7 +597,6 @@ class Abstract_Wallet(AddressSynchronizer):
                 'end_balance': Satoshis(end_balance),
                 'incoming': Satoshis(income),
                 'outgoing': Satoshis(expenditures),
-                'tx_groups': tx_groups,
             }
             if fx and fx.is_enabled() and fx.get_history_config():
                 unrealized = self.unrealized_gains(domain, fx.timestamp_rate, fx.ccy)

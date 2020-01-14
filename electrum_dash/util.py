@@ -477,6 +477,10 @@ def bh2u(x: bytes) -> str:
     return x.hex()
 
 
+def is_android():
+    return 'ANDROID_DATA' in os.environ
+
+
 def user_dir():
     if 'ANDROID_DATA' in os.environ:
         return android_data_dir()

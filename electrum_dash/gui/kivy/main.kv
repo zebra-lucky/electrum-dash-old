@@ -437,6 +437,10 @@ BoxLayout:
                 #minimum_width: '1dp'
                 on_release: app.popup_dialog('status')
 
+            PSActionButton:
+                id: ps_button
+                on_release: app.popup_dialog('privatesend')
+
             ActionOverflow:
                 id: ao
                 ActionOvrButton:

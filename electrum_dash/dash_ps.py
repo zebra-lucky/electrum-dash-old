@@ -19,7 +19,8 @@ from .dash_msg import (DSPoolStatusUpdate, DSMessageIDs, ds_msg_str,
                        PRIVATESEND_ENTRY_MAX_SIZE)
 from .logging import Logger, root_logger
 from .transaction import Transaction, TxOutput
-from .util import log_exceptions, SilentTaskGroup, NotEnoughFunds, bfh
+from .util import (NoDynamicFeeEstimates, log_exceptions, SilentTaskGroup,
+                   NotEnoughFunds, bfh, is_android)
 from .i18n import _
 
 
@@ -388,7 +389,7 @@ class PSMixSession(Logger):
             self.sml_entry = self.mn_list.get_random_mn()
         if not self.sml_entry:
             raise Exception('No SML entries found')
-        self.dash_net.recent_mixes_mns.append(self.peer_str)
+        psman.recent_mixes_mns.append(self.peer_str)
         Logger.__init__(self)
 
         self.msg_queue = asyncio.Queue()
@@ -416,7 +417,7 @@ class PSMixSession(Logger):
                                                              self.sml_entry,
                                                              self)
         if not self.dash_peer:
-            raise Exception('Peer connection failed')
+            raise Exception(f'Peer {self.peer_str} connection failed')
         self.logger.info(f'Started mixing session {self.peer_str},'
                          f' denom={self.denom_value} (nDenom={self.denom})')
 
@@ -611,6 +612,16 @@ class PSManager(Logger):
     CLEAR_PS_DATA_MSG = _('Are you sure to clear all wallet PrivateSend data?'
                           ' This is not recommended if there is'
                           ' no particular need.')
+    LLMQ_DATA_NOT_READY = _('LLMQ quorums data is not fully loaded.'
+                            ' Please try again soon.')
+    MNS_DATA_NOT_READY = _('Masternodes data is not fully loaded.'
+                           ' Please try again soon.')
+    if is_android():
+        NO_DYNAMIC_FEE_MSG = _('{}\n\nYou can switch fee estimation method'
+                               ' on send screen')
+    else:
+        NO_DYNAMIC_FEE_MSG = _('{}\n\nYou can switch to static fee estimation'
+                               ' on Fees Preferences tab')
 
     def __init__(self, wallet):
         self._debug = False
@@ -618,7 +629,16 @@ class PSManager(Logger):
         self.log_handler = PSManagerLogHandler(self)
         self.wallet = wallet
         self.config = None
-        self.enabled = (wallet.wallet_type == 'standard')
+        self.wallet_types_supported = ['standard']
+        self.enabled = (wallet.wallet_type in self.wallet_types_supported)
+        if not self.enabled:
+            supported_str = ', '.join(self.wallet_types_supported)
+            this_type = wallet.wallet_type
+            self.disabled_msg = _(f'PrivateSend is currently supported on'
+                                  f' next wallet types: {supported_str}.'
+                                  f'\n\nThis wallet has type: {this_type}.')
+        else:
+            self.disabled_msg  = ''
         self.network = None
         self.dash_net = None
         self.loop = None
@@ -636,6 +656,7 @@ class PSManager(Logger):
 
         self.mix_sessions_lock = asyncio.Lock()
         self.mix_sessions = {}  # dict peer -> PSMixSession
+        self.recent_mixes_mns = deque([], 16)  # added from mixing sessions
 
         self.denoms_lock = threading.Lock()
         self.collateral_lock = threading.Lock()
@@ -659,6 +680,20 @@ class PSManager(Logger):
         # sycnhronizer unsubsribed addresses
         self.spent_addrs = set()
         self.unsubscribed_addrs = set()
+
+    def load_and_cleanup(self):
+        w = self.wallet
+        # load and unsubscribe spent ps addresses
+        unspent = w.db.get_unspent_ps_addresses()
+        for addr in w.db.get_ps_addresses():
+            if addr in unspent:
+                continue
+            self.spent_addrs.add(addr)
+            if self.subscribe_spent:
+                continue
+            hist = w.db.get_addr_history(addr)
+            self.unsubscribe_spent_addr(addr, hist)
+        self.check_ps_txs()
 
     def check_ps_txs(self):
         w = self.wallet
@@ -693,16 +728,6 @@ class PSManager(Logger):
                     return str_err
         if found:
             self.trigger_callback('ps-data-updated', w)
-
-        unspent = w.db.get_unspent_ps_addresses()
-        for addr in w.db.get_ps_addresses():
-            if addr in unspent:
-                continue
-            self.spent_addrs.add(addr)
-            if self.subscribe_spent:
-                continue
-            hist = w.db.get_addr_history(addr)
-            self.unsubscribe_spent_addr(addr, hist)
 
     @property
     def debug(self):
@@ -1250,6 +1275,21 @@ class PSManager(Logger):
             self.wallet.sign_transaction(tx, password)
         return tx
 
+    def check_protx_info_completeness(self):
+        if not self.network:
+            return False
+        mn_list = self.network.mn_list
+        if mn_list.protx_info_completeness < 0.75:
+            return False
+        else:
+            return True
+
+    def check_llmq_ready(self):
+        if not self.network:
+            return False
+        mn_list = self.network.mn_list
+        return mn_list.llmq_ready
+
     def start_mixing(self, password):
         if not self.network:
             self.logger.info('Can not start mixing. Network is not available')
@@ -1258,6 +1298,14 @@ class PSManager(Logger):
             return
         if self.all_mixed:
             msg = self.ALL_MIXED_MSG
+            self.trigger_callback('ps-mixing-changes', self.wallet, msg)
+            return
+        if not self.check_llmq_ready():
+            msg = self.LLMQ_DATA_NOT_READY
+            self.trigger_callback('ps-mixing-changes', self.wallet, msg)
+            return
+        if not self.check_protx_info_completeness():
+            msg = self.MNS_DATA_NOT_READY
             self.trigger_callback('ps-mixing-changes', self.wallet, msg)
             return
         if not self.wallet.db.get_ps_txs():  # ps data can be cleared by clear
@@ -1654,6 +1702,9 @@ class PSManager(Logger):
                                  f' {txid}, workflow: {wfl.uuid}')
                 self.wallet.storage.write()
         except Exception as e:
+            if type(e) == NoDynamicFeeEstimates:
+                msg = self.NO_DYNAMIC_FEE_MSG.format(e)
+                self.stop_mixing_from_async_thread(msg)
             if type(e) == SignWithKeyipairsFailed:
                 msg = self.NOT_ENOUGH_KEYS_MSG
                 self.stop_mixing_from_async_thread(msg)
@@ -1860,6 +1911,9 @@ class PSManager(Logger):
             await self.loop.run_in_executor(None, _after_create_tx)
             w.storage.write()
         except Exception as e:
+            if type(e) == NoDynamicFeeEstimates:
+                msg = self.NO_DYNAMIC_FEE_MSG.format(e)
+                self.stop_mixing_from_async_thread(msg)
             if type(e) == AddPSDataError:
                 msg = self.ADD_PS_DATA_ERR_MSG
                 type_name = SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
@@ -2145,6 +2199,9 @@ class PSManager(Logger):
                 await self.loop.run_in_executor(None, _after_create_tx)
                 w.storage.write()
             except Exception as e:
+                if type(e) == NoDynamicFeeEstimates:
+                    msg = self.NO_DYNAMIC_FEE_MSG.format(e)
+                    self.stop_mixing_from_async_thread(msg)
                 if type(e) == AddPSDataError:
                     msg = self.ADD_PS_DATA_ERR_MSG
                     type_name = SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
@@ -2351,7 +2408,8 @@ class PSManager(Logger):
                 self.logger.info(f'Denominate workflow: {wfl.uuid}, try'
                                  f' to get masternode from recent dsq')
                 while not self.main_taskgroup.closed():
-                    dsq = await self.dash_net.get_recent_dsq()
+                    recent_mns = self.recent_mixes_mns
+                    dsq = await self.dash_net.get_recent_dsq(recent_mns)
                     self.logger.info(f'Denominate workflow: {wfl.uuid},'
                                      f' get dsq from recent dsq queue'
                                      f' {dsq.masternodeOutPoint}')
@@ -2400,6 +2458,19 @@ class PSManager(Logger):
                     break
 
             signed_inputs = self._sign_inputs(final_tx, wfl.inputs)
+            # run _set_completed early on incidents when connection lost
+            def _set_completed():
+                with self.denominate_wfl_lock:
+                    saved = self.get_denominate_wfl(wfl.uuid)
+                    if saved and saved.uuid == wfl.uuid:
+                        saved.completed = True
+                        self.set_denominate_wfl(saved)
+                        return saved
+                    else:
+                        self.logger.info(f'denominate workflow:'
+                                         f' {wfl.uuid} not found')
+                        return wfl
+            wfl = await self.loop.run_in_executor(None, _set_completed)
             await session.send_dss(signed_inputs)
             while True:
                 cmd, res = await session.read_next_msg(wfl)
@@ -2408,13 +2479,6 @@ class PSManager(Logger):
                 elif cmd == 'dssu':
                     continue
                 elif cmd == 'dsc':
-                    def _set_completed():
-                        with self.denominate_wfl_lock:
-                            saved = self.get_denominate_wfl(wfl.uuid)
-                            if saved and saved.uuid == wfl.uuid:
-                                saved.completed = True
-                                self.set_denominate_wfl(saved)
-                    await self.loop.run_in_executor(None, _set_completed)
                     break
 
             self.logger.info(f'Completed denominate workflow: {wfl.uuid}')
@@ -2422,6 +2486,9 @@ class PSManager(Logger):
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            if type(e) == NoDynamicFeeEstimates:
+                msg = self.NO_DYNAMIC_FEE_MSG.format(e)
+                self.stop_mixing_from_async_thread(msg)
             if type(e) == SignWithKeyipairsFailed:
                 msg = self.NOT_ENOUGH_KEYS_MSG
                 self.stop_mixing_from_async_thread(msg)

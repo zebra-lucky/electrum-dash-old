@@ -110,8 +110,8 @@ class TxDialog(QDialog, MessageBoxMixin):
             txid = tx.txid()
             tx_type, completed = self.wallet.db.get_ps_tx(txid)
         else:
-            tx_type == tx.tx_type
-        tx_type_name = '%s %s, ' % (SPEC_TX_NAMES[tx_type], _('Type'))
+            tx_type = tx.tx_type
+        tx_type_name = '%s: %s, ' % (_('Type'), SPEC_TX_NAMES[tx_type])
         vbox.addWidget(QLabel(tx_type_name + _('Transaction ID:')))
         self.tx_hash_e  = ButtonsLineEdit()
         qr_show = lambda: parent.show_qrcode(str(self.tx_hash_e.text()), 'Transaction ID', parent=self)

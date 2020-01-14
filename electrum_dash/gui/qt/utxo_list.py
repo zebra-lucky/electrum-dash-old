@@ -67,7 +67,7 @@ class UTXOList(MyTreeView):
         self.show_ps = 0
         self.ps_button = QComboBox(self)
         self.ps_button.currentIndexChanged.connect(self.toggle_ps)
-        for t in [_('Regular'), _('PrivateSend'), _('All')]:
+        for t in [_('All'), _('PrivateSend'), _('Regular')]:
             self.ps_button.addItem(t)
         self.update()
 
@@ -89,12 +89,12 @@ class UTXOList(MyTreeView):
 
     def update(self):
         self.wallet = self.parent.wallet
-        if self.show_ps == 0:
-            utxos = self.wallet.get_utxos()
-        elif self.show_ps == 1:
-            utxos = self.wallet.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
-        else:
+        if self.show_ps == 0:  # All
             utxos = self.wallet.get_utxos(include_ps=True)
+        elif self.show_ps == 1:  # PrivateSend
+            utxos = self.wallet.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
+        else:  # Regular
+            utxos = self.wallet.get_utxos()
         utxos.sort(key=sort_utxos_by_ps_rounds)
         self.utxo_dict = {}
         self.model().clear()

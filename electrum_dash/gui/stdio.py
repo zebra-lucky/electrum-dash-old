@@ -95,9 +95,8 @@ class ElectrumGui:
     def print_history(self):
         messages = []
 
-        hist_list, tx_groups = self.wallet.get_history(config=self.config)
-        hist_list = reversed(hist_list)
-        show_dip2 = self.config.get('show_dip2_tx_type', False)
+        hist_list = reversed(self.wallet.get_history(config=self.config))
+        show_dip2 = self.config.get('show_dip2_tx_type', True)
         if show_dip2:
             width = [20, 18, 22, 14, 14]
             wdelta = (80 - sum(width) - 5) // 3
@@ -114,7 +113,7 @@ class ElectrumGui:
                           "%" + "%d" % (width[2] + wdelta) + "s" +
                           "%" + "%d" % (width[3] + wdelta) + "s")
         for (tx_hash, tx_type, tx_mined_status, delta, balance,
-             islock) in hist_list:
+             islock, group_txid, group_data) in hist_list:
             if tx_mined_status.conf:
                 timestamp = tx_mined_status.timestamp
                 try:

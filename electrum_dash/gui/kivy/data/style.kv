@@ -546,6 +546,23 @@
         pos: root.x + dp(4), root.y + dp(4)
         size: root.width - dp(8), root.height - sp(8)
 
+
+<PSActionButton@ActionItem+Button>:
+    icon: ''
+    background_normal: 'atlas://data/images/defaulttheme/action_item'
+    background_down: 'atlas://data/images/defaulttheme/action_item_down'
+    size_hint_x: 1
+    size_hint_x: None
+    width: dp(48)
+    color: self.color[:3] + [0]
+    Image:
+        source: root.icon
+        pos: root.x + dp(8), root.y + dp(8)
+        size: root.width - dp(16), root.height - sp(16)
+        allow_stretch: True
+        mipmap: True
+
+
 <ActionLabel>:
     size_hint_x: None if not root.inside_group else 1
     width: self.texture_size[0] + dp(32)

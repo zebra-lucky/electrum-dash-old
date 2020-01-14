@@ -71,7 +71,7 @@ class ElectrumGui:
         self.str_amount = ""
         self.str_fee = ""
         self.history = None
-        self.show_dip2 = self.config.get('show_dip2_tx_type', False)
+        self.show_dip2 = self.config.get('show_dip2_tx_type', True)
 
         if self.network:
             self.network.register_callback(self.update, ['wallet_updated', 'network_updated'])
@@ -136,9 +136,9 @@ class ElectrumGui:
     def update_history(self):
         b = 0
         self.history = []
-        hist_list, tx_groups = self.wallet.get_history(config=self.config)
+        hist_list = self.wallet.get_history(config=self.config)
         for (tx_hash, tx_type, tx_mined_status, value, balance,
-             islock) in hist_list:
+             islock, group_txid, group_data) in hist_list:
             if tx_mined_status.conf:
                 timestamp = tx_mined_status.timestamp
                 try:

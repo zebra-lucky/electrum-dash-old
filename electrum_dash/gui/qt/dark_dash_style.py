@@ -704,6 +704,14 @@ QTreeView::item:selected, QTreeView::item:selected:active {
     background-color:#808080;
 }
 
+MyTreeView::branch:has-siblings:adjoins-item {
+    border-image: url({pkg_dir}/gui/icons/tx_group_mid.png) 0;
+}
+
+MyTreeView::branch:!has-children:!has-siblings:adjoins-item {
+    border-image: url({pkg_dir}/gui/icons/tx_group_tail.png) 0;
+}
+
 /**********************/
 /* 9. Dialog Boxes */
 
