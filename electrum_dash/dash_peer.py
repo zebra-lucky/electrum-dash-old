@@ -277,8 +277,9 @@ class DashPeer(Logger):
                             if self.mix_session.verify_ds_msg_sig(payload):
                                 await self.mix_session.msg_queue.put(res)
                             else:
-                                self.logger.info(f'dsq vchSig verification'
-                                                 f' failed {res}')
+                                exc = Exception(f'dsq vchSig verification'
+                                                f' failed {res}')
+                                await self.mix_session.msg_queue.put(exc)
                     else:
                         dash_net.add_recent_dsq(payload)
                 elif cmd == 'dssu' and self.mix_session:

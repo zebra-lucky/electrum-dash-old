@@ -71,7 +71,8 @@ class ElectrumGui:
         self.str_amount = ""
         self.str_fee = ""
         self.history = None
-        self.show_dip2 = self.config.get('show_dip2_tx_type', True)
+        def_dip2 = not self.wallet.psman.unsupported
+        self.show_dip2 = self.config.get('show_dip2_tx_type', def_dip2)
 
         if self.network:
             self.network.register_callback(self.update, ['wallet_updated', 'network_updated'])

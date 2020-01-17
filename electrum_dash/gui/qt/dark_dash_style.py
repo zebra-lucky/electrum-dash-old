@@ -440,6 +440,10 @@ QAbstractSpinBox {
     color: #ccc;
 }
 
+QAbstractSpinBox:disabled {
+    border: 1px solid #676767;
+}
+
 QAbstractSpinBox::up-button {
     subcontrol-origin: border;
     subcontrol-position: top right;
@@ -454,6 +458,10 @@ QAbstractSpinBox::up-button {
     padding-top:2px;
 }
 
+QAbstractSpinBox::up-button:disabled {
+    border-right: 1px solid #676767;
+    border-top: 1px solid #676767;
+}
 
 QAbstractSpinBox::down-button {
     subcontrol-origin: border;
@@ -467,6 +475,11 @@ QAbstractSpinBox::down-button {
     padding-right:1px;
     padding-left:5px;
     padding-bottom:2px;
+}
+
+QAbstractSpinBox::down-button:disabled {
+    border-right: 1px solid #676767;
+    border-bottom: 1px solid #676767;
 }
 
 QAbstractSpinBox::up-arrow {
@@ -665,7 +678,7 @@ QScrollBar:right-arrow {
 /**********************/
 /* 8. Tree Widget */
 
-QTreeView, QTreeWidget, QListWidget, QTableView, QTextEdit  {
+QTreeView, QTreeWidget, QListWidget, QTableView, QTextEdit, QPlainTextEdit  {
     border: 0px;
     color: #ccc;
     background-color: #232629;
@@ -676,7 +689,8 @@ QTreeView QLineEdit, QTreeWidget QLineEdit {
     padding: 0;
 }
 
-QListWidget, QTableView, QTextEdit, QDialog QTreeWidget, QDialog QTreeView {
+QListWidget, QTableView, QTextEdit, QPlainTextEdit,
+QDialog QTreeWidget, QDialog QTreeView {
     border: 1px solid #1c75bc;
 }
 

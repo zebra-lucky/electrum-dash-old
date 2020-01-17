@@ -26,8 +26,8 @@
 import os
 import time
 import datetime
-from collections import defaultdict
 from datetime import date
+from functools import partial
 from typing import TYPE_CHECKING, Tuple, Dict
 import threading
 from enum import IntEnum
@@ -35,8 +35,8 @@ from decimal import Decimal
 
 from PyQt5.QtGui import QMouseEvent, QFont, QBrush, QColor
 from PyQt5.QtCore import (Qt, QPersistentModelIndex, QModelIndex,
-                          QAbstractItemModel, QSortFilterProxyModel, QVariant,
-                          QItemSelectionModel, QDate, QPoint, QItemSelection)
+                          QAbstractItemModel, QVariant, QItemSelectionModel,
+                          QDate, QPoint, QItemSelection, QThread)
 from PyQt5.QtWidgets import (QMenu, QHeaderView, QLabel, QMessageBox,
                              QPushButton, QComboBox, QVBoxLayout, QCalendarWidget,
                              QGridLayout)
@@ -45,7 +45,7 @@ from electrum_dash.address_synchronizer import TX_HEIGHT_LOCAL
 from electrum_dash.dash_tx import PSTxTypes, SPEC_TX_NAMES
 from electrum_dash.i18n import _
 from electrum_dash.util import (block_explorer_URL, profiler, TxMinedInfo,
-                                OrderedDictWithIndex, timestamp_to_datetime)
+                                timestamp_to_datetime)
 from electrum_dash.logging import get_logger, Logger
 
 from .util import (read_QIcon, MONOSPACE_FONT, Buttons, CancelButton, OkButton,
@@ -95,20 +95,15 @@ class HistoryColumns(IntEnum):
     TXID = 10
 
 
-class HistorySortModel(QSortFilterProxyModel):
-    def lessThan(self, source_left: QModelIndex, source_right: QModelIndex):
-        item1 = self.sourceModel().data(source_left, Qt.UserRole)
-        item2 = self.sourceModel().data(source_right, Qt.UserRole)
-        if item1 is None or item2 is None:
-            raise Exception(f'UserRole not set for column {source_left.column()}')
-        v1 = item1.value()
-        v2 = item2.value()
-        if v1 is None or isinstance(v1, Decimal) and v1.is_nan(): v1 = -float("inf")
-        if v2 is None or isinstance(v2, Decimal) and v2.is_nan(): v2 = -float("inf")
-        try:
-            return v1 < v2
-        except:
-            return False
+class GetDataThread(QThread):
+
+    def __init__(self, model, group_ps, parent=None):
+        super(GetDataThread, self).__init__(parent)
+        self.model = model
+        self.group_ps = group_ps
+
+    def run(self):
+        self.r = self.model.get_full_history_for_view(self.group_ps)
 
 
 class HistoryModel(QAbstractItemModel, Logger):
@@ -118,11 +113,12 @@ class HistoryModel(QAbstractItemModel, Logger):
         Logger.__init__(self)
         self.parent = parent
         self.view = None  # type: HistoryList
-        self.transactions = OrderedDictWithIndex()
-        self.groups = defaultdict(list)
-        self.expanded_tx_groups = set()
+        self.transactions = dict()
+        self.tx_tree = list()
+        self.expanded_groups = set()
         self.tx_status_cache = {}  # type: Dict[str, Tuple[int, str]]
         self.summary = None
+        self.group_ps = self.parent.wallet.psman.group_history
         # read tx group control icons
         self.tx_group_expand_icn = read_QIcon('tx_group_expand.png')
         self.tx_group_collapse_icn = read_QIcon('tx_group_collapse.png')
@@ -136,47 +132,183 @@ class HistoryModel(QAbstractItemModel, Logger):
     def columnCount(self, parent: QModelIndex):
         return len(HistoryColumns)
 
+    def rowCount(self, parent: QModelIndex):
+        if not parent.isValid():  # parent is root
+            return len(self.tx_tree)
+
+        if not self.group_ps:
+            return 0
+
+        parent_tx_item = parent.internalPointer()
+        parent_idx_row = parent_tx_item['idx_row']
+        return len(self.tx_tree[parent_idx_row][1])
+
     def index(self, row: int, column: int, parent: QModelIndex):
         if not parent.isValid():  # parent is root
-            tx_item = self.transactions.value_from_pos(row)
-        else:
-            parent_item = parent.internalPointer()
-            tx_item = parent_item['children'].value_from_pos(row)
+            if len(self.tx_tree) <= row:
+                return QModelIndex()
+            return self.createIndex(row, column, self.tx_tree[row][0])
+
+        parent_tx_item = parent.internalPointer()
+        parent_idx_row = parent_tx_item['idx_row']
+        children = self.tx_tree[parent_idx_row][1]
+        tx_item = children[row]
         return self.createIndex(row, column, tx_item)
 
     def index_from_txid(self, txid):
-        if txid in self.transactions:
-            row = self.transactions.pos_from_key(txid)
-            return self.createIndex(row, 0, self.transactions[txid])
-        for group_txid, group_txids in self.groups.items():
-            if txid in group_txids:
-                children = self.transactions[group_txid]['children']
-                row = children.pos_from_key(txid)
-                return self.createIndex(row, 0, children[txid])
-        return QModelIndex()
+        tx_item = self.transactions.get(txid)
+        if not tx_item:
+            return QModelIndex()
 
-    def rowCount(self, parent: QModelIndex):
-        if not parent.isValid():  # parent is root
-            return len(self.transactions)
+        idx_row = tx_item['idx_row']
+        if not self.group_ps:
+            return self.index(idx_row, 0, QModelIndex())
+
+        idx_parent_row = tx_item['idx_parent_row']
+        if idx_parent_row is None:
+            return self.index(idx_row, 0, QModelIndex())
         else:
-            parent_item = parent.internalPointer()
-            children = parent_item.get('children', OrderedDictWithIndex())
-            return len(children)
+            paranet_idx = self.index(idx_parent_row, 0, QModelIndex())
+            return self.index(idx_row, 0, paranet_idx)
 
     def parent(self, index: QModelIndex):
-        if not index.isValid():  # index is root
-            return QModelIndex()
-        else:
-            tx_item = index.internalPointer()
-            if tx_item:
-                group_txid = tx_item.get('group_txid')
-                if group_txid:
-                    return self.index_from_txid(group_txid)
+        if not index.isValid():  # root
             return QModelIndex()
 
+        if not self.group_ps:
+            return QModelIndex()
+
+        parent_tx_item = index.internalPointer()
+        idx_parent_row = parent_tx_item['idx_parent_row']
+        if idx_parent_row is None:
+            return QModelIndex()
+        else:
+            parent_tx_item = self.tx_tree[idx_parent_row][0]
+            return self.createIndex(idx_parent_row, 0, parent_tx_item)
+
+    def hasChildren(self, parent: QModelIndex):
+        if not parent.isValid():  # parent is root
+            return True
+
+        if not self.group_ps:
+            return False
+
+        parent_tx_item = parent.internalPointer()
+        idx_parent_row = parent_tx_item['idx_parent_row']
+        if idx_parent_row is None:
+            idx_row = parent_tx_item['idx_row']
+            children = self.tx_tree[idx_row][1]
+            return len(children) > 0
+        else:
+            return False
+
+    def sort(self, col, order):
+        if self.tx_tree:
+            self.process_changes(self.sorted(self.tx_tree, col, order))
+
+    def sort_ix(self, x, child=False):
+        if child:
+            return x['ix']
+        else:
+            return x[0]['ix']
+
+    def sort_status_text(self, x, child=False):
+        if child:
+            timestamp = x['timestamp']
+            if timestamp is None:
+                return (1e10, x['ix'])
+            return timestamp
+        else:
+            timestamp = x[0]['timestamp']
+            if timestamp is None:
+                return (1e10, x[0]['ix'])
+            return timestamp
+
+    def sort_dip2(self, x, child=False):
+        if child:
+            return x['dip2']
+        else:
+            return x[0]['dip2']
+
+    def sort_label(self, x, child=False):
+        if child:
+            return x['label']
+        else:
+            return x[0]['label']
+
+    def sort_coin_value(self, x, child=False):
+        if child:
+            return x['value'].value
+        else:
+            return x[0]['value'].value
+
+    def sort_running_coin_balance(self, x, child=False):
+        if child:
+            return x['balance'].value
+        else:
+            return x[0]['balance'].value
+
+    def sort_fiat_value(self, x, child=False):
+        if child:
+            return x['fiat_value'].value
+        else:
+            return x[0]['fiat_value'].value
+
+    def sort_fiat_acq_price(self, x, child=False):
+        if child:
+            return x['acquisition_price']
+        else:
+            return x[0]['acquisition_price']
+
+    def sort_fiat_cap_gains(self, x, child=False):
+        if child:
+            return x['capital_gain']
+        else:
+            return x[0]['capital_gain']
+
+    def sort_txid(self, x, child=False):
+        if child:
+            return x['txid']
+        else:
+            return x[0]['txid']
+
+    def sorted(self, tx_tree, col, order):
+        if col == HistoryColumns.TX_GROUP:
+            key = self.sort_ix
+        if col == HistoryColumns.STATUS_ICON:
+            key = self.sort_ix
+        elif col == HistoryColumns.STATUS_TEXT:
+            key = self.sort_status_text
+        elif col == HistoryColumns.DIP2:
+            key = self.sort_dip2
+        elif col == HistoryColumns.DESCRIPTION:
+            key = self.sort_label
+        elif col == HistoryColumns.COIN_VALUE:
+            key = self.sort_coin_value
+        elif col == HistoryColumns.RUNNING_COIN_BALANCE:
+            key = self.sort_running_coin_balance
+        elif col == HistoryColumns.FIAT_VALUE:
+            key = self.sort_fiat_value
+        elif col == HistoryColumns.FIAT_ACQ_PRICE:
+            key = self.sort_fiat_acq_price
+        elif col == HistoryColumns.FIAT_CAP_GAINS:
+            key = self.sort_fiat_cap_gains
+        elif col == HistoryColumns.TXID:
+            key = self.sort_txid
+        else:
+            key = self.sort_ix
+        if self.group_ps:
+            tx_tree = sorted(tx_tree, key=key, reverse=order)
+            for i in range(len(tx_tree)):
+                children = tx_tree[i][1]
+                if children:
+                    ch_key = partial(key, child=True)
+                    tx_tree[i][1] = sorted(children, key=ch_key, reverse=order)
+            return tx_tree
+        else:
+            return sorted(tx_tree, key=key, reverse=order)
+
     def data(self, index: QModelIndex, role: Qt.ItemDataRole) -> QVariant:
-        # note: this method is performance-critical.
-        # it is called a lot, and so must run extremely fast.
         assert index.isValid()
         col = index.column()
         tx_item = index.internalPointer()
@@ -185,8 +317,8 @@ class HistoryModel(QAbstractItemModel, Logger):
         txpos = tx_item['txpos_in_block'] or 0
         height = tx_item['height']
         islock = tx_item['islock']
-        is_parent = ('children' in tx_item)
-        if is_parent and tx_hash in self.expanded_tx_groups:
+        is_parent = ('group_label' in tx_item)
+        if is_parent and tx_hash in self.expanded_groups:
             expanded = True
         else:
             expanded = False
@@ -202,32 +334,6 @@ class HistoryModel(QAbstractItemModel, Logger):
         except KeyError:
             tx_mined_info = self.tx_mined_info_from_tx_item(tx_item)
             status, status_str = self.parent.wallet.get_tx_status(tx_hash, tx_mined_info, islock)
-        if role == Qt.UserRole:
-            # for sorting
-            now = int(time.time())
-            # height breaks ties for unverified txns
-            # txpos breaks ties for verified same block txns
-            if not conf and islock:  # one more to be gt -status (-0)
-                status_sort = (conf, now - islock + 1)
-            else:
-                status_sort = (conf, -status, -height, -txpos)
-            d = {
-                HistoryColumns.TX_GROUP: '',
-                HistoryColumns.STATUS_ICON: status_sort,
-                HistoryColumns.STATUS_TEXT: status_str,
-                HistoryColumns.DIP2: tx_item.get('dip2', ''),
-                HistoryColumns.DESCRIPTION: tx_item['label'],
-                HistoryColumns.COIN_VALUE:  tx_item['value'].value,
-                HistoryColumns.RUNNING_COIN_BALANCE: tx_item['balance'].value,
-                HistoryColumns.FIAT_VALUE:
-                    tx_item['fiat_value'].value if 'fiat_value' in tx_item else None,
-                HistoryColumns.FIAT_ACQ_PRICE:
-                    tx_item['acquisition_price'].value if 'acquisition_price' in tx_item else None,
-                HistoryColumns.FIAT_CAP_GAINS:
-                    tx_item['capital_gain'].value if 'capital_gain' in tx_item else None,
-                HistoryColumns.TXID: tx_hash,
-            }
-            return QVariant(d[col])
         if role not in (Qt.DisplayRole, Qt.EditRole):
             if col == HistoryColumns.TX_GROUP and role == Qt.DecorationRole:
                 if tx_group_icon:
@@ -271,7 +377,10 @@ class HistoryModel(QAbstractItemModel, Logger):
         if col == HistoryColumns.STATUS_TEXT:
             return QVariant(status_str)
         elif col == HistoryColumns.DIP2:
-            return QVariant(tx_item.get('dip2', ''))
+            if is_parent and not expanded:
+                return QVariant(tx_item.get('group_dip2', ''))
+            else:
+                return QVariant(tx_item.get('dip2', ''))
         elif col == HistoryColumns.DESCRIPTION:
             if is_parent and not expanded:
                 return QVariant(tx_item['group_label'])
@@ -320,94 +429,120 @@ class HistoryModel(QAbstractItemModel, Logger):
         '''Overridden in address_dialog.py'''
         return self.parent.wallet.get_addresses()
 
-    def process_tx_groups(self, r):
-        txs = []
-        children = OrderedDictWithIndex()
-        self.groups = defaultdict(list)
-        for tx_item in r['transactions']:
+    @profiler
+    def process_history(self, r, group_ps):
+        row = 0
+        child_row = 0
+        children = []
+        transactions = []
+        tx_tree = []
+        for i, tx_item in enumerate(r['transactions'][::-1]):
+            tx_item['ix'] = i
+            txid = tx_item['txid']
+            group_data = tx_item.pop('group_data')
             group_txid = tx_item['group_txid']
-            if group_txid:
-                txid = tx_item['txid']
-                children[txid] = tx_item
-                self.groups[group_txid].append(txid)
+            if not group_ps:
+                tx_item['idx_parent_row'] = None
+                tx_item['idx_row'] = row
+                row += 1
+                tx_tree.append([tx_item, []])
+            elif group_data:
+                group_value, group_balance, group_txids = group_data
+                group_dip2 = SPEC_TX_NAMES[PSTxTypes.PS_MIXING_TXS]
+                group_len = len(group_txids)
+                group_label = _('Group of {} Txs').format(group_len)
+                tx_item['group_value'] = group_value
+                tx_item['group_balance'] = group_balance
+                tx_item['group_dip2'] = group_dip2
+                tx_item['group_label'] = group_label
+                tx_item['idx_parent_row'] = None
+                tx_item['idx_row'] = row
+                row += 1
+                child_row = 0
+                children = []
+                tx_tree.append([tx_item, children])
+            elif group_txid:
+                tx_item['idx_parent_row'] = row - 1
+                tx_item['idx_row'] = child_row
+                child_row += 1
+                children.append(tx_item)
             else:
-                group_data = tx_item.pop('group_data', None)
-                if group_data:
-                    group_value, group_balance, group_txids = group_data
-                    group_dip2 = SPEC_TX_NAMES[PSTxTypes.PS_MIXING_TXS]
-                    group_len = len(group_txids)
-                    group_label = _('Group of {} Txs').format(group_len)
-                    tx_item['group_value'] = group_value
-                    tx_item['group_balance'] = group_balance
-                    tx_item['group_dip2'] = group_dip2
-                    tx_item['group_label'] = group_label
-                    tx_item['children'] = children
-                    children = OrderedDictWithIndex()
-                txs.append(tx_item)
-        r['transactions'] = txs
-
-        new_expanded_tx_groups = set()
-        for txid in self.expanded_tx_groups:
-            for group_txid, group_txids in self.groups.items():
-                if txid == group_txid or txid in group_txids:
-                    new_expanded_tx_groups.add(group_txid)
-        self.expanded_tx_groups = new_expanded_tx_groups
+                tx_item['idx_parent_row'] = None
+                tx_item['idx_row'] = row
+                row += 1
+                child_row = 0
+                children = []
+                tx_tree.append([tx_item, []])
+            transactions.append(tx_item)
+        r['transactions'] = transactions
+        r['tx_tree'] = tx_tree
 
     @profiler
-    def refresh(self, reason: str):
-        self.logger.info(f"refreshing... reason: {reason}")
-        assert self.parent.gui_thread == threading.current_thread(), 'must be called from GUI thread'
-        assert self.view, 'view not set'
+    def process_changes(self, tx_tree, group_ps=None):
         selected = self.view.selectionModel().selectedRows()
         selected_txid = None
         if selected:
-            idx = self.view.model().mapToSource(selected[0])
+            idx = selected[0]
             if idx.isValid():
                 tx_item = idx.internalPointer()
                 if tx_item:
                     selected_txid = tx_item['txid']
-        fx = self.parent.fx
-        if fx: fx.history_used_spot = False
-        group_ps = self.parent.wallet.psman.group_history
-        r = self.parent.wallet.get_full_history(domain=self.get_domain(),
-                                                from_timestamp=None,
-                                                to_timestamp=None,
-                                                fx=fx,
-                                                config=self.parent.config,
-                                                group_ps=group_ps)
-        self.process_tx_groups(r)
-        self.set_visibility_of_columns()
-        if r['transactions'] == list(self.transactions.values()):
-            return
 
-        old_length = len(self.transactions)
-        if old_length != 0:
-            for row, txid in enumerate(self.transactions):
-                tx_item = self.transactions[txid]
-                children = tx_item.get('children')
+        if self.group_ps:
+            for i, (tx_item, children) in enumerate(self.tx_tree):
                 if children:
-                    parent_index = self.index(row, 0, QModelIndex())
-                    self.beginRemoveRows(parent_index, 0, len(children)-1)
-                    children.clear()
+                    parent_idx = self.index(i, 0, QModelIndex())
+                    self.beginRemoveRows(parent_idx, 0, len(children)-1)
+                    for c_tx_item  in children:
+                        child_txid = c_tx_item['txid']
+                        del self.transactions[child_txid]
+                    self.tx_tree[i] = [tx_item, []]
                     self.endRemoveRows()
-            self.beginRemoveRows(QModelIndex(), 0, old_length)
+        if self.tx_tree:
+            self.beginRemoveRows(QModelIndex(), 0, len(self.tx_tree)-1)
             self.transactions.clear()
+            self.tx_tree.clear()
             self.endRemoveRows()
 
-        for row, tx_item in enumerate(r['transactions']):
-            txid = tx_item['txid']
-            children = tx_item.pop('children', None)
-            self.beginInsertRows(QModelIndex(), row, row)
-            self.transactions[txid] = tx_item
-            self.endInsertRows()
-            if children:
-                parent_index = self.index(row, 0, QModelIndex())
-                self.beginInsertRows(parent_index, 0, len(children)-1)
-                tx_item['children'] = children
-                if txid in self.expanded_tx_groups:
-                    mapped_idx = self.view.model().mapFromSource(parent_index)
-                    self.view.expand(mapped_idx)
+        if group_ps is not None:
+            self.group_ps = group_ps
+
+        if self.group_ps:
+            old_expanded_groups = self.expanded_groups
+            self.expanded_groups = set()
+            for i, (tx_item, children) in enumerate(tx_tree):
+                self.beginInsertRows(QModelIndex(), i, i)
+                txid = tx_item['txid']
+                tx_item['idx_row'] = i
+                self.tx_tree.append([tx_item, []])
+                self.transactions[txid] = tx_item
                 self.endInsertRows()
+                if children:
+                    children_txids = []
+                    parent_idx = self.index(i, 0, QModelIndex())
+                    self.beginInsertRows(parent_idx, 0, len(children)-1)
+                    for ch_i, ch_tx_item in enumerate(children):
+                        ch_tx_item['idx_row'] = ch_i
+                        ch_tx_item['idx_parent_row'] = i
+                        ch_txid = ch_tx_item['txid']
+                        self.transactions[ch_txid] = ch_tx_item
+                        children_txids.append(ch_txid)
+                    self.tx_tree[i] = [tx_item, children]
+                    self.endInsertRows()
+                    for expanded_txid in old_expanded_groups:
+                        if (expanded_txid == txid
+                                or expanded_txid in children_txids):
+                            self.expanded_groups.add(txid)
+                            self.view.expand(parent_idx)
+        else:
+            self.expanded_groups = set()
+            self.beginInsertRows(QModelIndex(), 0, len(tx_tree)-1)
+            for item in tx_tree:
+                tx_item = item[0]
+                txid = tx_item['txid']
+                self.tx_tree.append([tx_item, []])
+                self.transactions[txid] = tx_item
+            self.endInsertRows()
 
         if selected_txid:
             sel_model = self.view.selectionModel()
@@ -415,18 +550,53 @@ class HistoryModel(QAbstractItemModel, Logger):
                            QItemSelectionModel.SelectCurrent)
             idx = self.index_from_txid(selected_txid)
             if idx.isValid():
-                idx = self.view.model().mapFromSource(idx)
                 selection = QItemSelection(idx, idx)
                 sel_model.select(selection, SEL_CUR_ROW)
+
+    @profiler
+    def refresh(self, reason: str):
+        self.logger.info(f"refreshing... reason: {reason}")
+        assert self.parent.gui_thread == threading.current_thread(), 'must be called from GUI thread'
+        assert self.view, 'view not set'
+        group_ps = self.parent.wallet.psman.group_history
+        self.set_visibility_of_columns(group_ps)
+        #bg_thread = GetDataThread(self, group_ps)
+        #def on_get_data():
+        #    self._refresh(bg_thread.r, group_ps)
+        #bg_thread.finished.connect(on_get_data)
+        #bg_thread.start()
+        self._refresh(self.get_full_history_for_view(group_ps), group_ps)
+
+    def get_full_history_for_view(self, group_ps):
+        fx = self.parent.fx
+        if fx:
+            fx.history_used_spot = False
+        get_hist = self.parent.wallet.get_full_history
+        domain = self.get_domain()
+        r = get_hist(domain=domain, from_timestamp=None, to_timestamp=None,
+                     fx=fx, config=self.parent.config, group_ps=group_ps)
+        self.process_history(r, group_ps)
+        return r
+
+    def _refresh(self, r, group_ps):
+        tx_tree = r['tx_tree']
+        if tx_tree == self.tx_tree:
+            return
+        col = self.view.header().sortIndicatorSection()
+        order = self.view.header().sortIndicatorOrder()
+        self.process_changes(self.sorted(tx_tree, col, order), group_ps)
+
         self.view.filter()
         # update summary
         self.summary = r['summary']
-        if not self.view.years and self.transactions:
+        if not self.view.years and self.tx_tree:
             start_date = date.today()
             end_date = date.today()
-            if len(self.transactions) > 0:
-                start_date = self.transactions.value_from_pos(0).get('date') or start_date
-                end_date = self.transactions.value_from_pos(len(self.transactions) - 1).get('date') or end_date
+            if len(self.tx_tree) > 0:
+                start_tx_item = self.tx_tree[-1][0]
+                start_date = start_tx_item.get('date') or start_date
+                end_tx_item = self.tx_tree[0][0]
+                end_date = end_tx_item.get('date') or end_date
             self.view.years = [str(i) for i in range(start_date.year, end_date.year + 1)]
             self.view.period_combo.insertItems(1, self.view.years)
         # update tx_status_cache
@@ -436,7 +606,7 @@ class HistoryModel(QAbstractItemModel, Logger):
             tx_mined_info = self.tx_mined_info_from_tx_item(tx_item)
             self.tx_status_cache[txid] = self.parent.wallet.get_tx_status(txid, tx_mined_info, islock)
 
-    def set_visibility_of_columns(self):
+    def set_visibility_of_columns(self, group_ps=None):
         def set_visible(col: int, b: bool):
             self.view.showColumn(col) if b else self.view.hideColumn(col)
         # txid
@@ -447,9 +617,11 @@ class HistoryModel(QAbstractItemModel, Logger):
         set_visible(HistoryColumns.FIAT_VALUE, history)
         set_visible(HistoryColumns.FIAT_ACQ_PRICE, history and cap_gains)
         set_visible(HistoryColumns.FIAT_CAP_GAINS, history and cap_gains)
-        show_dip2 = self.view.config.get('show_dip2_tx_type', True)
+        def_dip2 = not self.parent.wallet.psman.unsupported
+        show_dip2 = self.view.config.get('show_dip2_tx_type', def_dip2)
         set_visible(HistoryColumns.DIP2, show_dip2)
-        group_ps = self.view.wallet.psman.group_history
+        if group_ps is None:
+            group_ps = self.group_ps
         set_visible(HistoryColumns.TX_GROUP, group_ps)
 
     def update_fiat(self, idx, tx_item):
@@ -463,14 +635,13 @@ class HistoryModel(QAbstractItemModel, Logger):
         self.dataChanged.emit(idx, idx, [Qt.DisplayRole, Qt.ForegroundRole])
 
     def update_tx_mined_status(self, tx_hash: str, tx_mined_info: TxMinedInfo):
-        try:
-            idx = self.index_from_txid(tx_hash)
-            if not idx.isValid():
-                return
-            tx_item = idx.internalPointer()
-            islock = tx_item['islock']
-        except KeyError:
+        idx = self.index_from_txid(tx_hash)
+        if not idx.isValid():
             return
+        tx_item = idx.internalPointer()
+        if not tx_item:
+            return
+        islock = tx_item['islock']
         self.tx_status_cache[tx_hash] = \
             self.parent.wallet.get_tx_status(tx_hash, tx_mined_info, islock)
         tx_item.update({
@@ -484,13 +655,6 @@ class HistoryModel(QAbstractItemModel, Logger):
 
     def on_fee_histogram(self):
         for tx_hash, tx_item in list(self.transactions.items()):
-            children = tx_item.get('children', {})
-            for ch_tx_hash, ch_tx_item in list(children.items()):
-                ch_tx_mined_info = self.tx_mined_info_from_tx_item(ch_tx_item)
-                if ch_tx_mined_info.conf > 0:
-                    continue
-                self.update_tx_mined_status(ch_tx_hash, ch_tx_mined_info)
-
             tx_mined_info = self.tx_mined_info_from_tx_item(tx_item)
             if tx_mined_info.conf > 0:
                 # note: we could actually break here if we wanted
@@ -548,9 +712,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
     def __init__(self, parent, model: HistoryModel):
         super().__init__(parent, self.create_menu, stretch_column=HistoryColumns.DESCRIPTION)
         self.hm = model
-        self.proxy = HistorySortModel(self)
-        self.proxy.setSourceModel(model)
-        self.setModel(self.proxy)
+        self.setModel(model)
 
         self.config = parent.config
         AcceptFileDragDrop.__init__(self, ".txn")
@@ -564,7 +726,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         self.editable_columns |= {HistoryColumns.FIAT_VALUE}
 
         self.header().setStretchLastSection(False)
-        self.header().setMinimumSectionSize(16)
+        self.header().setMinimumSectionSize(32)
         for col in HistoryColumns:
             sm = QHeaderView.Stretch if col == self.stretch_column else QHeaderView.ResizeToContents
             self.header().setSectionResizeMode(col, sm)
@@ -644,7 +806,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             return datetime.datetime(date.year, date.month, date.day)
 
     def show_summary(self):
-        h = self.model().sourceModel().summary
+        h = self.hm.summary
         if not h:
             self.parent.show_message(_("Nothing to summarize."))
             return
@@ -689,13 +851,17 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
                 _("Perhaps some dependencies are missing...") + " (matplotlib?)")
             return
         try:
-            plt = plot_history(list(self.hm.transactions.values()))
+            res = []
+            for tx_item, children in self.hm.tx_tree[::-1]:
+                if children:
+                    res.extend(children[::-1])
+                res.append(tx_item)
+            plt = plot_history(res)
             plt.show()
         except NothingToPlotException as e:
             self.parent.show_message(str(e))
 
     def on_edited(self, index, user_role, text):
-        index = self.model().mapToSource(index)
         if not index.isValid():
             return
 
@@ -716,18 +882,17 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             assert False
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
-        org_idx = self.indexAt(event.pos())
-        idx = self.model().mapToSource(org_idx)
+        idx = self.indexAt(event.pos())
         if not idx.isValid():
             return
         tx_item = idx.internalPointer()
-        if org_idx.column() == HistoryColumns.TX_GROUP:
+        if idx.column() == HistoryColumns.TX_GROUP:
             event.ignore()
             return
-        children = tx_item.get('children')
+        is_parent = ('group_label' in tx_item)
         txid = tx_item['txid']
         if self.hm.flags(idx) & Qt.ItemIsEditable:
-            if children and not txid in self.hm.expanded_tx_groups:
+            if is_parent and not txid in self.hm.expanded_groups:
                 self.show_transaction(txid)
             else:
                 super().mouseDoubleClickEvent(event)
@@ -736,14 +901,13 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
-            org_idx = self.indexAt(event.pos())
-            idx = self.proxy.mapToSource(org_idx)
-            if idx.isValid() and org_idx.column() == HistoryColumns.TX_GROUP:
+            idx = self.indexAt(event.pos())
+            if idx.isValid() and idx.column() == HistoryColumns.TX_GROUP:
                 tx_item = idx.internalPointer()
                 txid = tx_item.get('txid')
-                is_parent = ('children' in tx_item)
+                is_parent = ('group_label' in tx_item)
                 if is_parent:
-                    if txid not in self.hm.expanded_tx_groups:
+                    if txid not in self.hm.expanded_groups:
                         self.expand_tx_group(txid)
                     else:
                         self.collapse_tx_group(txid)
@@ -764,8 +928,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         self.parent.show_transaction(tx, label)
 
     def create_menu(self, position: QPoint):
-        org_idx: QModelIndex = self.indexAt(position)
-        idx = self.proxy.mapToSource(org_idx)
+        idx: QModelIndex = self.indexAt(position)
         if not idx.isValid():
             # can happen e.g. before list is populated for the first time
             return
@@ -779,8 +942,8 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             column_data = self.hm.data(idx, Qt.DisplayRole).value()
         tx_hash = tx_item['txid']
         group_txid = tx_item.get('group_txid')
-        is_parent = ('children' in tx_item)
-        if is_parent and tx_hash in self.hm.expanded_tx_groups:
+        is_parent = ('group_label' in tx_item)
+        if is_parent and tx_hash in self.hm.expanded_groups:
             expanded = True
         else:
             expanded = False
@@ -816,7 +979,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             if self.isColumnHidden(c): continue
             label = self.hm.headerData(c, Qt.Horizontal, Qt.DisplayRole)
             # TODO use siblingAtColumn when min Qt version is >=5.11
-            persistent = QPersistentModelIndex(org_idx.sibling(org_idx.row(), c))
+            persistent = QPersistentModelIndex(idx.sibling(idx.row(), c))
             menu.addAction(_("Edit {}").format(label), lambda p=persistent: self.edit(QModelIndex(p)))
         details_m = lambda: self.show_transaction(tx_hash)
         menu.addAction(_("Details"), details_m)
@@ -827,22 +990,22 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         menu.exec_(self.viewport().mapToGlobal(position))
 
     def expand_tx_group(self, txid):
-        if txid not in self.hm.expanded_tx_groups:
-            row = self.hm.transactions.pos_from_key(txid)
-            idx = self.hm.index(row, HistoryColumns.TX_GROUP, QModelIndex())
-            idx_last = self.hm.index(row, HistoryColumns.TXID, QModelIndex())
-            self.hm.expanded_tx_groups.add(txid)
-            self.expand(self.model().mapFromSource(idx))
-            self.hm.dataChanged.emit(idx, idx_last)
+        if txid not in self.hm.expanded_groups:
+            idx = self.hm.index_from_txid(txid)
+            if idx.isValid():
+                idx_last = idx.siblingAtColumn(HistoryColumns.TXID)
+                self.hm.expanded_groups.add(txid)
+                self.expand(idx)
+                self.hm.dataChanged.emit(idx, idx_last)
 
     def collapse_tx_group(self, txid):
-        if txid in self.hm.expanded_tx_groups:
-            row = self.hm.transactions.pos_from_key(txid)
-            idx = self.hm.index(row, 0, QModelIndex())
-            idx_last = self.hm.index(row, HistoryColumns.TXID, QModelIndex())
-            self.hm.expanded_tx_groups.remove(txid)
-            self.collapse(self.model().mapFromSource(idx))
-            self.hm.dataChanged.emit(idx, idx_last)
+        if txid in self.hm.expanded_groups:
+            idx = self.hm.index_from_txid(txid)
+            if idx.isValid():
+                idx_last = idx.siblingAtColumn(HistoryColumns.TXID)
+                self.hm.expanded_groups.remove(txid)
+                self.collapse(idx)
+                self.hm.dataChanged.emit(idx, idx_last)
 
     def remove_local_tx(self, delete_tx):
         to_delete = {delete_tx}
@@ -932,23 +1095,22 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
                 f.write(json_encode(txns))
 
     def hide_rows(self):
-        for row, (txid, tx_item) in enumerate(self.hm.transactions.items()):
-            txid = tx_item['txid']
-            hm_idx = self.hm.index(row, 0, QModelIndex())
-            idx = self.model().mapFromSource(hm_idx)
-            children = tx_item.get('children', {})
-            left_children = len(children)
-            for ch_tx_hash, ch_tx_item in list(children.items()):
-                if self.hide_tx_item(ch_tx_item, idx):
-                    left_children -= 1
-            if left_children > 0:
-                self.hide_tx_item(tx_item, QModelIndex(), not_hide=True)
+        for i, (tx_item, children) in enumerate(self.hm.tx_tree):
+            if children:
+                left_children = len(children)
+                parent_idx = self.hm.createIndex(i, 0, tx_item)
+                for ch_tx_item in children:
+                    if self.hide_tx_item(ch_tx_item, parent_idx):
+                        left_children -= 1
+                not_hide = (left_children > 0)
+                self.hide_tx_item(tx_item, QModelIndex(), not_hide=not_hide)
             else:
                 self.hide_tx_item(tx_item, QModelIndex())
 
     def hide_tx_item(self, tx_item, parent_idx, not_hide=False):
-        hm_idx = self.hm.index_from_txid(tx_item['txid'])
-        idx = self.model().mapFromSource(hm_idx)
+        idx = self.hm.index_from_txid(tx_item['txid'])
+        if not idx.isValid():
+            return True
         if not_hide:
             self.setRowHidden(idx.row(), parent_idx, False)
             return False
@@ -958,7 +1120,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             self.setRowHidden(idx.row(), parent_idx, False)
             return False
         for column in self.filter_columns:
-            txt_idx = hm_idx.siblingAtColumn(column)
+            txt_idx = idx.siblingAtColumn(column)
             txt = self.hm.data(txt_idx, Qt.DisplayRole).value().lower()
             if self.current_filter in txt:
                 # the filter matched, but the date filter might apply
@@ -978,7 +1140,6 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             return False
 
     def text_txid_from_coordinate(self, row, col, idx):
-        idx = self.model().mapToSource(idx)
         if not idx.isValid():
             return None, None
         tx_item = idx.internalPointer()

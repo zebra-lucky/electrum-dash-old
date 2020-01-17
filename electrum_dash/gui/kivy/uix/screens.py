@@ -154,7 +154,7 @@ class HistoryScreen(CScreen):
         self.group_icn_all = atlas_path + 'kv_tx_group_all'
         self.expanded_groups = set()
         self.history = []
-        self.selected_node = None
+        self.selected_txid = ''
 
     def show_tx(self, data):
         tx_hash = data['tx_hash']
@@ -187,7 +187,7 @@ class HistoryScreen(CScreen):
 
     def on_deselect_node(self):
         self.hide_menu()
-        self.selected_node = None
+        self.selected_txid = ''
 
     def clear_selection(self):
         self.hide_menu()
@@ -195,8 +195,8 @@ class HistoryScreen(CScreen):
         container.layout_manager.clear_selection()
 
     def on_select_node(self, node, data):
-        self.selected_node = node
         menu_actions = []
+        self.selected_txid = data['tx_hash']
         group_txid = data['group_txid']
         if group_txid and group_txid not in self.expanded_groups:
             menu_actions.append(('Expand Tx Group', self.expand_tx_group))
@@ -242,35 +242,54 @@ class HistoryScreen(CScreen):
         txs = []
         group_txs = []
         expanded_groups = set()
+        selected_node = None
+        selected_txid = self.selected_txid
         for (txid, tx_type, tx_mined_status, value, balance,
              islock, group_txid, group_data)  in history:
-            if txid in self.expanded_groups and txid not in expanded_groups:
-                expanded_groups.add(txid)
+            label = None
             if group_txid is None and not group_data:
-                txs.append((txid, tx_type, tx_mined_status, value, balance,
-                            islock, None, group_txid, self.group_icn_empty))
+                txs.append((txid, tx_type, tx_mined_status,
+                            value, balance, islock, None,
+                            group_txid, self.group_icn_empty))
+                if selected_txid and selected_txid == txid:
+                    selected_node = len(txs) - 1
             elif group_txid:
                 if not group_txs:
-                    tx = (txid, tx_type, tx_mined_status, value, balance,
-                          islock, None, group_txid, self.group_icn_tail)
+                    tx = (txid, tx_type, tx_mined_status,
+                          value, balance, islock, None,
+                          group_txid, self.group_icn_tail)
                 else:
-                    tx = (txid, tx_type, tx_mined_status, value, balance,
-                          islock, None, group_txid, self.group_icn_mid)
+                    tx = (txid, tx_type, tx_mined_status,
+                          value, balance, islock, None,
+                          group_txid, self.group_icn_mid)
                 group_txs.append(tx)
             else:
+                value, balance, group_txids = group_data
+                for expanded_txid in self.expanded_groups:
+                    if expanded_txid in group_txids:
+                        expanded_groups.add(txid)
                 if txid in expanded_groups:
                     txs.extend(group_txs)
-                    txs.append((txid, tx_type, tx_mined_status, value, balance,
-                                islock, None, txid, self.group_icn_head))
+                    txs.append((txid, tx_type, tx_mined_status,
+                                value, balance, islock, None,
+                                txid, self.group_icn_head))
+                    if selected_txid and selected_txid in group_txids:
+                        idx = group_txids.index(selected_txid)
+                        selected_node = len(txs) - 1 - idx
                 else:
-                    value, balance, group_txids = group_data[0]
                     tx_type = PSTxTypes.PS_MIXING_TXS
                     label = _('Group of {} Txs').format(len(group_txids))
-                    txs.append((txid, tx_type, tx_mined_status, value, balance,
-                                islock, None, txid, self.group_icn_all))
+                    txs.append((txid, tx_type, tx_mined_status,
+                                value, balance, islock, label,
+                                txid, self.group_icn_all))
+                    if selected_txid and selected_txid in group_txids:
+                        selected_node = len(txs) - 1
+                        self.selected_txid = selected_txid = txid
                 group_txs = []
+        if selected_node is None:
+            self.selected_txid = ''
         self.expanded_groups = expanded_groups
-        return txs
+        return selected_node, txs
 
     def update(self, reload_history=True):
         if self.app.wallet is None:
@@ -280,22 +299,17 @@ class HistoryScreen(CScreen):
             group_ps = self.app.wallet.psman.group_history
             self.history = self.app.wallet.get_history(config=config,
                                                        group_ps=group_ps)
-        history = self.process_tx_groups(self.history)
+        selected_txid = self.selected_txid
+        self.clear_selection()
+        self.selected_txid = selected_txid
+        selected_node, history = self.process_tx_groups(self.history)
+        if selected_node is not None:
+            selected_node = len(history) - 1 - selected_node
         history = reversed(history)
         history_card = self.screen.ids.history_container
-        if self.selected_node is not None:
-            card = history_card.data[self.selected_node]
-            selected_txid = card['tx_hash']
         history_card.data = [self.get_card(*item) for item in history]
-        if self.selected_node is not None:
-            if self.selected_node <= len(history_card.data) - 1:
-                card = history_card.data[self.selected_node]
-                if card['tx_hash'] == selected_txid:
-                    self.on_select_node(self.selected_node, card)
-                else:
-                    selected_txid = None
-            if not selected_txid:
-                self.clear_selection()
+        if selected_node is not None:
+            history_card.layout_manager.select_node(selected_node)
 
 
 class SendScreen(CScreen):
@@ -304,7 +318,6 @@ class SendScreen(CScreen):
     payment_request = None
     payment_request_queued = None
     is_ps = False
-    spend_ps = False
 
     def set_URI(self, text):
         if not self.app.wallet:
@@ -331,7 +344,6 @@ class SendScreen(CScreen):
     def do_clear(self):
         self.screen.amount = ''
         self.is_ps = False
-        self.spend_ps = False
         self.screen.ps_txt = self.privatesend_txt()
         self.screen.message = ''
         self.screen.address = ''
@@ -412,14 +424,15 @@ class SendScreen(CScreen):
             outputs = [TxOutput(bitcoin.TYPE_ADDRESS, address, amount)]
         message = self.screen.message
         amount = sum(map(lambda x:x[2], outputs))
-        self._do_send(amount, message, outputs, self.spend_ps, self.is_ps)
+        self._do_send(amount, message, outputs, self.is_ps)
 
-    def _do_send(self, amount, message, outputs, spend_ps=False, is_ps=False):
+    def _do_send(self, amount, message, outputs, is_ps=False):
         # make unsigned transaction
         config = self.app.electrum_config
         wallet = self.app.wallet
         mix_rounds = None if not is_ps else wallet.psman.mix_rounds
-        coins = wallet.get_spendable_coins(None, config, include_ps=spend_ps,
+        include_ps = (min_rounds is None)
+        coins = wallet.get_spendable_coins(None, config, include_ps=include_ps,
                                            min_rounds=mix_rounds)
         try:
             tx = wallet.make_unsigned_transaction(coins, outputs, config, None,
@@ -476,14 +489,11 @@ class SendScreen(CScreen):
         from .dialogs.checkbox_dialog import CheckBoxDialog
         def ps_dialog_cb(key):
             self.is_ps = key
-            self.spend_ps = False
             self.screen.ps_txt = self.privatesend_txt()
         d = CheckBoxDialog(_('PrivateSend'),
                            _('Send coins as a PrivateSend transaction'),
                            self.is_ps, ps_dialog_cb)
         wallet = self.app.wallet
-        if not wallet or not wallet.psman.enabled:
-            d.ids.cb.disabled = True
         d.open()
 
 

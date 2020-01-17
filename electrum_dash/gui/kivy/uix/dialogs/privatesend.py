@@ -1,16 +1,146 @@
+import time
+
+from electrum_dash.dash_ps import filter_log_line, PSLogSubCat, PSStates
+
 from kivy.clock import Clock
-from kivy.factory import Factory
 from kivy.properties import (NumericProperty, StringProperty, BooleanProperty,
                              ObjectProperty)
 from kivy.lang import Builder
+from kivy.uix.behaviors import FocusBehavior
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.popup import Popup
+from kivy.uix.recycleview.layout import LayoutSelectionBehavior
+from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.recycleboxlayout import RecycleBoxLayout
+from kivy.uix.tabbedpanel import TabbedPanelHeader
 
 from electrum_dash.gui.kivy.i18n import _
-from electrum_dash.gui.kivy.uix.dialogs.dash_ps_info import PSInfoDialog
+from electrum_dash.gui.kivy.uix.dialogs.question import Question
 
 
 Builder.load_string('''
 #:import _ electrum_dash.gui.kivy.i18n._
 #:import SpinBox electrum_dash.gui.kivy.uix.spinbox.SpinBox
+
+
+<LineItem>
+    text: ''
+    lb: lb
+    size_hint: 1, None
+    height: lb.height
+    markup: True
+    canvas.before:
+        Color:
+            rgba: (0.192, .498, 0.745, 1) if self.selected  \
+                else (0.15, 0.15, 0.17, 1)
+        Rectangle:
+            size: self.size
+            pos: self.pos
+    Label:
+        id: lb
+        text: root.text
+        halign: 'left'
+        valign: 'top'
+        size_hint_y: None
+        text_size: self.width, None
+        height: self.texture_size[1]
+        padding: dp(5), dp(5)
+        font_size: '13sp'
+
+
+<RecycledLinesView@RecycleView>
+    btns: None
+    app: None
+    scroll_type: ['bars', 'content']
+    bar_width: '15dp'
+    viewclass: 'LineItem'
+    LinesRecycleBoxLayout:
+        btns: root.btns
+        orientation: 'vertical'
+        size_hint_y: None
+        padding: '5dp', '5dp'
+        spacing: '5dp'
+        height: self.minimum_height
+        default_size: None, None
+        default_size_hint: 1, None
+        multiselect: True
+        touch_multiselect: True
+
+
+<SelectionButtons@BoxLayout>
+    rv: None
+    clear_sel: clear_sel
+    copy_sel: copy_sel
+    copy_filtered: copy_filtered.__self__
+    orientation: 'horizontal'
+    size_hint: 1, None
+    height: self.minimum_height
+    Button:
+        id: sel_all
+        text: _('Select All')
+        size_hint: 1, None
+        height: '48dp'
+        on_release: root.rv.layout_manager.select_all()
+    Button:
+        id: clear_sel
+        text: _('Clear Selection')
+        size_hint: 1, None
+        height: '48dp'
+        disabled: True
+        on_release: root.rv.layout_manager.clear_selection()
+    Button:
+        id: copy_sel
+        text: _('Copy')
+        size_hint: 1, None
+        height: '48dp'
+        disabled: True
+        on_release: root.rv.layout_manager.copy_selected()
+    Button:
+        id: copy_filtered
+        text: _('Copy filtered')
+        size_hint: 1, None
+        height: '48dp'
+        disabled: True
+        on_release: root.rv.layout_manager.copy_filtered()
+
+
+<EXWarnPopup@Popup>
+    id: popup
+    cb: cb
+    title: _('Warning')
+    title_align: 'center'
+    size_hint: 0.8, 0.8
+    pos_hint: {'top':0.9}
+    BoxLayout:
+        padding: 10
+        spacing: 10
+        orientation: 'vertical'
+        Image:
+            source:'atlas://electrum_dash/gui/kivy/theming/light/error'
+            size_hint_y: 0.1
+        Label:
+            size_hint_y: 0.4
+            id: warn_msg
+            halign: 'left'
+            text_size: self.width, None
+            size: self.texture_size
+        BoxLayout:
+            orientation: 'horizontal'
+            size_hint_y: 0.3
+            Label:
+                size_hint_x: 0.7
+                text: _('Do not show this on PrivateSend popup open.')
+                text_size: self.width, None
+                size: self.texture_size
+            CheckBox:
+                id:cb
+                size_hint_x: 0.3
+        Button:
+            text: 'OK'
+            size_hint_y: 0.2
+            height: '48dp'
+            on_release:
+                popup.dismiss()
 
 
 <KeepAmountPopup@Popup>
@@ -107,7 +237,132 @@ Builder.load_string('''
             padding: dp(5), dp(5)
 
 
-<PrivateSendDialogNoPS@Popup>
+<PSMixingTab@BoxLayout>
+    orientation: 'vertical'
+    ScrollView:
+        GridLayout:
+            id: scrollviewlayout
+            cols:1
+            size_hint: 1, None
+            height: self.minimum_height
+            padding: '10dp'
+            CardSeparator
+            SettingsItem:
+                title: root.warn_electrumx_text
+                description: root.warn_electrumx_help
+                action: root.show_warn_electrumx
+            CardSeparator
+            SettingsItem:
+                title: root.keep_amount_text + ': %s Dash' % root.keep_amount
+                description: root.keep_amount_help
+                action: root.show_keep_amount_popup
+            CardSeparator
+            SettingsItem:
+                title: root.mix_rounds_text + ': %s' % root.mix_rounds
+                description: root.mix_rounds_help
+                action: root.show_mix_rounds_popup
+            CardSeparator
+            SettingsItem:
+                title: root.mixing_control_text
+                description: root.mixing_control_help
+                action: root.on_mixing_control
+            CardSeparator
+            SettingsProgress:
+                title: root.mix_prog_text
+                prog_val: root.mix_prog
+                action: root.show_mixing_progress_by_rounds
+            CardSeparator
+            SettingsItem:
+                title: root.ps_balance_text + ': ' + root.ps_balance
+                description: root.ps_balance_help
+                action: root.toggle_fiat_ps_balance
+            CardSeparator
+            SettingsItem:
+                title: root.dn_balance_text + ': ' + root.dn_balance
+                description: root.dn_balance_help
+                action: root.toggle_fiat_dn_balance
+            CardSeparator
+            SettingsItem:
+                title: _('PrivateSend Coins')
+                description: _('Show and use PrivateSend/Standard coins')
+                action: root.show_coins_dialog
+            CardSeparator
+            SettingsItem:
+                title: root.max_sessions_text + ': %s' % root.max_sessions
+                description: root.max_sessions_help
+                action: root.show_max_sessions_popup
+            CardSeparator
+            SettingsItem:
+                value: ': ON' if root.group_history else ': OFF'
+                title: root.group_history_text + self.value
+                description: root.group_history_help
+                action: root.toggle_group_history
+            CardSeparator
+            SettingsItem:
+                value: ': ON' if root.subscribe_spent else ': OFF'
+                title: root.subscribe_spent_text + self.value
+                description: root.subscribe_spent_help
+                action: root.toggle_sub_spent
+
+
+<PSInfoTab@BoxLayout>
+    orientation: 'vertical'
+    rv: rv
+    app: None
+    clear_ps_data_btn: clear_ps_data_btn
+    find_untracked_btn: find_untracked_btn
+    RecycledLinesView:
+        id: rv
+        app: root.app
+        btns: btns
+    SelectionButtons:
+        id: btns
+        rv: rv
+    BoxLayout:
+        orientation: 'horizontal'
+        size_hint: 1, None
+        padding: dp(0), dp(5)
+        height: self.minimum_height
+        Button:
+            id: clear_ps_data_btn
+            text: _('Clear PS data')
+            size_hint: 0.5, None
+            height: '48dp'
+            on_release: root.clear_ps_data()
+        Button:
+            id: find_untracked_btn
+            text: _('Find untracked PS txs')
+            size_hint: 0.5, None
+            height: '48dp'
+            on_release: root.find_untracked_ps_txs()
+
+
+<PSLogTab@BoxLayout>
+    orientation: 'vertical'
+    rv: rv
+    app: None
+    RecycledLinesView:
+        id: rv
+        app: root.app
+        btns: btns
+        scroll_y: 0
+        effect_cls: 'ScrollEffect'
+    SelectionButtons:
+        id: btns
+        rv: rv
+    BoxLayout:
+        orientation: 'horizontal'
+        size_hint: 1, None
+        padding: dp(0), dp(5)
+        height: self.minimum_height
+        Button:
+            text: _('Clear Log')
+            size_hint: 1, None
+            height: '48dp'
+            on_release: root.clear_log()
+
+
+<PSDialogUnsupportedPS@Popup>
     title: _('PrivateSend')
     data: data
     Label:
@@ -120,83 +375,108 @@ Builder.load_string('''
         padding: dp(5), dp(5)
 
 
-<PrivateSendDialog@Popup>
+
+<PSDialog@Popup>
     title: _('PrivateSend')
-    BoxLayout:
-        orientation: 'vertical'
-        ScrollView:
-            GridLayout:
-                id: scrollviewlayout
-                cols:1
-                size_hint: 1, None
-                height: self.minimum_height
-                padding: '10dp'
-                CardSeparator
-                SettingsItem:
-                    title: root.keep_amount_text + ': %s' % root.keep_amount
-                    description: root.keep_amount_help
-                    action: root.show_keep_amount_popup
-                CardSeparator
-                SettingsItem:
-                    title: root.mix_rounds_text + ': %s' % root.mix_rounds
-                    description: root.mix_rounds_help
-                    action: root.show_mix_rounds_popup
-                CardSeparator
-                SettingsItem:
-                    title: root.max_sessions_text + ': %s' % root.max_sessions
-                    description: root.max_sessions_help
-                    action: root.show_max_sessions_popup
-                CardSeparator
-                SettingsItem:
-                    title: root.is_mixing_run_text
-                    description: root.is_mixing_run_help
-                    action: root.toggle_is_mixing_run
-                CardSeparator
-                SettingsProgress:
-                    title: root.mix_prog_text
-                    prog_val: root.mix_prog
-                    action: root.show_mixing_progress_by_rounds
-                CardSeparator
-                SettingsItem:
-                    title: root.ps_balance_text + ': ' + root.ps_balance
-                    description: root.ps_balance_help
-                    action: root.toggle_fiat_ps_balance
-                CardSeparator
-                SettingsItem:
-                    title: root.dn_balance_text + ': ' + root.dn_balance
-                    description: root.dn_balance_help
-                    action: root.toggle_fiat_dn_balance
-                CardSeparator
-                SettingsItem:
-                    title: _('PrivateSend Coins')
-                    description: _('Show and use PrivateSend/Standard coins')
-                    action: root.show_coins_dialog
-                CardSeparator
-                SettingsItem:
-                    value: ': ON' if root.group_history else ': OFF'
-                    title: root.group_history_text + self.value
-                    description: root.group_history_help
-                    action: root.toggle_group_history
-                CardSeparator
-                SettingsItem:
-                    value: ': ON' if root.subscribe_spent else ': OFF'
-                    title: root.subscribe_spent_text + self.value
-                    description: root.subscribe_spent_help
-                    action: root.toggle_sub_spent
-                CardSeparator
-                SettingsItem:
-                    title: root.ps_debug_text
-                    description: root.ps_debug_help
-                    action: root.show_ps_info_popup
+    tabs: tabs
+    mixing_tab_header: mixing_tab_header
+    mixing_tab: mixing_tab_header.content
+    info_tab_header: info_tab_header
+    info_tab: info_tab_header.content
+    log_tab_header: log_tab_header
+    log_tab: log_tab_header.content
+    TabbedPanel:
+        id: tabs
+        do_default_tab: False
+        TabbedPanelHeader:
+            id: mixing_tab_header
+            text: _('Mixing')
+        TabbedPanelHeader:
+            id: info_tab_header
+            text: _('Info')
+        TabbedPanelHeader:
+            id: log_tab_header
+            text: _('Log')
 ''')
 
 
-class KeepAmountPopup(Factory.Popup):
+class LineItem(RecycleDataViewBehavior, BoxLayout):
+    index = None
+    selected = BooleanProperty(False)
+
+    def refresh_view_attrs(self, rv, index, data):
+        self.index = index
+        return super(LineItem, self).refresh_view_attrs(rv, index, data)
+
+    def on_touch_down(self, touch):
+        if super(LineItem, self).on_touch_down(touch):
+            return True
+        if self.collide_point(*touch.pos):
+            return self.parent.select_with_touch(self.index, touch)
+
+    def apply_selection(self, rv, index, is_selected):
+        self.selected = is_selected
+
+
+class LinesRecycleBoxLayout(FocusBehavior, LayoutSelectionBehavior,
+                            RecycleBoxLayout):
+    def __init__(self, *args, **kwargs):
+        super(LinesRecycleBoxLayout, self).__init__(*args, **kwargs)
+
+    def select_node(self, node):
+        super(LinesRecycleBoxLayout, self).select_node(node)
+        if self.selected_nodes:
+            self.btns.clear_sel.disabled = False
+            self.btns.copy_sel.disabled = False
+            if self.btns.copy_filtered:
+                self.btns.copy_filtered.disabled = False
+
+    def deselect_node(self, node):
+        super(LinesRecycleBoxLayout, self).deselect_node(node)
+        if not self.selected_nodes:
+            self.btns.clear_sel.disabled = True
+            self.btns.copy_sel.disabled = True
+            if self.btns.copy_filtered:
+                self.btns.copy_filtered.disabled = True
+
+    def select_all(self):
+        for i in range(len(self.recycleview.data)):
+            self.select_node(i)
+
+    def copy_selected(self):
+        res = []
+        for i in sorted(self.selected_nodes):
+            line = self.recycleview.data[i]['text']
+            res.append(line)
+        self.recycleview.app._clipboard.copy('\n'.join(res))
+
+    def copy_filtered(self):
+        res = []
+        for i in sorted(self.selected_nodes):
+            line = filter_log_line(self.recycleview.data[i]['text'])
+            res.append(line)
+        self.recycleview.app._clipboard.copy('\n'.join(res))
+
+
+class EXWarnPopup(Popup):
+
+    def __init__(self, psman):
+        super(EXWarnPopup, self).__init__()
+        self.psman = psman
+        self.ids.warn_msg.text = psman.warn_electrumx_data(full_txt=True)
+        self.ids.cb.active = not psman.show_warn_electrumx
+
+    def dismiss(self):
+        super(EXWarnPopup, self).dismiss()
+        self.psman.show_warn_electrumx = not self.ids.cb.active
+
+
+class KeepAmountPopup(Popup):
 
     spinbox = ObjectProperty(None)
 
     def __init__(self, psdlg):
-        Factory.Popup.__init__(self)
+        super(KeepAmountPopup, self).__init__()
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.keep_amount_text
@@ -213,12 +493,12 @@ class KeepAmountPopup(Factory.Popup):
             self.psdlg.keep_amount = value
 
 
-class MixRoundsPopup(Factory.Popup):
+class MixRoundsPopup(Popup):
 
     spinbox = ObjectProperty(None)
 
     def __init__(self, psdlg):
-        Factory.Popup.__init__(self)
+        super(MixRoundsPopup, self).__init__()
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.mix_rounds_text
@@ -236,12 +516,12 @@ class MixRoundsPopup(Factory.Popup):
             self.psdlg.update()
 
 
-class MaxSessionsPopup(Factory.Popup):
+class MaxSessionsPopup(Popup):
 
     spinbox = ObjectProperty(None)
 
     def __init__(self, psdlg):
-        Factory.Popup.__init__(self)
+        super(MaxSessionsPopup, self).__init__()
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.max_sessions_text
@@ -258,10 +538,10 @@ class MaxSessionsPopup(Factory.Popup):
             self.psdlg.max_sessions = value
 
 
-class MixingProgressPopup(Factory.Popup):
+class MixingProgressPopup(Popup):
 
     def __init__(self, psdlg):
-        Factory.Popup.__init__(self)
+        super(MixingProgressPopup, self).__init__()
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.mix_prog_text
@@ -273,20 +553,12 @@ class MixingProgressPopup(Factory.Popup):
         self.data.text = res
 
 
-class PrivateSendDialogNoPS(Factory.Popup):
-
-    def __init__(self, app):
-        Factory.Popup.__init__(self)
-        psman = app.wallet.psman
-        self.data.text = psman.disabled_msg
-
-
-class PrivateSendDialog(Factory.Popup):
+class PSMixingTab(BoxLayout):
 
     keep_amount = NumericProperty()
     mix_rounds = NumericProperty()
     max_sessions = NumericProperty()
-    is_mixing_run_text = StringProperty()
+    mixing_control_text = StringProperty()
     mix_prog = NumericProperty()
     dn_balance = StringProperty()
     ps_balance = StringProperty()
@@ -297,125 +569,101 @@ class PrivateSendDialog(Factory.Popup):
 
     def __init__(self, app):
         self.app = app
-        self.config = app.electrum_config
-
-        self.update()
-        Factory.Popup.__init__(self)
-        layout = self.ids.scrollviewlayout
-        layout.bind(minimum_height=layout.setter('height'))
-
-    def update(self):
-        app = self.app
         self.wallet = wallet = app.wallet
         self.psman = psman = wallet.psman
 
-        self.keep_amount = psman.keep_amount
+        self.warn_electrumx_text = psman.warn_electrumx_data()
+        self.warn_electrumx_help = psman.warn_electrumx_data(help_txt=True)
+
         self.keep_amount_text = psman.keep_amount_data(short_txt=True)
         self.keep_amount_help = psman.keep_amount_data(full_txt=True)
 
-        self.mix_rounds = psman.mix_rounds
         self.mix_rounds_text = psman.mix_rounds_data(short_txt=True)
         self.mix_rounds_help = psman.mix_rounds_data(full_txt=True)
 
-        self.max_sessions = psman.max_sessions
         self.max_sessions_text = psman.max_sessions_data(short_txt=True)
         self.max_sessions_help = psman.max_sessions_data(full_txt=True)
 
-        self.is_mixing_run_text = psman.is_mixing_run_data(short_txt=True)
-        self.is_mixing_run_help = psman.is_mixing_run_data(full_txt=True)
+        self.mixing_control_help = psman.mixing_control_data(full_txt=True)
 
-        self.mix_prog = psman.mixing_progress()
         self.mix_prog_text = psman.mixing_progress_data(short_txt=True)
         self.mix_prog_help = psman.mixing_progress_data(full_txt=True)
 
-        val = sum(wallet.get_balance(include_ps=False,
-                                     min_rounds=psman.mix_rounds))
-        self.ps_balance = app.format_amount_and_units(val)
         self.ps_balance_text = psman.ps_balance_data(short_txt=True)
         self.ps_balance_help = psman.ps_balance_data(full_txt=True)
 
-        val = sum(wallet.get_balance(include_ps=False,
-                                     min_rounds=0))
-        self.dn_balance = app.format_amount_and_units(val)
         self.dn_balance_text = psman.dn_balance_data(short_txt=True)
         self.dn_balance_help = psman.dn_balance_data(full_txt=True)
 
-        self.ps_debug_text = psman.ps_debug_data(short_txt=True)
-        self.ps_debug_help = psman.ps_debug_data(full_txt=True)
-
-        self.group_history = psman.group_history
         self.group_history_text = psman.group_history_data(short_txt=True)
         self.group_history_help = psman.group_history_data(full_txt=True)
 
-        self.subscribe_spent = psman.subscribe_spent
         self.subscribe_spent_text = psman.subscribe_spent_data(short_txt=True)
         self.subscribe_spent_help = psman.subscribe_spent_data(full_txt=True)
 
-    def open(self):
-        super(PrivateSendDialog, self).open()
+        super(PSMixingTab, self).__init__()
         self.update()
-        self.psman.register_callback(self.on_ps_callback,
-                                     ['ps-mixing-changes', 'ps-data-updated'])
 
-    def dismiss(self):
-        super(PrivateSendDialog, self).dismiss()
-        self.psman.unregister_callback(self.on_ps_callback)
+    def update(self):
+        app = self.app
+        wallet = self.wallet
+        psman = self.psman
+        self.keep_amount = psman.keep_amount
+        self.mix_rounds = psman.mix_rounds
+        self.max_sessions = psman.max_sessions
+        self.mixing_control_text = psman.mixing_control_data()
+        self.mix_prog = psman.mixing_progress()
+        r = psman.mix_rounds
+        val = sum(wallet.get_balance(include_ps=False, min_rounds=r))
+        self.ps_balance = app.format_amount_and_units(val)
+        val = sum(wallet.get_balance(include_ps=False, min_rounds=0))
+        self.dn_balance = app.format_amount_and_units(val)
+        self.group_history = psman.group_history
+        self.subscribe_spent = psman.subscribe_spent
 
-    def on_ps_callback(self, event, *args):
-        Clock.schedule_once(lambda dt: self.on_ps_event(event, *args))
-
-    def on_ps_event(self, event, *args):
-        if event == 'ps-mixing-changes':
-            wallet, msg = args
-            if wallet == self.wallet:
-                self.is_mixing_run_text = \
-                    self.psman.is_mixing_run_data(short_txt=True)
-        elif event == 'ps-data-updated':
-            wallet = args[0]
-            psman = wallet.psman
-            if wallet == self.wallet:
-                val = sum(wallet.get_balance(include_ps=False,
-                                             min_rounds=0))
-                self.dn_balance = self.app.format_amount_and_units(val)
-                val = sum(wallet.get_balance(include_ps=False,
-                                             min_rounds=psman.mix_rounds))
-                self.ps_balance = self.app.format_amount_and_units(val)
-                self.mix_prog = psman.mixing_progress()
+    def show_warn_electrumx(self, *args):
+        EXWarnPopup(self.psman).open()
 
     def show_keep_amount_popup(self, *args):
-        if self.psman.is_mixing_run:
+        psman = self.psman
+        if psman.state in psman.mixing_running_states:
             self.app.show_info(_('To change value stop mixing process'))
             return
         KeepAmountPopup(self).open(self.psman)
 
     def show_mix_rounds_popup(self, *args):
-        if self.psman.is_mixing_run:
+        psman = self.psman
+        if psman.state in psman.mixing_running_states:
             self.app.show_info(_('To change value stop mixing process'))
             return
         MixRoundsPopup(self).open(self.psman)
 
     def show_max_sessions_popup(self, *args):
-        if self.psman.is_mixing_run:
+        psman = self.psman
+        if psman.state in psman.mixing_running_states:
             self.app.show_info(_('To change value stop mixing process'))
             return
         MaxSessionsPopup(self).open(self.psman)
 
-    def toggle_is_mixing_run(self, *args):
+    def on_mixing_control(self, *args):
         psman = self.psman
-        if psman.is_mixing_changes:
-            return
-        is_mixing_run = not psman.is_mixing_run
-        if is_mixing_run:
-            self.app.protected(_('Enter your PIN code to start mixing'),
-                               self._start_mixing, ())
-        else:
+        if psman.state == PSStates.Ready:
+            if psman.check_need_new_keypairs():
+                self.app.protected(_('Enter your PIN code to start mixing'),
+                                   self._start_mixing, ())
+            else:
+                self._start_mixing(None)
+        elif psman.state == PSStates.Mixing:
             psman.stop_mixing()
+        elif psman.state == PSStates.Disabled:
+            psman.enable_ps()
 
     def _start_mixing(self, password):
-        psman = self.psman
-        psman.start_mixing(password)
+        self.psman.start_mixing(password)
 
     def toggle_fiat_dn_balance(self, *args):
+        if not self.app.fx.is_enabled():
+            return
         self.is_fiat_dn_balance = not self.is_fiat_dn_balance
         val = sum(self.wallet.get_balance(include_ps=False, min_rounds=0))
         app = self.app
@@ -427,6 +675,8 @@ class PrivateSendDialog(Factory.Popup):
             self.dn_balance = app.format_amount_and_units(val)
 
     def toggle_fiat_ps_balance(self, *args):
+        if not self.app.fx.is_enabled():
+            return
         self.is_fiat_ps_balance = not self.is_fiat_ps_balance
         val = sum(self.wallet.get_balance(include_ps=False,
                                           min_rounds=self.psman.mix_rounds))
@@ -457,3 +707,166 @@ class PrivateSendDialog(Factory.Popup):
 
     def show_coins_dialog(self, *args):
         self.app.coins_dialog()
+
+
+class PSInfoTab(BoxLayout):
+
+    def __init__(self, app):
+        super(PSInfoTab, self).__init__()
+        self.app = app
+        self.wallet = wallet = app.wallet
+        self.psman = psman = wallet.psman
+        self.update()
+        self.data_buttons_update()
+        self.rv.btns.remove_widget(self.rv.btns.copy_filtered)
+
+    def update(self):
+        lines = self.psman.get_ps_data_info()
+        self.rv.data = [{'text': line} for line in lines]
+
+    def data_buttons_update(self):
+        psman = self.psman
+        if psman.state in [PSStates.Ready, PSStates.Errored]:
+            self.clear_ps_data_btn.disabled = False
+        else:
+            self.clear_ps_data_btn.disabled = True
+        if psman.state == PSStates.Ready:
+            self.find_untracked_btn.disabled = False
+        else:
+            self.find_untracked_btn.disabled = True
+
+    def clear_ps_data(self):
+        psman = self.psman
+        def _clear_ps_data(b: bool):
+            if b:
+                psman.clear_ps_data()
+        d = Question(psman.CLEAR_PS_DATA_MSG, _clear_ps_data)
+        d.open()
+
+    def find_untracked_ps_txs(self):
+        psman = self.psman
+        Clock.schedule_once(lambda dt: psman.find_untracked_ps_txs_from_gui())
+
+
+class PSLogTab(BoxLayout):
+
+    def __init__(self, app):
+        super(PSLogTab, self).__init__()
+        self.app = app
+        self.wallet = wallet = app.wallet
+        self.psman = psman = wallet.psman
+        self.log_handler = psman.log_handler
+        self.log_head = self.log_handler.head
+        self.log_tail = self.log_head
+
+    def append_log_tail(self):
+        log_handler = self.log_handler
+        log_tail = log_handler.tail
+        for i in range(self.log_tail, log_tail):
+            log_line = ''
+            log_record = log_handler.log.get(i, None)
+            if log_record:
+                created = time.localtime(log_record.created)
+                created = time.strftime('%x %X', created)
+                log_line = f'{created} {log_record.msg}'
+                if log_record.subcat == PSLogSubCat.WflDone:
+                    log_line = f'[color=1c75bc]{log_line}[/color]'
+                elif log_record.subcat == PSLogSubCat.WflOk:
+                    log_line = f'[color=32b332]{log_line}[/color]'
+                elif log_record.subcat == PSLogSubCat.WflErr:
+                    log_line = f'[color=bc1e1e]{log_line}[/color]'
+            self.rv.data.append({'text': log_line})
+        self.log_tail = log_tail
+
+    def clear_log_head(self):
+        log_head = self.log_handler.head
+        difference = log_head - self.log_head
+        self.rv.data = self.rv.data[difference:]
+        self.log_head = log_head
+
+    def clear_log(self):
+        def _clear_log():
+            self.rv.data = []
+            self.log_handler.clear_log()
+        Clock.schedule_once(lambda dt: _clear_log())
+
+
+class PSDialogUnsupportedPS(Popup):
+
+    def __init__(self, app):
+        super(PSDialogUnsupportedPS, self).__init__()
+        psman = app.wallet.psman
+        self.data.text = psman.unsupported_msg
+
+
+class PSDialog(Popup):
+    def __init__(self, app):
+        super(PSDialog, self).__init__()
+        self.app = app
+        self.wallet = app.wallet
+        self.psman = app.wallet.psman
+        self.mixing_tab_header.content = PSMixingTab(self.app)
+        self.info_tab_header.content = PSInfoTab(self.app)
+        self.log_tab_header.content = PSLogTab(self.app)
+        self.tabs.switch_to(self.mixing_tab_header)
+        self.tabs.bind(current_tab=self.on_tabs_changed)
+
+    def open(self):
+        super(PSDialog, self).open()
+        self.psman.register_callback(self.on_ps_callback,
+                                     ['ps-log-changes',
+                                      'ps-wfl-changes',
+                                      'ps-data-changes',
+                                      'ps-state-changes'])
+        if self.psman.show_warn_electrumx:
+            mixing_tab = self.mixing_tab
+            Clock.schedule_once(lambda dt: mixing_tab.show_warn_electrumx())
+
+    def dismiss(self):
+        super(PSDialog, self).dismiss()
+        self.log_tab.log_handler.notify = False
+        self.psman.unregister_callback(self.on_ps_callback)
+
+    def on_ps_callback(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_ps_event(event, *args))
+
+    def on_ps_event(self, event, *args):
+        if event == 'ps-log-changes':
+            psman = args[0]
+            if psman == self.psman:
+                log_tab = self.log_tab
+                if log_tab.log_handler.head > log_tab.log_head:
+                    log_tab.clear_log_head()
+                if log_tab.log_handler.tail > log_tab.log_tail:
+                    log_tab.append_log_tail()
+        elif event == 'ps-wfl-changes':
+            wallet = args[0]
+            if wallet == self.wallet:
+                self.info_tab.update()
+        elif event == 'ps-data-changes':
+            wallet = args[0]
+            psman = wallet.psman
+            if wallet == self.wallet:
+                val = sum(wallet.get_balance(include_ps=False,
+                                             min_rounds=0))
+                dn_balance = self.app.format_amount_and_units(val)
+                self.mixing_tab.dn_balance = dn_balance
+                val = sum(wallet.get_balance(include_ps=False,
+                                             min_rounds=psman.mix_rounds))
+                ps_balance = self.app.format_amount_and_units(val)
+                self.ps_balance = ps_balance
+                self.mix_prog = psman.mixing_progress()
+                self.info_tab.update()
+        elif event == 'ps-state-changes':
+            wallet, msg, msg_type = args
+            if wallet == self.wallet:
+                self.mixing_tab.mixing_control_text = \
+                    self.psman.mixing_control_data()
+                self.info_tab.data_buttons_update()
+
+    def on_tabs_changed(self, tabs, current_tab):
+        if current_tab == self.log_tab_header:
+            self.log_tab.append_log_tail()
+            self.log_tab.log_handler.notify = True
+        else:
+            self.log_tab.log_handler.notify = False

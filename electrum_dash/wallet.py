@@ -243,9 +243,12 @@ class Abstract_Wallet(AddressSynchronizer):
         if b: self.storage.write()
 
     def clear_history(self):
-        if self.psman.is_mixing_run:
-            print(_('To clear history stop PrivateSend mixing'))
-            return
+        if self.psman.enabled:
+            with self.psman.state_lock:
+                if self.psman.state in self.psman.no_clean_history_states:
+                    print(f'Can not clear history when PrivateSend'
+                          f' manager is in {self.psman.state} state')
+                    return
         super().clear_history()
         self.storage.write()
 
@@ -510,7 +513,11 @@ class Abstract_Wallet(AddressSynchronizer):
         fiat_expenditures = Decimal(0)
         h = self.get_history(domain, config=config, group_ps=group_ps)
         now = time.time()
-        show_dip2 = config.get('show_dip2_tx_type', True) if config else True
+        if config:
+            def_dip2 = not self.psman.unsupported
+            show_dip2 = config.get('show_dip2_tx_type', def_dip2)
+        else:
+            show_dip2 = True  # for testing
         for (tx_hash, tx_type, tx_mined_status, value, balance,
              islock, group_txid, group_data) in h:
             timestamp = tx_mined_status.timestamp
@@ -528,7 +535,7 @@ class Abstract_Wallet(AddressSynchronizer):
             tx = self.db.get_transaction(tx_hash)
             tx_label = self.get_label(tx_hash)
             if group_data:
-                group_delta, group_balance, group_txids = group_data[0]
+                group_delta, group_balance, group_txids = group_data
                 group_delta_sat = Satoshis(group_delta)
                 group_balance_sat = Satoshis(group_balance)
                 group_data = (group_delta_sat, group_balance_sat, group_txids)
@@ -1238,6 +1245,10 @@ class Abstract_Wallet(AddressSynchronizer):
             enc_version = self.get_available_storage_encryption_version()
         else:
             enc_version = STO_EV_PLAINTEXT
+
+        if self.psman.enabled and old_pw is None and new_pw:
+            self.psman.on_wallet_password_set()
+
         self.storage.set_password(new_pw, enc_version)
 
         # note: Encrypting storage with a hw device is currently only

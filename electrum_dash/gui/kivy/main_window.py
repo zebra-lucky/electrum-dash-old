@@ -326,7 +326,6 @@ class ElectrumWindow(App):
         # cached dialogs
         self._settings_dialog = None
         self._dash_net_dialog = None
-        self._privatesend_dialog = None
         self._password_dialog = None
         self.fee_status = self.electrum_config.get_fee_status()
 
@@ -684,13 +683,11 @@ class ElectrumWindow(App):
         self._dash_net_dialog.open()
 
     def privatesend_dialog(self):
-        if self.wallet.psman.enabled:
-            from .uix.dialogs.privatesend import PrivateSendDialog as psdlg
+        if self.wallet.psman.unsupported:
+            from .uix.dialogs.privatesend import PSDialogUnsupportedPS as psdlg
         else:
-            from .uix.dialogs.privatesend import PrivateSendDialogNoPS as psdlg
-        if self._privatesend_dialog is None:
-            self._privatesend_dialog = psdlg(self)
-        self._privatesend_dialog.open()
+            from .uix.dialogs.privatesend import PSDialog as psdlg
+        psdlg(self).open()
 
     def popup_dialog(self, name):
         if name == 'settings':
@@ -752,9 +749,7 @@ class ElectrumWindow(App):
             self.icon = 'electrum_dash/gui/icons/electrum-dash-testnet.png'
         else:
             self.icon = 'electrum_dash/gui/icons/electrum-dash.png'
-        self.ps_icon = 'electrum_dash/gui/icons/privatesend.png'
-        self.ps_icon_active = 'electrum_dash/gui/icons/privatesend_active.png'
-        self.root.ids.ps_button.icon = self.ps_icon
+        self.root.ids.ps_button.icon = self.ps_icon()
         self.tabs = self.root.ids['tabs']
 
     def update_interfaces(self, dt):
@@ -798,24 +793,31 @@ class ElectrumWindow(App):
         Clock.schedule_once(lambda dt: self.on_ps_event(event, *args))
 
     def on_ps_event(self, event, *args):
-        if event == 'ps-mixing-changes':
-            wallet, msg = args
-            if wallet == self.wallet:
-                self.update_ps_btn()
-                if msg:
-                    WarnDialog(msg, title=_('PrivateSend')).open()
-        elif event == 'ps-data-updated':
+        if event == 'ps-data-changes':
             wallet = args[0]
             if wallet == self.wallet:
                 self._trigger_update_wallet()
+        elif event == 'ps-state-changes':
+            wallet, msg, msg_type = args
+            if wallet == self.wallet:
+                self.update_ps_btn()
+                if msg:
+                    if msg_type and msg_type.startswith('inf'):
+                        self.show_info(msg)
+                    else:
+                        WarnDialog(msg, title=_('PrivateSend')).open()
 
     def update_ps_btn(self):
         ps_button = self.root.ids.ps_button
+        is_mixing = False
         wallet = self.wallet
-        if wallet and wallet.psman.is_mixing_run:
-            ps_button.icon = self.ps_icon_active
+        if wallet:
+            psman = wallet.psman
+            is_mixing = (psman.state == psman.states.Mixing)
+        if is_mixing:
+            ps_button.icon = self.ps_icon(active=True)
         else:
-            ps_button.icon = self.ps_icon
+            ps_button.icon = self.ps_icon()
 
     @profiler
     def load_wallet(self, wallet):
@@ -824,8 +826,8 @@ class ElectrumWindow(App):
         self.wallet = wallet
         self.wallet.psman.config = self.electrum_config
         self.wallet.psman.register_callback(self.on_ps_callback,
-                                            ['ps-mixing-changes',
-                                             'ps-data-updated'])
+                                            ['ps-data-changes',
+                                             'ps-state-changes'])
         self.wallet_name = wallet.basename()
         self.update_wallet()
         # Once GUI has been initialized check if we want to announce something
@@ -874,11 +876,12 @@ class ElectrumWindow(App):
         if not self.wallet.up_to_date:
             self._trigger_update_status()
 
-    def get_max_amount(self, include_ps=False, is_ps=False):
+    def get_max_amount(self, is_ps=False):
         from electrum_dash.transaction import TxOutput
         if run_hook('abort_send', self):
             return ''
         min_rounds = None if not is_ps else self.wallet.psman.mix_rounds
+        include_ps = (min_rounds is None)
         inputs = self.wallet.get_spendable_coins(None, self.electrum_config,
                                                  include_ps=include_ps,
                                                  min_rounds=min_rounds)
@@ -939,6 +942,9 @@ class ElectrumWindow(App):
     @property
     def app_icon(self):
         return ATLAS_ICON % ('logo-testnet' if self.testnet else 'logo')
+
+    def ps_icon(self, active=False):
+        return ATLAS_ICON % ('privatesend_active' if active else 'privatesend')
 
     def on_pause(self):
         self.pause_time = time.time()
@@ -1105,16 +1111,12 @@ class ElectrumWindow(App):
             amount, u = str(amount).split()
             assert u == self.base_unit
         is_ps = getattr(screen.parent, 'is_ps', None)
-        spend_ps = getattr(screen.parent, 'spend_ps', None)
-        def amount_cb(amount, spend_ps):
+        def amount_cb(amount):
             screen.amount = amount
-            if spend_ps is not None:
-                screen.parent.spend_ps = spend_ps
-        if spend_ps is None:
+        if is_ps is None:
             popup = AmountDialog(show_max, amount, cb=amount_cb)
         else:
-            popup = AmountDialog(show_max, amount, is_ps=is_ps,
-                                 spend_ps=spend_ps, cb=amount_cb)
+            popup = AmountDialog(show_max, amount, is_ps=is_ps, cb=amount_cb)
         popup.open()
 
     def invoices_dialog(self, screen):

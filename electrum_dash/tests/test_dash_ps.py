@@ -16,8 +16,10 @@ from electrum_dash.dash_ps import (COLLATERAL_VAL, PSPossibleDoubleSpendError,
                                    CREATE_COLLATERAL_VAL, to_duffs, PSTxData,
                                    PSTxWorkflow, PSDenominateWorkflow,
                                    PSMinRoundsCheckFailed, PS_DENOMS_VALS,
-                                   DUMMY_TXID, filter_log_line)
+                                   FILTERED_TXID, filter_log_line,
+                                   KP_ALL_TYPES, PSStates)
 from electrum_dash.dash_tx import PSTxTypes, PSCoinRounds, SPEC_TX_NAMES
+from electrum_dash.keystore import xpubkey_to_address
 from electrum_dash.simple_config import SimpleConfig
 from electrum_dash.storage import WalletStorage
 from electrum_dash.transaction import TxOutput, Transaction
@@ -78,6 +80,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         self.config.set_key('dynamic_fees', False, True)
         self.storage = WalletStorage(self.wallet_path)
         self.wallet = Wallet(self.storage)
+        psman = self.wallet.psman
+        psman.state = PSStates.Ready
+        psman.loop = asyncio.get_event_loop()
 
     def tearDown(self):
         super(PSWalletTestCase, self).tearDown()
@@ -201,13 +206,14 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert workflow.rounds == 0
         assert workflow.inputs == []
         assert workflow.outputs == []
-        assert not workflow.completed
+        assert workflow.completed == 0
 
+        tc = time.time()
         workflow.denom = 1
         workflow.rounds = 1
         workflow.inputs = ['12345:0', '12345:5', '12345:7']
         workflow.outputs = ['addr1', 'addr2', 'addr3']
-        workflow.completed = True
+        workflow.completed = tc
 
         # test _as_dict
         d = workflow._as_dict()
@@ -245,7 +251,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         c_outpoint, ps_collateral = w.db.get_ps_collateral()
         assert c_outpoint is None
 
-        found_txs = psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         assert found_txs == 86
         assert len(ps_txs) == 86
         assert len(ps_denoms) == 131
@@ -256,7 +263,8 @@ class PSWalletTestCase(TestCaseForTestnet):
                               '057673ebae64d05864827b5dd808fb23:0')
         assert ps_collateral == ('yiozDzgTrjyXqie28y7z2YEmjaYUZ7gveQ', 20000)
 
-        found_txs = psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         assert found_txs == 0
         assert len(ps_txs) == 86
         assert len(ps_denoms) == 131
@@ -269,7 +277,8 @@ class PSWalletTestCase(TestCaseForTestnet):
 
     def test_ps_history_show_all(self):
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         # check with show_dip2_tx_type on
         self.config.set_key('show_dip2_tx_type', True, True)
         h = self.wallet.get_full_history(config=self.config)
@@ -309,7 +318,8 @@ class PSWalletTestCase(TestCaseForTestnet):
 
     def test_ps_history_show_grouped(self):
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
 
         # check with show_dip2_tx_type off
         self.config.set_key('show_dip2_tx_type', False, True)
@@ -403,7 +413,8 @@ class PSWalletTestCase(TestCaseForTestnet):
 
     def test_ps_get_utxos_all(self):
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         ps_denoms = self.wallet.db.get_ps_denoms()
         for utxo in self.wallet.get_utxos():
             prev_h = utxo['prevout_hash']
@@ -427,7 +438,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert wallet.get_balance(include_ps=False, min_rounds=1) == (0, 0, 0)
         assert wallet.get_balance(include_ps=False, min_rounds=0) == (0, 0, 0)
 
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         assert wallet.get_balance() == (1484831773, 0, 0)
         assert wallet.get_balance(include_ps=False) == (984806773, 0, 0)
         assert wallet.get_balance(include_ps=False, min_rounds=5) == (0, 0, 0)
@@ -444,7 +456,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         C_RNDS = PSCoinRounds.COLLATERAL
         assert self.wallet.db.get_ps_addresses() == set()
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         assert len(self.wallet.db.get_ps_addresses()) == 317
         assert len(self.wallet.db.get_ps_addresses(min_rounds=C_RNDS)) == 317
         assert len(self.wallet.db.get_ps_addresses(min_rounds=0)) == 131
@@ -455,7 +468,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_get_spendable_coins(self):
         C_RNDS = PSCoinRounds.COLLATERAL
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         conf = self.config
         coins = self.wallet.get_spendable_coins(None, conf)
         assert len(coins) == 6
@@ -524,7 +538,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_get_utxos(self):
         C_RNDS = PSCoinRounds.COLLATERAL
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         coins = self.wallet.get_utxos()
         assert len(coins) == 6
         for c in coins:
@@ -604,7 +619,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.keep_amount = 5
         assert psman.keep_amount == 5
 
-        psman._is_mixing_run = True
+        psman.state = PSStates.Mixing
         psman.keep_amount = 10
         assert psman.keep_amount == 5
 
@@ -621,14 +636,15 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 3
         assert psman.mix_rounds == 3
 
-        psman._is_mixing_run = True
+        psman.state = PSStates.Mixing
         psman.mix_rounds = 4
         assert psman.mix_rounds == 3
 
     def test_check_min_rounds(self):
         C_RNDS = PSCoinRounds.COLLATERAL
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         coins = self.wallet.get_utxos()
         with self.assertRaises(PSMinRoundsCheckFailed):
             psman.check_min_rounds(coins, 0)
@@ -654,7 +670,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = self.wallet.psman
         psman.mix_rounds = 2
         assert psman.mixing_progress() == 0
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         assert psman.mixing_progress() == 77
         psman.mix_rounds = 3
         assert psman.mixing_progress() == 51
@@ -666,7 +683,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_get_addresses(self):
         C_RNDS = PSCoinRounds.COLLATERAL
         psman = self.wallet.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         res0 = psman.get_addresses(include_ps=False, min_rounds=None)
         res1 = psman.get_addresses(include_ps=True, min_rounds=None)
         res2 = psman.get_addresses(include_ps=False, min_rounds=C_RNDS)
@@ -751,7 +769,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_get_change_addresses_for_new_transaction(self):
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         unused1 = w.calc_unused_change_addresses()
         assert len(unused1) == 13
         for addr in unused1:
@@ -766,7 +785,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_synchronize_sequence(self):
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         unused1 = w.get_unused_addresses()
         assert len(unused1) == 20
 
@@ -788,7 +808,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_synchronize_sequence_for_change(self):
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         unused1 = w.calc_unused_change_addresses()
         assert len(unused1) == 13
 
@@ -811,7 +832,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         get_addrs = psman.get_addresses
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
 
         assert len(get_addrs(for_change=False)) == 21
         assert len(get_addrs(include_ps=True, for_change=False)) == 333
@@ -971,7 +993,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.pop_ps_denom(outpoint4)
 
         psman.mix_rounds = 2
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         denoms = psman._denoms_to_mix_cache
         assert len(denoms) == 54
         for outpoint, denom in denoms.items():
@@ -1031,7 +1054,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.pop_ps_denom(outpoint4)
 
         psman.mix_rounds = 2
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         denoms = psman.denoms_to_mix()
         assert len(denoms) == 54
         for outpoint, denom in denoms.items():
@@ -1111,8 +1135,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert set(psman.denominate_wfl_list) == set([uuid1, uuid2])
 
         dwfl_ps_data = self.wallet.db.get_ps_data('denominate_workflows')
-        assert dwfl_ps_data[uuid1] == (4, 1, [outpoint1], [addr1], False)
-        assert dwfl_ps_data[uuid2] == (0, 0, [], [], False)
+        assert dwfl_ps_data[uuid1] == (4, 1, [outpoint1], [addr1], 0)
+        assert dwfl_ps_data[uuid2] == (0, 0, [], [], 0)
 
         wfl1_get = psman.get_denominate_wfl(uuid1)
         assert wfl1_get == wfl1
@@ -1126,7 +1150,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         wfl2_get = psman.get_denominate_wfl(uuid2)
         assert wfl2_get == wfl2
         dwfl_ps_data = self.wallet.db.get_ps_data('denominate_workflows')
-        assert dwfl_ps_data[uuid2] == (0, 0, [], [], False)
+        assert dwfl_ps_data[uuid2] == (0, 0, [], [], 0)
         assert uuid1 not in dwfl_ps_data
 
         psman.clear_denominate_wfl(uuid2)
@@ -1184,14 +1208,14 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_prepare_pay_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.loop = asyncio.get_event_loop()
 
         # check not created if no ps_collateral exists
         coro = psman.prepare_pay_collateral_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         assert not psman.pay_collateral_wfl
 
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         # check not created if pay_collateral_wfl is not empty
         wfl = PSTxWorkflow(uuid='uuid')
         psman.set_pay_collateral_wfl(wfl)
@@ -1233,7 +1257,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         in0_prev_n = in0['prevout_n']
         assert f'{in0_prev_h}:{in0_prev_n}' == c_outpoint
         assert txouts[0].value == COLLATERAL_VAL
-        reserved = w.db.select_ps_reserved(for_change=True, data=wfl.uuid)
+        reserved = w.db.select_ps_reserved(for_change=True, data=c_outpoint)
         assert len(reserved) == 1
         assert txouts[0].address in reserved
         assert tx.locktime == 0
@@ -1242,7 +1266,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_cleanup_pay_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.loop = asyncio.get_event_loop()
 
         # check if pay_collateral_wfl is empty
         assert not psman.pay_collateral_wfl
@@ -1251,7 +1274,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert not psman.pay_collateral_wfl
 
         # check no cleanup if completed and tx_order is not empty
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         coro = psman.prepare_pay_collateral_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         coro = psman.cleanup_pay_collateral_wfl()
@@ -1260,7 +1284,9 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         # check cleanup if not completed and tx_order is not empty
         wfl = psman.pay_collateral_wfl
-        reserved = w.db.select_ps_reserved(for_change=True, data=wfl.uuid)
+        for outpoint, ps_collateral in w.db.get_ps_collaterals().items():
+            pass
+        reserved = w.db.select_ps_reserved(for_change=True, data=outpoint)
         assert len(reserved) == 1
 
         wfl.completed = False
@@ -1270,8 +1296,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert w.db.get_ps_spending_collaterals() == {}
 
         assert not psman.pay_collateral_wfl
-        reserved = w.db.select_ps_reserved(for_change=True, data=wfl.uuid)
-        assert len(reserved) == 0
+        reserved = w.db.select_ps_reserved(for_change=True, data=outpoint)
+        assert len(reserved) == 1
         reserved = w.db.select_ps_reserved(for_change=True)
         assert len(reserved) == 0
         assert not psman.pay_collateral_wfl
@@ -1289,8 +1315,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_process_by_pay_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.loop = asyncio.get_event_loop()
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         old_c_outpoint, old_collateral = w.db.get_ps_collateral()
         coro = psman.prepare_pay_collateral_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
@@ -1320,9 +1346,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
 
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
         # check not created if ps_collateral is not empty
         coro = psman.create_new_collateral_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
@@ -1388,8 +1415,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
         c_outpoint, ps_collateral = w.db.get_ps_collateral()
         w.db.pop_ps_collateral(c_outpoint)
 
@@ -1449,8 +1477,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
         c_outpoint, ps_collateral = w.db.get_ps_collateral()
         w.db.pop_ps_collateral(c_outpoint)
         coro = psman.create_new_collateral_wfl()
@@ -1505,9 +1534,10 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_process_by_new_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.loop = asyncio.get_event_loop()
         psman.config = self.config
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
         c_outpoint, ps_collateral = w.db.get_ps_collateral()
         w.db.pop_ps_collateral(c_outpoint)
         coro = psman.create_new_collateral_wfl()
@@ -1544,7 +1574,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert res == all_test_amounts
         res = psman.calc_need_denoms_amounts(use_cache=True)
         assert res == all_test_amounts
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         res = psman.calc_need_denoms_amounts()
         assert res == []
         res = psman.calc_need_denoms_amounts(use_cache=True)
@@ -1639,7 +1670,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
+        psman.state = PSStates.Mixing
 
         # check not created if new_denoms_wfl is not empty
         wfl = PSTxWorkflow(uuid='uuid')
@@ -1658,11 +1689,15 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         # check not created as not enough funds
         prev_keep_amount = psman.keep_amount
+        psman.state = PSStates.Ready
         psman.keep_amount = 200
+        psman.state = PSStates.Mixing
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         assert not psman.new_denoms_wfl
         psman.keep_amount = prev_keep_amount
+        psman.clear_ps_data()  # found after mixing stopped
+        psman.state = PSStates.Mixing
 
         # check created successfully
         coro = psman.create_new_denoms_wfl()
@@ -1719,7 +1754,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         coro = psman.cleanup_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         w.db.pop_ps_collateral(outpoint0)
-        psman.find_untracked_ps_txs(log=False)
+        psman.state = PSStates.Ready
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         assert not psman.new_denoms_wfl
@@ -1728,7 +1766,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
+        psman.state = PSStates.Mixing
 
         # check if new_denoms_wfl is empty
         assert not psman.new_denoms_wfl
@@ -1797,8 +1835,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_broadcast_new_denoms_wfl(self):
         w = self.wallet
         psman = w.psman
+        psman.state = PSStates.Mixing
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_denoms_wfl
@@ -1877,8 +1915,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_process_by_new_denoms_wfl(self):
         w = self.wallet
         psman = w.psman
+        psman.state = PSStates.Mixing
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_denoms_wfl
@@ -1978,7 +2016,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_make_unsigned_transaction(self):
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         config = self.config
         addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
@@ -2012,7 +2051,8 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_make_unsigned_transaction_include_ps(self):
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         config = self.config
         addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
@@ -2059,7 +2099,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         C_RNDS = PSCoinRounds.COLLATERAL
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         config = self.config
         addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
@@ -2142,22 +2183,22 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = self.wallet.psman
         assert psman.double_spend_warn == ''
 
-        psman._is_mixing_run = True
+        psman.state = PSStates.Mixing
         assert psman.double_spend_warn != ''
-        psman._is_mixing_run = False
+        psman.state = PSStates.Ready
 
-        psman._mix_stop_time = time.time()
+        psman.last_mix_stop_time = time.time()
         assert psman.double_spend_warn != ''
 
-        psman._mix_stop_time = time.time() - 60
+        psman.last_mix_stop_time = time.time() - psman.wait_for_mn_txs_time
         assert psman.double_spend_warn == ''
 
     def test_broadcast_transaction(self):
         w = self.wallet
         psman = w.psman
-        psman.find_untracked_ps_txs(log=False)
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
         psman.network = NetworkBroadcastMock()
-        psman.loop = asyncio.get_event_loop()
 
         # check spending ps_collateral currently in mixing
         c_outpoint, collateral = w.db.get_ps_collateral()
@@ -2167,18 +2208,18 @@ class PSWalletTestCase(TestCaseForTestnet):
         outputs = [TxOutput(TYPE_ADDRESS, dummy, COLLATERAL_VAL)]
         tx = w.make_unsigned_transaction(inputs, outputs, self.config)
 
-        psman._is_mixing_run = True
+        psman.state = PSStates.Mixing
         with self.assertRaises(PSPossibleDoubleSpendError):
             coro = psman.broadcast_transaction(tx)
             asyncio.get_event_loop().run_until_complete(coro)
 
-        psman._is_mixing_run = False
-        psman._mix_stop_time = time.time()
+        psman.state = PSStates.Ready
+        psman.last_mix_stop_time = time.time()
         with self.assertRaises(PSPossibleDoubleSpendError):
             coro = psman.broadcast_transaction(tx)
             asyncio.get_event_loop().run_until_complete(coro)
 
-        psman._mix_stop_time = time.time() - 60
+        psman.last_mix_stop_time = time.time() - psman.wait_for_mn_txs_time
         coro = psman.broadcast_transaction(tx)
         asyncio.get_event_loop().run_until_complete(coro)
 
@@ -2192,7 +2233,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         outputs = [TxOutput(TYPE_ADDRESS, dummy, COLLATERAL_VAL)]
         tx = w.make_unsigned_transaction(inputs, outputs, self.config)
 
-        psman._mix_stop_time = time.time()
+        psman.last_mix_stop_time = time.time()
         with self.assertRaises(PSPossibleDoubleSpendError):
             coro = psman.broadcast_transaction(tx)
             asyncio.get_event_loop().run_until_complete(coro)
@@ -2201,19 +2242,18 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.loop = asyncio.get_event_loop()
 
         # test sign with no _keypairs_cache
         coro = psman.create_new_collateral_wfl()
+        psman.state = PSStates.Mixing
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_collateral_wfl
         assert wfl.completed
         psman._cleanup_new_collateral_wfl(force=True)
         assert not psman.new_collateral_wfl
 
-        # test sign with enough _keypairs_cache
-        psman.num_keys_to_cache = 100
-        psman.cache_keypairs(password=None)
+        # test sign with _keypairs_cache
+        psman._cache_keypairs(password=None)
         coro = psman.create_new_collateral_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_collateral_wfl
@@ -2221,34 +2261,105 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman._cleanup_new_collateral_wfl(force=True)
         assert not psman.new_collateral_wfl
 
-        # test sign with not enough _keypairs_cache
-        psman._keypairs_cache = {'1': (b'', True),  '2': (b'', True)}
-        coro = psman.create_new_denoms_wfl()
-        asyncio.get_event_loop().run_until_complete(coro)
-        assert not psman.new_collateral_wfl
+    def test_calc_need_new_keypairs_cnt(self):
+        w = self.wallet
+        psman = w.psman
+        psman.keep_amount = 15
+
+        psman.mix_rounds = 2
+        assert psman.calc_need_new_keypairs_cnt() == (246, 48)
+
+        psman.mix_rounds = 3
+        assert psman.calc_need_new_keypairs_cnt() == (369, 66)
+
+        psman.mix_rounds = 4
+        assert psman.calc_need_new_keypairs_cnt() == (492, 87)
+
+        psman.mix_rounds = 5
+        assert psman.calc_need_new_keypairs_cnt() == (615, 105)
+
+        psman.mix_rounds = 16
+        assert psman.calc_need_new_keypairs_cnt() == (1968, 306)
+
+        coro = psman.find_untracked_ps_txs(log=False)  # find already mixed
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+
+        psman.mix_rounds = 2
+        assert psman.calc_need_new_keypairs_cnt() == (289, 54)
+
+        psman.mix_rounds = 3
+        assert psman.calc_need_new_keypairs_cnt() == (511, 90)
+
+        psman.mix_rounds = 4
+        assert psman.calc_need_new_keypairs_cnt() == (733, 123)
+
+        psman.mix_rounds = 5
+        assert psman.calc_need_new_keypairs_cnt() == (955, 156)
+
+        psman.mix_rounds = 16
+        assert psman.calc_need_new_keypairs_cnt() == (3397, 522)
 
     def test_cache_keypairs(self):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman._keypairs_cache = {'key1': 'value1',  'key2': 'value2'}
-        assert len(psman._keypairs_cache) == 2
 
-        psman.num_keys_to_cache = 2
-        psman.cache_keypairs(password=None)
-        assert len(psman._keypairs_cache) == 140
-        assert 'key1' not in psman._keypairs_cache
-        assert 'key2' not in psman._keypairs_cache
+        psman.mix_rounds = 2
+        psman.keep_amount = 2
+        psman._cache_keypairs(password=None)
+        # cache_results by types: spendable, ps spendable, ps coins, ps change
+        cache_results = [137, 0, 168, 36]
+        for i, cache_type in enumerate(KP_ALL_TYPES):
+            assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
+        psman._cleanup_all_keypairs_cache()
+        assert psman._keypairs_cache == {}
 
-        psman.num_keys_to_cache = 100
-        psman.cache_keypairs(password=None)
-        assert len(psman._keypairs_cache) == 257
+        psman.mix_rounds = 4
+        psman.keep_amount = 2
+        psman._cache_keypairs(password=None)
+        cache_results = [137, 0, 336, 63]
+        for i, cache_type in enumerate(KP_ALL_TYPES):
+            assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
+        psman._cleanup_all_keypairs_cache()
+        assert psman._keypairs_cache == {}
 
-    def test_cleanup_keypairs_cache(self):
-        w = self.wallet
-        psman = w.psman
-        psman._keypairs_cache = {'1': (2, 3),  '4': (5, 6)}
-        psman.cleanup_keypairs_cache()
+        psman.mix_rounds = 4
+        psman.keep_amount = 10
+        psman._cache_keypairs(password=None)
+        cache_results = [137, 0, 368, 66]
+        for i, cache_type in enumerate(KP_ALL_TYPES):
+            assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
+        psman._cleanup_all_keypairs_cache()
+        assert psman._keypairs_cache == {}
+
+        coro = psman.find_untracked_ps_txs(log=False)  # find already mixed
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+
+        psman.mix_rounds = 2
+        psman.keep_amount = 2
+        psman._cache_keypairs(password=None)
+        cache_results = [5, 132, 107, 27]
+        for i, cache_type in enumerate(KP_ALL_TYPES):
+            assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
+        psman._cleanup_all_keypairs_cache()
+        assert psman._keypairs_cache == {}
+
+        psman.mix_rounds = 4
+        psman.keep_amount = 2
+        psman._cache_keypairs(password=None)
+        cache_results = [5, 132, 369, 66]
+        for i, cache_type in enumerate(KP_ALL_TYPES):
+            assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
+        psman._cleanup_all_keypairs_cache()
+        assert psman._keypairs_cache == {}
+
+        psman.mix_rounds = 4
+        psman.keep_amount = 10
+        psman._cache_keypairs(password=None)
+        cache_results = [5, 132, 717, 120]
+        for i, cache_type in enumerate(KP_ALL_TYPES):
+            assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
+        psman._cleanup_all_keypairs_cache()
         assert psman._keypairs_cache == {}
 
     def test_filter_log_line(self):
@@ -2257,9 +2368,46 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         txid = bh2u(bytes(random.getrandbits(8) for _ in range(32)))
         test_line = 'load_and_cleanup rm %s ps data'
-        assert filter_log_line(test_line % txid) == test_line % DUMMY_TXID
+        assert filter_log_line(test_line % txid) == test_line % FILTERED_TXID
 
         txid = bh2u(bytes(random.getrandbits(8) for _ in range(32)))
         test_line = ('Error: err on checking tx %s from'
                      ' pay collateral workflow: wfl.uuid')
-        assert filter_log_line(test_line % txid) == test_line % DUMMY_TXID
+        assert filter_log_line(test_line % txid) == test_line % FILTERED_TXID
+
+    def test_is_mine_slow(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+
+        last_recv_addr = w.db.get_receiving_addresses(slice_start=-1)[0]
+        last_recv_index = w.get_address_index(last_recv_addr)[1]
+        last_change_addr = w.db.get_change_addresses(slice_start=-1)[0]
+        last_change_index = w.get_address_index(last_change_addr)[1]
+
+        not_in_wallet_recv_addrs = []
+        for ri in range(last_recv_index + 1, last_recv_index + 101):
+            sequence = [0, ri]
+            x_pubkey = w.keystore.get_xpubkey(*sequence)
+            _, generated_addr = xpubkey_to_address(x_pubkey)
+            assert not w.is_mine(generated_addr)
+            not_in_wallet_recv_addrs.append(generated_addr)
+
+        not_in_wallet_change_addrs = []
+        for ci in range(last_change_index + 1, last_change_index + 101):
+            sequence = [1, ci]
+            x_pubkey = w.keystore.get_xpubkey(*sequence)
+            _, generated_addr = xpubkey_to_address(x_pubkey)
+            assert not w.is_mine(generated_addr)
+            not_in_wallet_change_addrs.append(generated_addr)
+
+        assert psman._is_mine_slow(not_in_wallet_recv_addrs[9])
+
+        assert psman._is_mine_slow(not_in_wallet_change_addrs[9],
+                                   for_change=True)
+
+        for addr in not_in_wallet_recv_addrs:
+            assert psman._is_mine_slow(addr)
+
+        for addr in not_in_wallet_change_addrs:
+            assert psman._is_mine_slow(addr, for_change=True)

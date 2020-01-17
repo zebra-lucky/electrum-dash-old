@@ -25,18 +25,6 @@ Builder.load_string('''
                 orientation: 'vertical'
                 size_hint: 0.9, 1
                 BoxLayout:
-                    id: spend_ps_box
-                    orientation: 'horizontal'
-                    size_hint: 1, 0.2
-                    Label:
-                        text: _('Spend PS coins') + ':'
-                        text_size: btc.width, None
-                        size: self.texture_size
-                    CheckBox:
-                        id: spend_ps_cb
-                        active: root.spend_ps
-                        on_release: root.on_spend_ps_cb(self.active)
-                BoxLayout:
                     id: available_amount_box
                     orientation: 'horizontal'
                     size_hint: 1, 0.2
@@ -122,9 +110,7 @@ Builder.load_string('''
                         text: 'Max'
                         on_release:
                             kb.is_fiat = False
-                            kb.amount = \
-                                app.get_max_amount(include_ps=root.spend_ps, \
-                                                   is_ps=root.is_ps)
+                            kb.amount = app.get_max_amount(is_ps=root.is_ps)
                             root.recalc_available_amount()
                     Button:
                         size_hint: 1, None
@@ -155,32 +141,26 @@ class AmountDialog(Factory.Popup):
     app = App.get_running_app()
     available_amount = StringProperty()
     is_ps = BooleanProperty(False)
-    spend_ps = BooleanProperty(False)
 
-    def __init__(self, show_max, amount, is_ps=None, spend_ps=None, cb=None):
+    def __init__(self, show_max, amount, is_ps=None, cb=None):
         Factory.Popup.__init__(self)
         self.show_max = show_max
         self.callback = cb
         if amount:
             self.ids.kb.amount = amount
 
-        if spend_ps is not None:  # is amount dialog in send screen
+        if is_ps is not None:  # is amount dialog in send screen
             self.is_spend = True
             self.is_ps = is_ps
-            self.spend_ps = spend_ps
         else:  # is amount dialog in receive screen
             self.is_spend = False
 
         main_box = self.ids.main_box
-        spend_ps_box = self.ids.spend_ps_box
         available_amount_box = self.ids.available_amount_box
         if not self.is_spend:
-            main_box.remove_widget(spend_ps_box)
             main_box.remove_widget(available_amount_box)
         else:
             wallet = self.app.wallet
-            if is_ps or not wallet.psman.enabled:
-                main_box.remove_widget(spend_ps_box)
             self.recalc_available_amount()
 
     def update_amount(self, c):
@@ -208,9 +188,9 @@ class AmountDialog(Factory.Popup):
         kb = self.ids.kb
         amount = btc.text if kb.amount else ''
         if self.is_spend:
-            self.callback(amount, self.spend_ps)
+            self.callback(amount)
         else:
-            self.callback(amount, None)
+            self.callback(amount)
         self.dismiss()
 
     def on_fiat(self, is_fiat):
@@ -218,30 +198,17 @@ class AmountDialog(Factory.Popup):
         kb.is_fiat = is_fiat
         self.recalc_available_amount()
 
-    def on_spend_ps_cb(self, spend_ps):
-        if spend_ps:
-            double_spend_warn = self.app.wallet.psman.double_spend_warn
-            if double_spend_warn:
-                WarnDialog(double_spend_warn).open()
-            WarnDialog(self.app.wallet.psman.spend_ps_coins_warn).open()
-            self.spend_ps = True
-        else:
-            self.spend_ps = False
-        self.recalc_available_amount()
-
     def recalc_available_amount(self):
         app = self.app
         kb = self.ids.kb
-        max_amount = app.get_max_amount(include_ps=self.spend_ps,
-                                        is_ps=self.is_ps)
-        if max_amount:
-            max_amount = COIN * Decimal(max_amount)
-            if kb.is_fiat:
-                max_amount = app.fx.format_amount(max_amount)
-                ccy = app.fx.ccy
-                max_amount = f'{max_amount} {ccy}'
-            else:
-                max_amount = app.format_amount_and_units(max_amount)
-            self.available_amount = max_amount
+        max_amount = app.get_max_amount(is_ps=self.is_ps)
+        if not max_amount:
+            max_amount = 0
+        max_amount = COIN * Decimal(max_amount)
+        if kb.is_fiat:
+            max_amount = app.fx.format_amount(max_amount)
+            ccy = app.fx.ccy
+            max_amount = f'{max_amount} {ccy}'
         else:
-            self.available_amount = ''
+            max_amount = app.format_amount_and_units(max_amount)
+        self.available_amount = max_amount

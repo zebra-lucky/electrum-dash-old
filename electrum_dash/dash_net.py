@@ -396,9 +396,9 @@ class DashNet(Logger):
                 self.logger.info(f'verify islock failed: {txid}')
         return False
 
-    def clear_recent_islocks(self, keep_sec=60):
+    def clear_recent_islocks(self, keep_sec=900):  # 2.5 minutes * 6 = 900
         now = time.time()
-        if now - self.recent_islocks_clear < keep_sec/4:
+        if now - self.recent_islocks_clear < keep_sec/15:  # clean each 60 secs
             return
         with self.recent_islocks_lock:
             self.recent_islocks = list(filter(lambda x: now - x[1] < keep_sec,

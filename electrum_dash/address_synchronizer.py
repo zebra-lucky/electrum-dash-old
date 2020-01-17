@@ -165,6 +165,7 @@ class AddressSynchronizer(Logger):
 
     def on_blockchain_updated(self, event, *args):
         self._get_addr_balance_cache = {}  # invalidate cache
+        self.db.process_and_clear_islocks(self.get_local_height())
 
     def on_dash_islock(self, event, txid):
         if txid in self.db.islocks:
@@ -173,7 +174,7 @@ class AddressSynchronizer(Logger):
             self.logger.info(f'found tx for islock: {txid}')
             dash_net = self.network.dash_net
             if dash_net.verify_on_recent_islocks(txid):
-                self.db.add_islock(txid, self.get_local_height())
+                self.db.add_islock(txid)
                 self._get_addr_balance_cache = {}  # invalidate cache
                 self.storage.write()
                 self.network.trigger_callback('verified-islock', self, txid)
@@ -184,7 +185,7 @@ class AddressSynchronizer(Logger):
         else:
             dash_net = self.network.dash_net
             if dash_net.verify_on_recent_islocks(txid):
-                self.db.add_islock(txid, self.get_local_height())
+                self.db.add_islock(txid)
                 self._get_addr_balance_cache = {}  # invalidate cache
                 self.storage.write()
                 self.network.trigger_callback('verified-islock', self, txid)
@@ -198,6 +199,7 @@ class AddressSynchronizer(Logger):
                 asyncio.run_coroutine_threadsafe(self.verifier.stop(), self.network.asyncio_loop)
                 self.verifier = None
             self.network.unregister_callback(self.on_blockchain_updated)
+            self.psman.on_stop_threads()
             dash_net = self.network.dash_net
             dash_net.unregister_callback(self.on_dash_islock)
             self.db.put('stored_height', self.get_local_height())
@@ -502,22 +504,33 @@ class AddressSynchronizer(Logger):
         for tx_hash in tx_deltas:
             delta = tx_deltas[tx_hash]
             tx_mined_status = self.get_tx_height(tx_hash)
+            islock = tx_islocks[tx_hash]
+            if islock:
+                islock_sort = tx_hash if not tx_mined_status.conf else ''
+            else:
+                islock_sort = ''
             history.append((tx_hash, tx_mined_status, delta,
-                            tx_islocks[tx_hash]))
-        history.sort(key = lambda x: self.get_txpos(x[0], x[3]), reverse=True)
+                            islock, islock_sort))
+        history.sort(key=lambda x: (self.get_txpos(x[0], x[3]), x[4]),
+                     reverse=True)
         # 3. add balance
         c, u, x = self.get_balance(domain)
         balance = c + u + x
         h2 = []
-        show_dip2 = config.get('show_dip2_tx_type', True) if config else True
+        if config:
+            def_dip2 = not self.psman.unsupported
+            show_dip2 = config.get('show_dip2_tx_type', def_dip2)
+        else:
+            show_dip2 = True  # for testing
         group_size = 0
+        group_h2 = []
         group_txid = None
         group_txids = []
-        group_data = []
         group_delta = None
         group_balance = None
         hist_len = len(history)
-        for i, (tx_hash, tx_mined_status, delta, islock) in enumerate(history):
+        for i, (tx_hash, tx_mined_status, delta,
+                islock, islock_sort) in enumerate(history):
             tx_type = 0
             if show_dip2:
                 tx = self.db.get_transaction(tx_hash)
@@ -537,31 +550,35 @@ class AddressSynchronizer(Logger):
                         group_delta = delta
                     else:
                         group_delta += delta
+                if group_size > 1:
+                    group_h2.append((tx_hash, tx_type, tx_mined_status,
+                                     delta, balance, islock, group_txid, []))
+                else:
+                    group_h2.append((tx_hash, tx_type, tx_mined_status,
+                                     delta, balance, islock, None, []))
                 if i == hist_len - 1:  # last entry in the history
                     if group_size > 1:
-                        group_data.append((group_delta, group_balance,
-                                           group_txids))
+                        group_data = group_h2[0][-1]  # last tuple element
+                        group_data.append(group_delta)
+                        group_data.append(group_balance)
+                        group_data.append(group_txids)
+                    h2.extend(group_h2)
             else:
                 if group_size > 0:
                     if group_size > 1:
-                        group_data.append((group_delta, group_balance,
-                                           group_txids))
+                        group_data = group_h2[0][-1]  # last tuple element
+                        group_data.append(group_delta)
+                        group_data.append(group_balance)
+                        group_data.append(group_txids)
+                    h2.extend(group_h2)
                     group_size = 0
+                    group_h2 = []
                     group_txid = None
                     group_txids = []
-                    group_data = []
                     group_delta = None
                     group_balance = None
-
-            if group_size == 0:
                 h2.append((tx_hash, tx_type, tx_mined_status,
                            delta, balance, islock, None, []))
-            elif group_size == 1:
-                h2.append((tx_hash, tx_type, tx_mined_status,
-                           delta, balance, islock, None, group_data))
-            else:
-                h2.append((tx_hash, tx_type, tx_mined_status,
-                           delta, balance, islock, group_txid, []))
 
             if balance is None or delta is None:
                 balance = None

@@ -637,16 +637,33 @@ class JsonDB(Logger):
         self.history.pop(addr, None)
 
     @modifier
-    def add_islock(self, txid, height):
+    def add_islock(self, txid):
         '''Stores new islock as {txid: (height, timestamp)}'''
-        # Clear if height is older than 6 blocks
-        to_clear = list(filter(lambda x: height - x[1][0] > 6,
-                               self.islocks.items()))
-        for txid_to_clear, h in to_clear:
-            self.islocks.pop(txid_to_clear, None)
         timestamp = int(time.time())
-        self.islocks[txid] = (height, timestamp)
+        self.islocks[txid] = (0, timestamp)
 
+    @modifier
+    def process_and_clear_islocks(self, local_height):
+        '''Clear islocks confirmed by 24 blocks.
+        Set height on islocks with verified txs'''
+        clear_txids = []
+        for txid, (height, timestamp) in self.islocks.items():
+            mined_info = self.get_verified_tx(txid)
+            if not mined_info:
+                if height > 0:  # clear islock height if tx becomes unverified
+                    self.islocks[txid] = (0, timestamp)
+                continue
+
+            conf = max(local_height - mined_info.height + 1, 0)
+            if conf >= 24:
+                clear_txids.append(txid)
+            elif height <= 0:  # set islock height to verified tx height
+                self.islocks[txid] = (mined_info.height, timestamp)
+
+        for txid in clear_txids:
+            self.islocks.pop(txid, None)
+
+    @locked
     def get_islock(self, tx_hash):
         '''Return timestamp of islock createion or None if not found'''
         islock = self.islocks.get(tx_hash)
@@ -757,11 +774,11 @@ class JsonDB(Logger):
         return self.ps_reserved.pop(addr, None)
 
     @locked
-    def get_ps_reserved(self, outpoint=None):
-        if outpoint is None:
+    def get_ps_reserved(self, addr=None):
+        if addr is None:
             return self.ps_reserved
         else:
-            return self.ps_reserved.get(outpoint)
+            return self.ps_reserved.get(addr)
 
     @locked
     def select_ps_reserved(self, for_change=False, data=None):
