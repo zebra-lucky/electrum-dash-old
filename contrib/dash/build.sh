@@ -33,7 +33,18 @@ fi
 
 
 source contrib/dash/travis/electrum_dash_version_env.sh
-echo electrum-dash version is $DASH_ELECTRUM_VERSION
+# Check is release
+SIMPLIFIED_VERSION_PATTERN="^([^A-Za-z]+).*"
+if [[ ${DASH_ELECTRUM_VERSION} =~ ${SIMPLIFIED_VERSION_PATTERN} ]]; then
+    if [[ ${BASH_REMATCH[1]} == ${DASH_ELECTRUM_VERSION} ]]; then
+        IS_RELEASE=y
+    fi
+fi
+if [[ -n $IS_RELEASE ]]; then
+    echo electrum-dash version is $DASH_ELECTRUM_VERSION, release build
+else
+    echo electrum-dash version is $DASH_ELECTRUM_VERSION
+fi
 mkdir -p dist
 
 BUILD_DIST_DIR=build/electrum-dash/dist
@@ -121,12 +132,14 @@ if [[ "$OSTYPE" == "linux-gnu" ]]; then
     fi
 
     # Build mainnet release apk
-    sudo rm -rf build
-    mkdir -p build && cp contrib/dash/travis/* ./build/
-    export ELECTRUM_MAINNET=true
-    ./build/travis-build-linux-apk.sh
-    cp ${BUILD_BIN_DIR}/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
-        dist/
+    if [[ -n $IS_RELEASE ]]; then
+        sudo rm -rf build
+        mkdir -p build && cp contrib/dash/travis/* ./build/
+        export ELECTRUM_MAINNET=true
+        ./build/travis-build-linux-apk.sh
+        cp ${BUILD_BIN_DIR}/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+            dist/
+    fi
 
     # Build testnet release apk
     sudo rm -rf build
@@ -139,22 +152,25 @@ if [[ "$OSTYPE" == "linux-gnu" ]]; then
     sudo rm -rf build
 
     read_jks_storepass
+
     # Sign mainnet apk
-    jarsigner -verbose \
-        -tsa http://sha256timestamp.ws.symantec.com/sha256/timestamp \
-        -sigalg SHA1withRSA -digestalg SHA1 \
-        -sigfile dash-electrum \
-        -keystore ~/.jks/keystore \
-        -storepass:env JKS_STOREPASS \
-        -keypass:env JKS_KEYPASS \
-        dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
-        electrum.dash.org
+    if [[ -n $IS_RELEASE ]]; then
+        jarsigner -verbose \
+            -tsa http://sha256timestamp.ws.symantec.com/sha256/timestamp \
+            -sigalg SHA1withRSA -digestalg SHA1 \
+            -sigfile dash-electrum \
+            -keystore ~/.jks/keystore \
+            -storepass:env JKS_STOREPASS \
+            -keypass:env JKS_KEYPASS \
+            dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+            electrum.dash.org
 
-    zipalign -v 4 \
-        dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
-        dist/${NAME}-$DASH_ELECTRUM_APK_VERSION-$APK_TAIL \
+        zipalign -v 4 \
+            dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+            dist/${NAME}-$DASH_ELECTRUM_APK_VERSION-$APK_TAIL \
 
-    rm dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL
+        rm dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL
+    fi
 
     # Sign testnet apk
     jarsigner -verbose \
