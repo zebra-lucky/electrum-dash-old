@@ -49,6 +49,7 @@ from .address_synchronizer import TX_HEIGHT_LOCAL
 from .masternode import MasternodeAnnounce
 from .masternode_budget import BudgetProposal
 from .masternode_manager import MasternodeManager, parse_masternode_conf, BUDGET_FEE_CONFIRMATIONS
+from .version import is_release
 
 if TYPE_CHECKING:
     from .network import Network
@@ -1137,14 +1138,16 @@ def add_network_options(parser):
     parser.add_argument("--no-load-mns", action="store_false", default=None, dest="protx_load_mns", help="do not load protx Masternodes")
 
 def add_global_options(parser):
+    force_testnet = not is_release()
     group = parser.add_argument_group('global options')
     group.add_argument("-v", dest="verbosity", help="Set verbosity (log levels)", default='')
     group.add_argument("-V", dest="verbosity_shortcuts", help="Set verbosity (shortcut-filter list)", default='')
     group.add_argument("-D", "--dir", dest="electrum_path", help="electrum-dash directory")
     group.add_argument("-P", "--portable", action="store_true", dest="portable", default=False, help="Use local 'electrum_data' directory")
     group.add_argument("-w", "--wallet", dest="wallet_path", help="wallet path")
-    group.add_argument("--testnet", action="store_true", dest="testnet", default=False, help="Use Testnet")
+    group.add_argument("--testnet", action="store_true", dest="testnet", default=force_testnet, help="Use Testnet")
     group.add_argument("--regtest", action="store_true", dest="regtest", default=False, help="Use Regtest")
+    group.add_argument("--force-mainnet", action="store_true", dest="force_mainnet", default=False, help="Force Mainnet")
 
 def get_parser():
     # create main parser

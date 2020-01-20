@@ -48,6 +48,7 @@ import certifi
 
 from .i18n import _
 from .logging import get_logger, Logger
+from .version import VERSION_PATTERN
 
 if TYPE_CHECKING:
     from .network import Network
@@ -70,7 +71,6 @@ base_units_inverse = inv_dict(base_units)
 base_units_list = ['DASH', 'mDASH', 'uDASH', 'duffs']  # list(dict) does not guarantee order
 
 DECIMAL_POINT_DEFAULT = 8  # DASH
-VERSION_PATTERN = re.compile('^([^A-Za-z]+).*')  # simpliified PEP440 versions
 
 
 class UnknownBaseUnit(Exception): pass
