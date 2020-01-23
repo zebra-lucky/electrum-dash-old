@@ -357,6 +357,17 @@ if __name__ == '__main__':
     if not config.get('force_mainnet'):
         if config.get('testnet'):
             constants.set_testnet()
+            try:
+                from stacktraces import StackTraces
+                stacktraces_path = os.path.join(config.electrum_path(),
+                                                'stacktraces{ext}')
+                tracer = StackTraces(stacktraces_path,
+                                     traceback_interval=10,
+                                     traceback='html',
+                                     stats=False)
+                tracer.start()
+            except:
+                pass
         elif config.get('regtest'):
             constants.set_regtest()
 
