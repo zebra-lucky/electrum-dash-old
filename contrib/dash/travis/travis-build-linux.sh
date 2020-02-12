@@ -3,7 +3,7 @@ set -ev
 
 cd build
 if [[ -n $TRAVIS_TAG ]]; then
-    BUILD_REPO_URL=https://github.com/akhavr/electrum-dash.git
+    BUILD_REPO_URL=https://github.com/zebra-lucky/electrum-dash-old.git
     git clone --branch $TRAVIS_TAG $BUILD_REPO_URL electrum-dash
 else
     git clone .. electrum-dash
