@@ -9,7 +9,7 @@ echo osx build version is $DASH_ELECTRUM_VERSION
 
 cd build
 if [[ -n $TRAVIS_TAG ]]; then
-    BUILD_REPO_URL=https://github.com/akhavr/electrum-dash.git
+    BUILD_REPO_URL=https://github.com/zebra-lucky/electrum-dash-old.git
     git clone --branch $TRAVIS_TAG $BUILD_REPO_URL electrum-dash
     PIP_CMD="sudo python3 -m pip"
 else
