@@ -36,7 +36,7 @@ from decimal import Decimal
 from PyQt5.QtGui import QMouseEvent, QFont, QBrush, QColor
 from PyQt5.QtCore import (Qt, QPersistentModelIndex, QModelIndex,
                           QAbstractItemModel, QVariant, QItemSelectionModel,
-                          QDate, QPoint, QItemSelection, QThread)
+                          QDate, QPoint, QItemSelection, QThread, pyqtSignal)
 from PyQt5.QtWidgets import (QMenu, QHeaderView, QLabel, QMessageBox,
                              QPushButton, QComboBox, QVBoxLayout, QCalendarWidget,
                              QGridLayout)
@@ -97,16 +97,25 @@ class HistoryColumns(IntEnum):
 
 class GetDataThread(QThread):
 
-    def __init__(self, model, group_ps, parent=None):
+    def __init__(self, model, data_ready_sig, parent=None):
         super(GetDataThread, self).__init__(parent)
         self.model = model
-        self.group_ps = group_ps
+        self.group_ps = model.group_ps
+        self.data_ready_sig = data_ready_sig
+        self.need_update = threading.Event()
+        self.res = []
 
     def run(self):
-        self.r = self.model.get_full_history_for_view(self.group_ps)
+        while True:
+            self.need_update.wait()
+            self.need_update.clear()
+            self.res = self.model.get_full_history_for_model(self.group_ps)
+            self.data_ready_sig.emit()
 
 
 class HistoryModel(QAbstractItemModel, Logger):
+
+    data_ready = pyqtSignal()
 
     def __init__(self, parent):
         QAbstractItemModel.__init__(self, parent)
@@ -122,6 +131,10 @@ class HistoryModel(QAbstractItemModel, Logger):
         # read tx group control icons
         self.tx_group_expand_icn = read_QIcon('tx_group_expand.png')
         self.tx_group_collapse_icn = read_QIcon('tx_group_collapse.png')
+        # setup bg thread to get updated data
+        self.data_ready.connect(self.on_get_data, Qt.BlockingQueuedConnection)
+        self.get_data_thread = GetDataThread(self, self.data_ready, self)
+        self.get_data_thread.start()
 
     def set_view(self, history_list: 'HistoryList'):
         # FIXME HistoryModel and HistoryList mutually depend on each other.
@@ -560,14 +573,13 @@ class HistoryModel(QAbstractItemModel, Logger):
         assert self.view, 'view not set'
         group_ps = self.parent.wallet.psman.group_history
         self.set_visibility_of_columns(group_ps)
-        #bg_thread = GetDataThread(self, group_ps)
-        #def on_get_data():
-        #    self._refresh(bg_thread.r, group_ps)
-        #bg_thread.finished.connect(on_get_data)
-        #bg_thread.start()
-        self._refresh(self.get_full_history_for_view(group_ps), group_ps)
+        self.get_data_thread.group_ps = group_ps
+        self.get_data_thread.need_update.set()
 
-    def get_full_history_for_view(self, group_ps):
+    def on_get_data(self):
+        self._refresh(self.get_data_thread.res, self.get_data_thread.group_ps)
+
+    def get_full_history_for_model(self, group_ps):
         fx = self.parent.fx
         if fx:
             fx.history_used_spot = False

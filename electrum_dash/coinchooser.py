@@ -28,7 +28,7 @@ from typing import NamedTuple, List, Callable, Optional
 from decimal import Decimal
 
 from .bitcoin import sha256, COIN, TYPE_ADDRESS, is_address
-from .dash_ps import MAX_MIX_ROUNDS, PS_DENOMS_VALS
+from .dash_ps import PS_DENOMS_VALS
 from .transaction import Transaction, TxOutput
 from .util import NotEnoughFunds
 from .logging import Logger
@@ -140,7 +140,9 @@ class CoinChooserBase(Logger):
                     if ps_rounds >= 0:  # denoms
                         max_rounds = max(max_rounds, ps_rounds)
                     else:
-                        max_rounds = max(max_rounds, MAX_MIX_ROUNDS + 1)
+                        # do not spend ps_collateral/ps_other if possible
+                        # and therefore set max_rounds to maximum
+                        max_rounds = 1e9
             # the fee estimator is typically either a constant or a linear function,
             # so the "function:" effective_value(bucket) will be homomorphic for addition
             # i.e. effective_value(b1) + effective_value(b2) = effective_value(b1 + b2)

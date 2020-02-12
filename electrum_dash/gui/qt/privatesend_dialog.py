@@ -128,8 +128,7 @@ class PSDialogUnsupportedPS(QDialog, MessageBoxMixin):
 
     def __init__(self, mwin):
         QDialog.__init__(self, parent=None)
-        self.setMinimumWidth(640)
-        self.setMinimumHeight(480)
+        self.setMinimumSize(900, 480)
         self.setWindowIcon(read_QIcon('electrum-dash.png'))
         self.mwin = mwin
         self.wallet = mwin.wallet
@@ -162,8 +161,7 @@ class PSDialog(QDialog, MessageBoxMixin):
 
     def __init__(self, mwin):
         QDialog.__init__(self, parent=None)
-        self.setMinimumWidth(640)
-        self.setMinimumHeight(480)
+        self.setMinimumSize(900, 480)
         self.setWindowIcon(read_QIcon('electrum-dash.png'))
         self.mwin = mwin
         self.wallet = mwin.wallet
@@ -282,12 +280,12 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.addWidget(self.warn_ex_label, i, 0, 1, -1)
 
         # keep_amount
-        keep_amount_text = psman.keep_amount_data(short_txt=True)
+        keep_amount_text = psman.keep_amount_data()
         keep_amount_help = psman.keep_amount_data(full_txt=True)
         keep_amount_label = HelpLabel(keep_amount_text + ':', keep_amount_help)
         self.keep_amount_sb = DashSpinBox()
-        self.keep_amount_sb.setMinimum(psman.keep_amount_data(minv=True))
-        self.keep_amount_sb.setMaximum(psman.keep_amount_data(maxv=True))
+        self.keep_amount_sb.setMinimum(psman.min_keep_amount)
+        self.keep_amount_sb.setMaximum(psman.max_keep_amount)
         self.keep_amount_sb.setValue(psman.keep_amount)
 
         def on_keep_amount_change():
@@ -300,12 +298,12 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.addWidget(self.keep_amount_sb, i, 2)
 
         # mix_rounds
-        mix_rounds_text = psman.mix_rounds_data(short_txt=True)
+        mix_rounds_text = psman.mix_rounds_data()
         mix_rounds_help = psman.mix_rounds_data(full_txt=True)
         mix_rounds_label = HelpLabel(mix_rounds_text + ':', mix_rounds_help)
         self.mix_rounds_sb = QSpinBox()
-        self.mix_rounds_sb.setMinimum(psman.mix_rounds_data(minv=True))
-        self.mix_rounds_sb.setMaximum(psman.mix_rounds_data(maxv=True))
+        self.mix_rounds_sb.setMinimum(psman.min_mix_rounds)
+        self.mix_rounds_sb.setMaximum(psman.max_mix_rounds)
         self.mix_rounds_sb.setValue(psman.mix_rounds)
 
         def on_mix_rounds_change():
@@ -336,7 +334,7 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.addWidget(self.mixing_ctl_btn, i, 0, 1, -1)
 
         # mixing progress
-        mix_progress_text = psman.mixing_progress_data(short_txt=True)
+        mix_progress_text = psman.mixing_progress_data()
         mix_progress_help = psman.mixing_progress_data(full_txt=True)
         mix_progress_label = \
             HelpLabel(mix_progress_text + ':', mix_progress_help)
@@ -347,7 +345,7 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.addWidget(self.mix_progress_bar, i, 2)
 
         # ps balance
-        ps_balance_text = psman.ps_balance_data(short_txt=True)
+        ps_balance_text = psman.ps_balance_data()
         ps_balance_help = psman.ps_balance_data(full_txt=True)
         ps_balance_label = HelpLabel(ps_balance_text + ':', ps_balance_help)
         self.ps_balance_amount = QLabel()
@@ -357,7 +355,7 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.addWidget(self.ps_balance_amount, i, 2)
 
         # denominated balance
-        dn_balance_text = psman.dn_balance_data(short_txt=True)
+        dn_balance_text = psman.dn_balance_data()
         dn_balance_help = psman.dn_balance_data(full_txt=True)
         dn_balance_label = HelpLabel(dn_balance_text + ':', dn_balance_help)
         self.dn_balance_amount = QLabel()
@@ -367,13 +365,13 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.addWidget(self.dn_balance_amount, i, 2)
 
         # max_sessions
-        max_sessions_text = psman.max_sessions_data(short_txt=True)
+        max_sessions_text = psman.max_sessions_data()
         max_sessions_help = psman.max_sessions_data(full_txt=True)
         max_sessions_label = \
             HelpLabel(max_sessions_text + ':', max_sessions_help)
         self.max_sessions_sb = QSpinBox()
-        self.max_sessions_sb.setMinimum(psman.max_sessions_data(minv=True))
-        self.max_sessions_sb.setMaximum(psman.max_sessions_data(maxv=True))
+        self.max_sessions_sb.setMinimum(psman.min_max_sessions)
+        self.max_sessions_sb.setMaximum(psman.max_max_sessions)
         self.max_sessions_sb.setValue(psman.max_sessions)
 
         def on_max_sessions_change():
@@ -383,6 +381,23 @@ class PSDialog(QDialog, MessageBoxMixin):
         i = grid.rowCount()
         grid.addWidget(max_sessions_label, i, 0)
         grid.addWidget(self.max_sessions_sb, i, 2)
+
+        # kp_timeout
+        kp_timeout_text = psman.kp_timeout_data()
+        kp_timeout_help = psman.kp_timeout_data(full_txt=True)
+        kp_timeout_label = HelpLabel(kp_timeout_text + ':', kp_timeout_help)
+        self.kp_timeout_sb = QSpinBox()
+        self.kp_timeout_sb.setMinimum(psman.min_kp_timeout)
+        self.kp_timeout_sb.setMaximum(psman.max_kp_timeout)
+        self.kp_timeout_sb.setValue(psman.kp_timeout)
+
+        def on_kp_timeout_change():
+            psman.kp_timeout = self.kp_timeout_sb.value()
+        self.kp_timeout_sb.valueChanged.connect(on_kp_timeout_change)
+
+        i = grid.rowCount()
+        grid.addWidget(kp_timeout_label, i, 0)
+        grid.addWidget(self.kp_timeout_sb, i, 2)
 
         # group_history
         group_hist_cb = QCheckBox(psman.group_history_data(full_txt=True))
@@ -499,11 +514,9 @@ class PSDialog(QDialog, MessageBoxMixin):
         if psman.state in psman.mixing_running_states:
             self.keep_amount_sb.setEnabled(False)
             self.mix_rounds_sb.setEnabled(False)
-            self.max_sessions_sb.setEnabled(False)
         else:
             self.keep_amount_sb.setEnabled(True)
             self.mix_rounds_sb.setEnabled(True)
-            self.max_sessions_sb.setEnabled(True)
         self.mixing_ctl_btn.setText(psman.mixing_control_data())
 
     def update_balances(self):

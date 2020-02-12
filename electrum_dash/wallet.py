@@ -1140,6 +1140,9 @@ class Abstract_Wallet(AddressSynchronizer):
             raise Exception(_('Invalid Dash address.'))
         if not self.is_mine(addr):
             raise Exception(_('Address not in wallet.'))
+        ps_addrs = self.db.get_ps_addresses()
+        if addr in ps_addrs:
+            raise Exception(_('Address is reserved for PrivateSend use.'))
 
         amount = req.get('amount')
         message = req.get('memo')
@@ -1702,13 +1705,11 @@ class Deterministic_Wallet(Abstract_Wallet):
 
     def synchronize_sequence(self, for_change):
         limit = self.gap_limit_for_change if for_change else self.gap_limit
-        ps_reserved = self.db.get_ps_reserved()
         while True:
             if for_change:
                 addrs = self.get_change_addresses()
             else:
                 addrs = self.get_receiving_addresses()
-            addrs = [addr for addr in addrs if addr not in ps_reserved]
             num_addrs = len(addrs)
             if num_addrs < limit:
                 self.create_new_address(for_change)

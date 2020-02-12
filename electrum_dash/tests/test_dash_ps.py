@@ -17,7 +17,7 @@ from electrum_dash.dash_ps import (COLLATERAL_VAL, PSPossibleDoubleSpendError,
                                    PSTxWorkflow, PSDenominateWorkflow,
                                    PSMinRoundsCheckFailed, PS_DENOMS_VALS,
                                    FILTERED_TXID, filter_log_line,
-                                   KP_ALL_TYPES, PSStates)
+                                   KP_ALL_TYPES, PSStates, FILTERED_ADDR)
 from electrum_dash.dash_tx import PSTxTypes, PSCoinRounds, SPEC_TX_NAMES
 from electrum_dash.keystore import xpubkey_to_address
 from electrum_dash.simple_config import SimpleConfig
@@ -610,11 +610,11 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = self.wallet.psman
         assert psman.keep_amount == dash_ps.DEFAULT_KEEP_AMOUNT
 
-        psman.keep_amount = dash_ps.MIN_KEEP_AMOUNT - 0.1
-        assert psman.keep_amount == dash_ps.MIN_KEEP_AMOUNT
+        psman.keep_amount = psman.min_keep_amount - 0.1
+        assert psman.keep_amount == psman.min_keep_amount
 
-        psman.keep_amount = dash_ps.MAX_KEEP_AMOUNT + 0.1
-        assert psman.keep_amount == dash_ps.MAX_KEEP_AMOUNT
+        psman.keep_amount = psman.max_keep_amount + 0.1
+        assert psman.keep_amount == psman.max_keep_amount
 
         psman.keep_amount = 5
         assert psman.keep_amount == 5
@@ -627,11 +627,11 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = self.wallet.psman
         assert psman.mix_rounds == dash_ps.DEFAULT_MIX_ROUNDS
 
-        psman.mix_rounds = dash_ps.MIN_MIX_ROUNDS - 1
-        assert psman.mix_rounds == dash_ps.MIN_MIX_ROUNDS
+        psman.mix_rounds = psman.min_mix_rounds - 1
+        assert psman.mix_rounds == psman.min_mix_rounds
 
-        psman.mix_rounds = dash_ps.MAX_MIX_ROUNDS + 1
-        assert psman.mix_rounds == dash_ps.MAX_MIX_ROUNDS
+        psman.mix_rounds = psman.max_mix_rounds + 1
+        assert psman.mix_rounds == psman.max_mix_rounds
 
         psman.mix_rounds = 3
         assert psman.mix_rounds == 3
@@ -801,9 +801,7 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         w.synchronize_sequence(for_change=False)
         unused2 = w.get_unused_addresses()
-        assert len(unused2) == 20
-        for addr in unused2:
-            assert addr not in unused1
+        assert len(unused2) == 0
 
     def test_synchronize_sequence_for_change(self):
         w = self.wallet
@@ -824,9 +822,7 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         w.synchronize_sequence(for_change=True)
         unused2 = w.calc_unused_change_addresses()
-        assert len(unused2) == 6
-        for addr in unused2:
-            assert addr not in unused1
+        assert len(unused2) == 0
 
     def test_reserve_addresses(self):
         w = self.wallet
@@ -846,7 +842,7 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         res1 = psman.reserve_addresses(10)
         assert len(res1) == 10
-        res2 = psman.reserve_addresses(for_change=True, data='coll')
+        res2 = psman.reserve_addresses(1, for_change=True, data='coll')
         assert len(res2) == 1
         sel1 = w.db.select_ps_reserved()
         sel2 = w.db.select_ps_reserved(for_change=True, data='coll')
@@ -865,6 +861,29 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(get_addrs(include_ps=True, for_change=False)) == 333
         assert len(get_addrs(for_change=True)) == 17
         assert len(get_addrs(include_ps=True, for_change=True)) == 23
+
+    def test_first_unused_index(self):
+        w = self.wallet
+        psman = w.psman
+
+        assert psman.first_unused_index() == 313
+        assert psman.first_unused_index(for_change=True) == 7
+
+        assert w.db.num_receiving_addresses() == 333
+        assert w.db.num_change_addresses() == 23
+        assert len(w.get_unused_addresses()) == 20
+        assert len(w.calc_unused_change_addresses()) == 13
+
+        psman.reserve_addresses(20)
+        psman.reserve_addresses(13, for_change=True)
+
+        assert psman.first_unused_index() == 333
+        assert psman.first_unused_index(for_change=True) == 23
+
+        assert w.db.num_receiving_addresses() == 333
+        assert w.db.num_change_addresses() == 23
+        assert len(w.get_unused_addresses()) == 0
+        assert len(w.calc_unused_change_addresses()) == 0
 
     def test_add_ps_collateral(self):
         w = self.wallet
@@ -2267,37 +2286,37 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.keep_amount = 15
 
         psman.mix_rounds = 2
-        assert psman.calc_need_new_keypairs_cnt() == (246, 48)
+        assert psman.calc_need_new_keypairs_cnt() == (252, 18)
 
         psman.mix_rounds = 3
-        assert psman.calc_need_new_keypairs_cnt() == (369, 66)
+        assert psman.calc_need_new_keypairs_cnt() == (378, 26)
 
         psman.mix_rounds = 4
-        assert psman.calc_need_new_keypairs_cnt() == (492, 87)
+        assert psman.calc_need_new_keypairs_cnt() == (504, 34)
 
         psman.mix_rounds = 5
-        assert psman.calc_need_new_keypairs_cnt() == (615, 105)
+        assert psman.calc_need_new_keypairs_cnt() == (629, 42)
 
         psman.mix_rounds = 16
-        assert psman.calc_need_new_keypairs_cnt() == (1968, 306)
+        assert psman.calc_need_new_keypairs_cnt() == (2013, 135)
 
         coro = psman.find_untracked_ps_txs(log=False)  # find already mixed
         found_txs = asyncio.get_event_loop().run_until_complete(coro)
 
         psman.mix_rounds = 2
-        assert psman.calc_need_new_keypairs_cnt() == (289, 54)
+        assert psman.calc_need_new_keypairs_cnt() == (296, 21)
 
         psman.mix_rounds = 3
-        assert psman.calc_need_new_keypairs_cnt() == (511, 90)
+        assert psman.calc_need_new_keypairs_cnt() == (523, 36)
 
         psman.mix_rounds = 4
-        assert psman.calc_need_new_keypairs_cnt() == (733, 123)
+        assert psman.calc_need_new_keypairs_cnt() == (750, 51)
 
         psman.mix_rounds = 5
-        assert psman.calc_need_new_keypairs_cnt() == (955, 156)
+        assert psman.calc_need_new_keypairs_cnt() == (977, 66)
 
         psman.mix_rounds = 16
-        assert psman.calc_need_new_keypairs_cnt() == (3397, 522)
+        assert psman.calc_need_new_keypairs_cnt() == (3475, 232)
 
     def test_cache_keypairs(self):
         w = self.wallet
@@ -2308,7 +2327,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.keep_amount = 2
         psman._cache_keypairs(password=None)
         # cache_results by types: spendable, ps spendable, ps coins, ps change
-        cache_results = [137, 0, 168, 36]
+        cache_results = [137, 0, 172, 12]
         for i, cache_type in enumerate(KP_ALL_TYPES):
             assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
         psman._cleanup_all_keypairs_cache()
@@ -2317,7 +2336,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 4
         psman.keep_amount = 2
         psman._cache_keypairs(password=None)
-        cache_results = [137, 0, 336, 63]
+        cache_results = [137, 0, 344, 24]
         for i, cache_type in enumerate(KP_ALL_TYPES):
             assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
         psman._cleanup_all_keypairs_cache()
@@ -2326,7 +2345,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 4
         psman.keep_amount = 10
         psman._cache_keypairs(password=None)
-        cache_results = [137, 0, 368, 66]
+        cache_results = [137, 0, 377, 26]
         for i, cache_type in enumerate(KP_ALL_TYPES):
             assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
         psman._cleanup_all_keypairs_cache()
@@ -2338,7 +2357,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 2
         psman.keep_amount = 2
         psman._cache_keypairs(password=None)
-        cache_results = [5, 132, 107, 27]
+        cache_results = [5, 55, 110, 8]
         for i, cache_type in enumerate(KP_ALL_TYPES):
             assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
         psman._cleanup_all_keypairs_cache()
@@ -2347,7 +2366,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 4
         psman.keep_amount = 2
         psman._cache_keypairs(password=None)
-        cache_results = [5, 132, 369, 66]
+        cache_results = [5, 132, 378, 26]
         for i, cache_type in enumerate(KP_ALL_TYPES):
             assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
         psman._cleanup_all_keypairs_cache()
@@ -2356,13 +2375,14 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 4
         psman.keep_amount = 10
         psman._cache_keypairs(password=None)
-        cache_results = [5, 132, 717, 120]
+        cache_results = [5, 132, 734, 50]
         for i, cache_type in enumerate(KP_ALL_TYPES):
             assert len(psman._keypairs_cache[cache_type]) == cache_results[i]
         psman._cleanup_all_keypairs_cache()
         assert psman._keypairs_cache == {}
 
     def test_filter_log_line(self):
+        w = self.wallet
         test_line = ''
         assert filter_log_line(test_line) == test_line
 
@@ -2374,6 +2394,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         test_line = ('Error: err on checking tx %s from'
                      ' pay collateral workflow: wfl.uuid')
         assert filter_log_line(test_line % txid) == test_line % FILTERED_TXID
+
+        test_line = 'Error: %s not found'
+        filtered_line = filter_log_line(test_line % w.dummy_address())
+        assert filtered_line == test_line % FILTERED_ADDR
 
     def test_is_mine_slow(self):
         w = self.wallet

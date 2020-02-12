@@ -23,10 +23,11 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import threading
 from enum import IntEnum
 
-from PyQt5.QtCore import (Qt, QModelIndex, QAbstractItemModel, QVariant,
-                          QItemSelectionModel, QThread)
+from PyQt5.QtCore import (QThread, pyqtSignal, Qt, QModelIndex, QVariant,
+                          QAbstractItemModel, QItemSelectionModel)
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (QAbstractItemView, QHeaderView, QComboBox,
                              QLabel, QMenu)
@@ -51,16 +52,24 @@ class UTXOColumns(IntEnum):
 
 class GetDataThread(QThread):
 
-    def __init__(self, model, parent=None):
+    def __init__(self, model, data_ready_sig, parent=None):
         super(GetDataThread, self).__init__(parent)
         self.model = model
+        self.data_ready_sig = data_ready_sig
+        self.need_update = threading.Event()
+        self.coin_items = []
 
     def run(self):
-        self.coin_items = self.model.get_coins()
+        while True:
+            self.need_update.wait()
+            self.need_update.clear()
+            self.coin_items = self.model.get_coins()
+            self.data_ready_sig.emit()
 
 
 class UTXOModel(QAbstractItemModel, Logger):
 
+    data_ready = pyqtSignal()
     SELECT_ROWS = QItemSelectionModel.Rows | QItemSelectionModel.Select
 
     def __init__(self, parent):
@@ -69,6 +78,10 @@ class UTXOModel(QAbstractItemModel, Logger):
         self.parent = parent
         self.wallet = self.parent.wallet
         self.coin_items = list()
+        # setup bg thread to get updated data
+        self.data_ready.connect(self.on_get_data, Qt.BlockingQueuedConnection)
+        self.get_data_thread = GetDataThread(self, self.data_ready, self)
+        self.get_data_thread.start()
 
     def set_view(self, utxo_list):
         self.view = view = utxo_list
@@ -258,6 +271,9 @@ class UTXOModel(QAbstractItemModel, Logger):
                 idx = self.index(i, 0, QModelIndex())
                 self.view.selectionModel().select(idx, self.SELECT_ROWS)
 
+    def on_get_data(self):
+        self.refresh(self.get_data_thread.coin_items)
+
     @profiler
     def refresh(self, coin_items):
         if coin_items == self.coin_items:
@@ -318,12 +334,7 @@ class UTXOList(MyTreeView):
         self.update()
 
     def update(self):
-        #bg_thread = GetDataThread(self.cm)
-        #def on_get_data():
-        #    self.cm.refresh(bg_thread.coin_items)
-        #bg_thread.finished.connect(on_get_data)
-        #bg_thread.start()
-        self.cm.refresh(self.cm.get_coins())
+        self.cm.get_data_thread.need_update.set()
 
     def create_menu(self, position):
         w = self.wallet

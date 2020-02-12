@@ -194,6 +194,23 @@ Builder.load_string('''
             on_release: root.dismiss(spinbox.value)
 
 
+<KPTimeoutPopup@Popup>
+    title: root.title
+    size_hint: 0.8, 0.5
+    spinbox: spinbox
+    BoxLayout:
+        padding: dp(10), dp(10)
+        spacing: dp(10)
+        orientation: 'vertical'
+        SpinBox:
+            id: spinbox
+            size_hint: 1, 0.7
+        Button:
+            text: _('Set')
+            size_hint: 1, 0.3
+            on_release: root.dismiss(spinbox.value)
+
+
 <SettingsProgress@ButtonBehavior+BoxLayout>
     orientation: 'vertical'
     title: ''
@@ -291,6 +308,11 @@ Builder.load_string('''
                 title: root.max_sessions_text + ': %s' % root.max_sessions
                 description: root.max_sessions_help
                 action: root.show_max_sessions_popup
+            CardSeparator
+            SettingsItem:
+                title: root.kp_timeout_text + ': %s' % root.kp_timeout
+                description: root.kp_timeout_help
+                action: root.show_kp_timeout_popup
             CardSeparator
             SettingsItem:
                 value: ': ON' if root.group_history else ': OFF'
@@ -480,8 +502,8 @@ class KeepAmountPopup(Popup):
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.keep_amount_text
-        self.spinbox.min_val = psman.keep_amount_data(minv=True)
-        self.spinbox.max_val = psman.keep_amount_data(maxv=True)
+        self.spinbox.min_val = psman.min_keep_amount
+        self.spinbox.max_val = psman.max_keep_amount
         self.spinbox.value = self.psdlg.keep_amount
 
     def dismiss(self, value=None):
@@ -502,8 +524,8 @@ class MixRoundsPopup(Popup):
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.mix_rounds_text
-        self.spinbox.min_val = psman.mix_rounds_data(minv=True)
-        self.spinbox.max_val = psman.mix_rounds_data(maxv=True)
+        self.spinbox.min_val = psman.min_mix_rounds
+        self.spinbox.max_val = psman.max_mix_rounds
         self.spinbox.value = self.psdlg.mix_rounds
 
     def dismiss(self, value=None):
@@ -525,8 +547,8 @@ class MaxSessionsPopup(Popup):
         self.psdlg = psdlg
         self.psman = psman = psdlg.psman
         self.title = self.psdlg.max_sessions_text
-        self.spinbox.min_val = psman.max_sessions_data(minv=True)
-        self.spinbox.max_val = psman.max_sessions_data(maxv=True)
+        self.spinbox.min_val = psman.min_max_sessions
+        self.spinbox.max_val = psman.max_max_sessions
         self.spinbox.value = self.psdlg.max_sessions
 
     def dismiss(self, value=None):
@@ -536,6 +558,28 @@ class MaxSessionsPopup(Popup):
         if value is not None and value != self.psman.max_sessions:
             self.psman.max_sessions = value
             self.psdlg.max_sessions = value
+
+
+class KPTimeoutPopup(Popup):
+
+    spinbox = ObjectProperty(None)
+
+    def __init__(self, psdlg):
+        super(KPTimeoutPopup, self).__init__()
+        self.psdlg = psdlg
+        self.psman = psman = psdlg.psman
+        self.title = self.psdlg.kp_timeout_text
+        self.spinbox.min_val = psman.min_kp_timeout
+        self.spinbox.max_val = psman.max_kp_timeout
+        self.spinbox.value = self.psdlg.kp_timeout
+
+    def dismiss(self, value=None):
+        if self.spinbox.err.text:
+            return
+        super(KPTimeoutPopup, self).dismiss()
+        if value is not None and value != self.psman.kp_timeout:
+            self.psman.kp_timeout = value
+            self.psdlg.kp_timeout = value
 
 
 class MixingProgressPopup(Popup):
@@ -558,6 +602,7 @@ class PSMixingTab(BoxLayout):
     keep_amount = NumericProperty()
     mix_rounds = NumericProperty()
     max_sessions = NumericProperty()
+    kp_timeout = NumericProperty()
     mixing_control_text = StringProperty()
     mix_prog = NumericProperty()
     dn_balance = StringProperty()
@@ -575,30 +620,33 @@ class PSMixingTab(BoxLayout):
         self.warn_electrumx_text = psman.warn_electrumx_data()
         self.warn_electrumx_help = psman.warn_electrumx_data(help_txt=True)
 
-        self.keep_amount_text = psman.keep_amount_data(short_txt=True)
+        self.keep_amount_text = psman.keep_amount_data()
         self.keep_amount_help = psman.keep_amount_data(full_txt=True)
 
-        self.mix_rounds_text = psman.mix_rounds_data(short_txt=True)
+        self.mix_rounds_text = psman.mix_rounds_data()
         self.mix_rounds_help = psman.mix_rounds_data(full_txt=True)
 
-        self.max_sessions_text = psman.max_sessions_data(short_txt=True)
+        self.max_sessions_text = psman.max_sessions_data()
         self.max_sessions_help = psman.max_sessions_data(full_txt=True)
+
+        self.kp_timeout_text = psman.kp_timeout_data()
+        self.kp_timeout_help = psman.kp_timeout_data(full_txt=True)
 
         self.mixing_control_help = psman.mixing_control_data(full_txt=True)
 
-        self.mix_prog_text = psman.mixing_progress_data(short_txt=True)
+        self.mix_prog_text = psman.mixing_progress_data()
         self.mix_prog_help = psman.mixing_progress_data(full_txt=True)
 
-        self.ps_balance_text = psman.ps_balance_data(short_txt=True)
+        self.ps_balance_text = psman.ps_balance_data()
         self.ps_balance_help = psman.ps_balance_data(full_txt=True)
 
-        self.dn_balance_text = psman.dn_balance_data(short_txt=True)
+        self.dn_balance_text = psman.dn_balance_data()
         self.dn_balance_help = psman.dn_balance_data(full_txt=True)
 
-        self.group_history_text = psman.group_history_data(short_txt=True)
+        self.group_history_text = psman.group_history_data()
         self.group_history_help = psman.group_history_data(full_txt=True)
 
-        self.subscribe_spent_text = psman.subscribe_spent_data(short_txt=True)
+        self.subscribe_spent_text = psman.subscribe_spent_data()
         self.subscribe_spent_help = psman.subscribe_spent_data(full_txt=True)
 
         super(PSMixingTab, self).__init__()
@@ -611,6 +659,7 @@ class PSMixingTab(BoxLayout):
         self.keep_amount = psman.keep_amount
         self.mix_rounds = psman.mix_rounds
         self.max_sessions = psman.max_sessions
+        self.kp_timeout = psman.kp_timeout
         self.mixing_control_text = psman.mixing_control_data()
         self.mix_prog = psman.mixing_progress()
         r = psman.mix_rounds
@@ -639,11 +688,10 @@ class PSMixingTab(BoxLayout):
         MixRoundsPopup(self).open(self.psman)
 
     def show_max_sessions_popup(self, *args):
-        psman = self.psman
-        if psman.state in psman.mixing_running_states:
-            self.app.show_info(_('To change value stop mixing process'))
-            return
         MaxSessionsPopup(self).open(self.psman)
+
+    def show_kp_timeout_popup(self, *args):
+        KPTimeoutPopup(self).open(self.psman)
 
     def on_mixing_control(self, *args):
         psman = self.psman
