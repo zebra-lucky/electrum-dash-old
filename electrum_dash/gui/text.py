@@ -135,7 +135,6 @@ class ElectrumGui:
         self.print_list(self.history[::-1], headers)
 
     def update_history(self):
-        b = 0
         self.history = []
         hist_list = self.wallet.get_history(config=self.config)
         for (tx_hash, tx_type, tx_mined_status, value, balance,

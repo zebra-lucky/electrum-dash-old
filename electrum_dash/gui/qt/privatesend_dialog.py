@@ -3,7 +3,7 @@
 import time
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QTextCharFormat, QPainter, QTextCursor, QIcon
+from PyQt5.QtGui import QColor, QPainter, QTextCursor, QIcon
 from PyQt5.QtWidgets import (QPlainTextEdit, QCheckBox, QSpinBox, QVBoxLayout,
                              QPushButton, QLabel, QDialog, QGridLayout,
                              QTabWidget, QWidget, QProgressBar, QHBoxLayout,
@@ -33,7 +33,7 @@ class FilteredPlainTextEdit(QPlainTextEdit):
 
         menu = self.createStandardContextMenu(event.pos())
         menu.insertAction(menu.actions()[0], f_copy)
-        action = menu.exec_(event.globalPos())
+        menu.exec_(event.globalPos())
 
     def copy_filtered(self):
         cursor = self.textCursor()
@@ -165,7 +165,7 @@ class PSDialog(QDialog, MessageBoxMixin):
         self.setWindowIcon(read_QIcon('electrum-dash.png'))
         self.mwin = mwin
         self.wallet = mwin.wallet
-        self.psman = psman = mwin.wallet.psman
+        self.psman = mwin.wallet.psman
         title = '%s - %s' % (_('PrivateSend'), str(self.wallet))
         self.setWindowTitle(title)
         self.ps_signal_connected = False
@@ -244,6 +244,10 @@ class PSDialog(QDialog, MessageBoxMixin):
             wallet = args[0]
             if wallet == self.wallet:
                 self.info_update()
+        elif event in ['ps-reserved-changes', 'ps-keypairs-changes']:
+            wallet = args[0]
+            if wallet == self.wallet:
+                self.info_update()
         elif event == 'ps-data-changes':
             wallet = args[0]
             if wallet == self.wallet:
@@ -258,7 +262,6 @@ class PSDialog(QDialog, MessageBoxMixin):
     def add_mixing_tab(self):
         self.mixing_tab = QWidget()
         grid = QGridLayout(self.mixing_tab)
-        wallet = self.wallet
         psman = self.psman
 
         # warn_electrumx
@@ -320,8 +323,9 @@ class PSDialog(QDialog, MessageBoxMixin):
 
         def mixing_ctl_btn_pressed():
             if psman.state == PSStates.Ready:
-                if psman.check_need_new_keypairs():
-                    self.start_mixing()
+                need_new_kp, prev_kp_state = psman.check_need_new_keypairs()
+                if need_new_kp:
+                    self.start_mixing(prev_kp_state)
                 else:
                     psman.start_mixing(None)
             elif psman.state == PSStates.Mixing:
@@ -440,12 +444,13 @@ class PSDialog(QDialog, MessageBoxMixin):
         grid.setColumnStretch(2, 1)
         self.tabs.addTab(self.mixing_tab, _('Mixing'))
 
-    def start_mixing(self):
+    def start_mixing(self, prev_kp_state):
         password = None
         while self.wallet.has_password():
             password = self.mwin.password_dialog(parent=self)
             if password is None:
                 # User cancelled password input
+                self.psman.keypairs_state = prev_kp_state
                 return
             try:
                 self.wallet.check_password(password)
@@ -505,7 +510,6 @@ class PSDialog(QDialog, MessageBoxMixin):
         self.tabs.addTab(self.log_tab, _('Log'))
 
     def update_mixing_status(self):
-        wallet = self.wallet
         psman = self.psman
         if psman.state in [PSStates.Disabled, PSStates.Ready, PSStates.Mixing]:
             self.mixing_ctl_btn.setEnabled(True)

@@ -168,8 +168,8 @@ class MNList(Logger):
         server_height = self.network.get_server_height()
         if server_height <= constants.net.DIP3_ACTIVATION_HEIGHT:
             return False
-        if server_height - self.protx_height > 1:
-            return False
+        if server_height - self.protx_height > 24:
+            return False  # if more than 24 blocks difference report not ready
         if len(self.protx_mns) == 0:
             return False
         else:
@@ -196,8 +196,8 @@ class MNList(Logger):
         server_height = self.network.get_server_height()
         if server_height <= constants.net.DIP3_ACTIVATION_HEIGHT:
             return False
-        if server_height - self.llmq_height > 1 + self.LLMQ_OFFSET:
-            return False
+        if server_height - self.llmq_height > 24 + self.LLMQ_OFFSET:
+            return False  # if more than 24 blocks difference report not ready
         if len(self.quorums) == 0:
             return False
         else:

@@ -763,14 +763,14 @@ class JsonDB(Logger):
     def get_ps_spending_collaterals(self):
         return self.ps_spending_collaterals
 
-    @modifier
-    def add_ps_reserved(self, addr, data):
+    @modifier  # do not use directly, use PSManager method of the same name
+    def _add_ps_reserved(self, addr, data):
         if addr in self.ps_reserved:
             raise WalletFileException(f'Address {addr} already in ps_reserved')
         self.ps_reserved[addr] = data
 
-    @modifier
-    def pop_ps_reserved(self, addr):
+    @modifier  # do not use directly, use PSManager method of the same name
+    def _pop_ps_reserved(self, addr):
         return self.ps_reserved.pop(addr, None)
 
     @locked

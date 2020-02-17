@@ -110,7 +110,10 @@ class GetDataThread(QThread):
             self.need_update.wait()
             self.need_update.clear()
             self.res = self.model.get_full_history_for_model(self.group_ps)
-            self.data_ready_sig.emit()
+            try:
+                self.data_ready_sig.emit()
+            except AttributeError:
+                pass  # data_ready signal is already unbound on gui close
 
 
 class HistoryModel(QAbstractItemModel, Logger):
@@ -327,8 +330,6 @@ class HistoryModel(QAbstractItemModel, Logger):
         tx_item = index.internalPointer()
         tx_hash = tx_item['txid']
         conf = tx_item['confirmations']
-        txpos = tx_item['txpos_in_block'] or 0
-        height = tx_item['height']
         islock = tx_item['islock']
         is_parent = ('group_label' in tx_item)
         if is_parent and tx_hash in self.expanded_groups:
@@ -451,7 +452,6 @@ class HistoryModel(QAbstractItemModel, Logger):
         tx_tree = []
         for i, tx_item in enumerate(r['transactions'][::-1]):
             tx_item['ix'] = i
-            txid = tx_item['txid']
             group_data = tx_item.pop('group_data')
             group_txid = tx_item['group_txid']
             if not group_ps:
@@ -904,7 +904,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         is_parent = ('group_label' in tx_item)
         txid = tx_item['txid']
         if self.hm.flags(idx) & Qt.ItemIsEditable:
-            if is_parent and not txid in self.hm.expanded_groups:
+            if is_parent and txid not in self.hm.expanded_groups:
                 self.show_transaction(txid)
             else:
                 super().mouseDoubleClickEvent(event)
@@ -965,7 +965,6 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         tx_URL = block_explorer_URL(self.config, 'tx', tx_hash)
         height = self.wallet.get_tx_height(tx_hash).height
         is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(tx)
-        is_unconfirmed = height <= 0
         pr_key = self.wallet.invoices.paid.get(tx_hash)
         menu = QMenu()
         if group_txid:

@@ -6,8 +6,6 @@ from decimal import Decimal
 
 from electrum_dash.bitcoin import COIN
 
-from electrum_dash.gui.kivy.uix.dialogs.warn_dialog import WarnDialog
-
 
 Builder.load_string('''
 
@@ -160,7 +158,6 @@ class AmountDialog(Factory.Popup):
         if not self.is_spend:
             main_box.remove_widget(available_amount_box)
         else:
-            wallet = self.app.wallet
             self.recalc_available_amount()
 
     def update_amount(self, c):

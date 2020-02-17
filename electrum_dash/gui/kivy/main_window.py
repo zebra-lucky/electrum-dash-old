@@ -629,6 +629,7 @@ class ElectrumWindow(App):
 
     def on_stop(self):
         Logger.info('on_stop')
+        self.history_screen.stop_get_data_thread()
         if self.wallet:
             self.electrum_config.save_last_wallet(self.wallet)
         self.stop_wallet()
@@ -667,6 +668,19 @@ class ElectrumWindow(App):
         if key in (319, 282): #f1/settings button on android
             #self.gui.main_gui.toggle_settings(self)
             return True
+
+        if key == 27 and self.is_exit:
+            psman = self.wallet.psman
+            if psman.state in psman.mixing_running_states:
+                def on_want_exit(b):
+                    if b:
+                        self.stop()
+                from .uix.dialogs.question import Question
+                d = Question(psman.WAIT_MIXING_STOP_MSG, on_want_exit)
+                d.open()
+                return True
+            else:
+                return False
 
     def settings_dialog(self):
         from .uix.dialogs.settings import SettingsDialog
@@ -797,6 +811,10 @@ class ElectrumWindow(App):
             wallet = args[0]
             if wallet == self.wallet:
                 self._trigger_update_wallet()
+        if event == 'ps-reserved-changes':
+            wallet = args[0]
+            if wallet == self.wallet:
+                self._trigger_update_wallet()
         elif event == 'ps-state-changes':
             wallet, msg, msg_type = args
             if wallet == self.wallet:
@@ -813,7 +831,7 @@ class ElectrumWindow(App):
         wallet = self.wallet
         if wallet:
             psman = wallet.psman
-            is_mixing = (psman.state == psman.states.Mixing)
+            is_mixing = (psman.state in psman.mixing_running_states)
         if is_mixing:
             ps_button.icon = self.ps_icon(active=True)
         else:
@@ -827,6 +845,7 @@ class ElectrumWindow(App):
         self.wallet.psman.config = self.electrum_config
         self.wallet.psman.register_callback(self.on_ps_callback,
                                             ['ps-data-changes',
+                                             'ps-reserved-changes',
                                              'ps-state-changes'])
         self.wallet_name = wallet.basename()
         self.update_wallet()

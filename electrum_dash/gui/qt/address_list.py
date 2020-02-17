@@ -67,7 +67,10 @@ class GetDataThread(QThread):
             self.need_update.wait()
             self.need_update.clear()
             self.addr_items = self.model.get_addresses()
-            self.data_ready_sig.emit()
+            try:
+                self.data_ready_sig.emit()
+            except AttributeError:
+                pass  # data_ready signal is already unbound on gui close
 
 
 class AddressModel(QAbstractItemModel, Logger):
@@ -87,7 +90,7 @@ class AddressModel(QAbstractItemModel, Logger):
         self.get_data_thread.start()
 
     def set_view(self, address_list):
-        self.view = view = address_list
+        self.view = address_list
         self.view.refresh_headers()
 
     def headerData(self, section, orientation, role):

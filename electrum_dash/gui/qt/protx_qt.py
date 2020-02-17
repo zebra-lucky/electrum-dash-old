@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import time
 from pprint import pformat
 
 from PyQt5.QtGui import QColor, QPixmap

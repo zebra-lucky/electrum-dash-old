@@ -275,6 +275,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.wallet.psman.register_callback(self.on_ps_callback,
                                             ['ps-log-changes',
                                              'ps-wfl-changes',
+                                             'ps-keypairs-changes',
+                                             'ps-reserved-changes',
                                              'ps-data-changes',
                                              'ps-state-changes'])
 
@@ -432,6 +434,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             wallet = args[0]
             if wallet == self.wallet:
                 self.need_update.set()
+        elif event == 'ps-reserved-changes':
+            wallet = args[0]
+            if wallet == self.wallet:
+                self.need_update.set()
         elif event == 'ps-state-changes':
             wallet, msg, msg_type = args
             if wallet == self.wallet:
@@ -458,7 +464,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
     def update_ps_status_btn(self):
         psman = self.wallet.psman
-        is_mixing = (psman.state == psman.states.Mixing)
+        is_mixing = (psman.state in psman.mixing_running_states)
         icon = 'privatesend_active.png' if is_mixing else 'privatesend.png'
         self.ps_button.setIcon(read_QIcon(icon))
         ps = _('PrivateSend')
@@ -989,6 +995,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if wallet != self.wallet:
             return
         self.history_model.refresh('update_tabs')
+        self.update_receive_address_styling()
         self.request_list.update()
         self.address_list.update()
         self.utxo_list.update()
@@ -1279,10 +1286,17 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
     def update_receive_address_styling(self):
         addr = str(self.receive_address_e.text())
+        recv_addr_e = self.receive_address_e
         if self.wallet.is_used(addr):
-            self.receive_address_e.setStyleSheet(ColorScheme.RED.as_stylesheet(True))
-            self.receive_address_e.setToolTip(_("This address has already been used. "
-                                                "For better privacy, do not reuse it for new payments."))
+            recv_addr_e.setStyleSheet(ColorScheme.RED.as_stylesheet(True))
+            recv_addr_e.setToolTip(_('This address has already been used.'
+                                     ' For better privacy, do not reuse it'
+                                     ' for new payments.'))
+        elif addr in self.wallet.db.get_ps_reserved():
+            recv_addr_e.setStyleSheet(ColorScheme.RED.as_stylesheet(True))
+            recv_addr_e.setToolTip(_('This address has been reserved for'
+                                     ' PrivateSend use. For better privacy,'
+                                     ' do not use it for new payments.'))
         else:
             self.receive_address_e.setStyleSheet("")
             self.receive_address_e.setToolTip("")
@@ -3553,6 +3567,11 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
     def closeEvent(self, event):
         # It seems in some rare cases this closeEvent() is called twice
+        psman = self.wallet.psman
+        if psman.state in psman.mixing_running_states:
+            if not self.question(psman.WAIT_MIXING_STOP_MSG):
+                event.ignore()
+                return
         if not self.cleaned_up:
             self.cleaned_up = True
             self.clean_up()

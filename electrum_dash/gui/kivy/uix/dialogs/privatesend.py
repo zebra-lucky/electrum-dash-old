@@ -12,7 +12,6 @@ from kivy.uix.popup import Popup
 from kivy.uix.recycleview.layout import LayoutSelectionBehavior
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.recycleboxlayout import RecycleBoxLayout
-from kivy.uix.tabbedpanel import TabbedPanelHeader
 
 from electrum_dash.gui.kivy.i18n import _
 from electrum_dash.gui.kivy.uix.dialogs.question import Question
@@ -696,18 +695,26 @@ class PSMixingTab(BoxLayout):
     def on_mixing_control(self, *args):
         psman = self.psman
         if psman.state == PSStates.Ready:
-            if psman.check_need_new_keypairs():
-                self.app.protected(_('Enter your PIN code to start mixing'),
-                                   self._start_mixing, ())
+            need_new_kp, prev_kp_state = psman.check_need_new_keypairs()
+            if need_new_kp:
+                self.start_mixing(prev_kp_state)
             else:
-                self._start_mixing(None)
+                self.psman.start_mixing(None)
         elif psman.state == PSStates.Mixing:
             psman.stop_mixing()
         elif psman.state == PSStates.Disabled:
             psman.enable_ps()
 
-    def _start_mixing(self, password):
-        self.psman.start_mixing(password)
+    def start_mixing(self, prev_kp_state):
+        def on_success_pwd(password):
+            self.psman.start_mixing(password)
+
+        def on_fail_pwd():
+            self.psman.keypairs_state = prev_kp_state
+
+        w = self.app.wallet
+        self.app.password_dialog(w, _('Enter your PIN code to start mixing'),
+                                 on_success_pwd, on_fail_pwd)
 
     def toggle_fiat_dn_balance(self, *args):
         if not self.app.fx.is_enabled():
@@ -740,10 +747,6 @@ class PSMixingTab(BoxLayout):
         d = MixingProgressPopup(self)
         d.open()
 
-    def show_ps_info_popup(self, *args):
-        d = PSInfoDialog(self.app)
-        d.open()
-
     def toggle_group_history(self, *args):
         self.psman.group_history = not self.psman.group_history
         self.group_history = self.psman.group_history
@@ -763,7 +766,7 @@ class PSInfoTab(BoxLayout):
         super(PSInfoTab, self).__init__()
         self.app = app
         self.wallet = wallet = app.wallet
-        self.psman = psman = wallet.psman
+        self.psman = wallet.psman
         self.update()
         self.data_buttons_update()
         self.rv.btns.remove_widget(self.rv.btns.copy_filtered)
@@ -785,6 +788,7 @@ class PSInfoTab(BoxLayout):
 
     def clear_ps_data(self):
         psman = self.psman
+
         def _clear_ps_data(b: bool):
             if b:
                 psman.clear_ps_data()
@@ -864,6 +868,8 @@ class PSDialog(Popup):
         self.psman.register_callback(self.on_ps_callback,
                                      ['ps-log-changes',
                                       'ps-wfl-changes',
+                                      'ps-keypairs-changes',
+                                      'ps-reserved-changes',
                                       'ps-data-changes',
                                       'ps-state-changes'])
         if self.psman.show_warn_electrumx:
@@ -904,6 +910,10 @@ class PSDialog(Popup):
                 ps_balance = self.app.format_amount_and_units(val)
                 self.ps_balance = ps_balance
                 self.mix_prog = psman.mixing_progress()
+                self.info_tab.update()
+        elif event in ['ps-reserved-changes', 'ps-keypairs-changes']:
+            wallet = args[0]
+            if wallet == self.wallet:
                 self.info_tab.update()
         elif event == 'ps-state-changes':
             wallet, msg, msg_type = args

@@ -64,7 +64,10 @@ class GetDataThread(QThread):
             self.need_update.wait()
             self.need_update.clear()
             self.coin_items = self.model.get_coins()
-            self.data_ready_sig.emit()
+            try:
+                self.data_ready_sig.emit()
+            except AttributeError:
+                pass  # data_ready signal is already unbound on gui close
 
 
 class UTXOModel(QAbstractItemModel, Logger):
@@ -84,7 +87,7 @@ class UTXOModel(QAbstractItemModel, Logger):
         self.get_data_thread.start()
 
     def set_view(self, utxo_list):
-        self.view = view = utxo_list
+        self.view = utxo_list
 
     def headerData(self, section, orientation, role):
         if role != Qt.DisplayRole:
@@ -169,7 +172,7 @@ class UTXOModel(QAbstractItemModel, Logger):
                 return QVariant(_('Address is frozen'))
             elif col == UTXOColumns.OUTPOINT:
                 if is_frozen_coin:
-                    return QVariant(f'{name}\n{_("Coin is frozen")}')
+                    return QVariant(f'{outpoint}\n{_("Coin is frozen")}')
                 else:
                     return QVariant(outpoint)
         elif role not in (Qt.DisplayRole, Qt.EditRole):

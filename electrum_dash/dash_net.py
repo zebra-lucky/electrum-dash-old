@@ -436,13 +436,11 @@ class DashNet(Logger):
             return False
         return True
 
-    async def get_recent_dsq(self, recent_mixes_mns):
-        while True:
-            while len(self.recent_dsq) > 0:
-                dsq = self.recent_dsq.popleft()
-                if self.is_suitable_dsq(dsq, recent_mixes_mns):
-                    return dsq
-            await asyncio.sleep(0.2)
+    def get_recent_dsq(self, recent_mixes_mns):
+        while len(self.recent_dsq) > 0:
+            dsq = self.recent_dsq.popleft()
+            if self.is_suitable_dsq(dsq, recent_mixes_mns):
+                return dsq
 
     @log_exceptions
     async def set_parameters(self):

@@ -2,6 +2,7 @@ from weakref import ref
 from decimal import Decimal
 import re
 import datetime
+import threading
 import traceback, sys
 
 from kivy.app import App
@@ -136,6 +137,33 @@ TX_ICONS = [
     "confirmed",
 ]
 
+
+class GetHistoryDataThread(threading.Thread):
+
+    def __init__(self, screen):
+        super(GetHistoryDataThread, self).__init__()
+        self.screen = screen
+        self.need_update = threading.Event()
+        self.res = []
+        self._stopped = False
+
+    def run(self):
+        app = self.screen.app
+        while True:
+            self.need_update.wait()
+            self.need_update.clear()
+            if self._stopped:
+                return
+            config = app.electrum_config
+            group_ps = app.wallet.psman.group_history
+            res = app.wallet.get_history(config=config, group_ps=group_ps)
+            Clock.schedule_once(lambda dt: self.screen.update_data(res))
+
+    def stop(self):
+        self._stopped = True
+        self.need_update.set()
+
+
 class HistoryScreen(CScreen):
 
     tab = ObjectProperty(None)
@@ -155,6 +183,11 @@ class HistoryScreen(CScreen):
         self.expanded_groups = set()
         self.history = []
         self.selected_txid = ''
+        self.get_data_thread = None
+
+    def stop_get_data_thread(self):
+        if self.get_data_thread is not None:
+            self.get_data_thread.stop()
 
     def show_tx(self, data):
         tx_hash = data['tx_hash']
@@ -221,7 +254,7 @@ class HistoryScreen(CScreen):
         ri['screen'] = self
         ri['tx_hash'] = tx_hash
         ri['tx_type'] = SPEC_TX_NAMES.get(tx_type, str(tx_type))
-        ri['icon'] = icon = self.atlas_path + TX_ICONS[status]
+        ri['icon'] = self.atlas_path + TX_ICONS[status]
         ri['group_icn'] = group_icn
         ri['group_txid'] = group_txid
         ri['date'] = status_str
@@ -291,14 +324,21 @@ class HistoryScreen(CScreen):
         self.expanded_groups = expanded_groups
         return selected_node, txs
 
+    @profiler
     def update(self, reload_history=True):
         if self.app.wallet is None:
             return
+        if self.get_data_thread is None:
+            self.get_data_thread = GetHistoryDataThread(self)
+            self.get_data_thread.start()
         if reload_history:
-            config = self.app.electrum_config
-            group_ps = self.app.wallet.psman.group_history
-            self.history = self.app.wallet.get_history(config=config,
-                                                       group_ps=group_ps)
+            self.get_data_thread.need_update.set()
+        else:
+            self.update_data(self.history)
+
+    @profiler
+    def update_data(self, history):
+        self.history = history
         selected_txid = self.selected_txid
         self.clear_selection()
         self.selected_txid = selected_txid
@@ -431,7 +471,7 @@ class SendScreen(CScreen):
         config = self.app.electrum_config
         wallet = self.app.wallet
         mix_rounds = None if not is_ps else wallet.psman.mix_rounds
-        include_ps = (min_rounds is None)
+        include_ps = (mix_rounds is None)
         coins = wallet.get_spendable_coins(None, config, include_ps=include_ps,
                                            min_rounds=mix_rounds)
         try:
@@ -493,7 +533,6 @@ class SendScreen(CScreen):
         d = CheckBoxDialog(_('PrivateSend'),
                            _('Send coins as a PrivateSend transaction'),
                            self.is_ps, ps_dialog_cb)
-        wallet = self.app.wallet
         d.open()
 
 
@@ -505,8 +544,16 @@ class ReceiveScreen(CScreen):
         if not self.screen.address:
             self.get_new_address()
         else:
-            status = self.app.wallet.get_request_status(self.screen.address)
-            self.screen.status = _('Payment received') if status == PR_PAID else ''
+            addr = self.screen.address
+            req = self.app.wallet.get_payment_request(addr,
+                                                      self.app.electrum_config)
+            if req:
+                if req.get('status', PR_UNKNOWN) == PR_PAID:
+                    self.screen.status = _('Payment received')
+                else:
+                    self.screen.status = ''
+            else:
+                self.set_address_status(addr)
 
     def clear(self):
         self.screen.address = ''
@@ -532,20 +579,37 @@ class ReceiveScreen(CScreen):
         self.screen.address = addr
         return unused
 
+    def set_address_status(self, addr):
+        if self.app.wallet.is_used(addr):
+            self.screen.status = _('This address has already been used.'
+                                   ' For better privacy, do not reuse it'
+                                   ' for new payments.')
+        elif addr in self.app.wallet.db.get_ps_reserved():
+            self.screen.status = _('This address has been reserved for'
+                                   ' PrivateSend use. For better privacy,'
+                                   ' do not use it for new payments.')
+        else:
+            self.screen.status = ''
+
     def on_address(self, addr):
         req = self.app.wallet.get_payment_request(addr, self.app.electrum_config)
-        self.screen.status = ''
         if req:
             self.screen.message = req.get('memo', '')
             amount = req.get('amount')
             self.screen.amount = self.app.format_amount_and_units(amount) if amount else ''
             status = req.get('status', PR_UNKNOWN)
             self.screen.status = _('Payment received') if status == PR_PAID else ''
+        else:
+            self.set_address_status(addr)
         Clock.schedule_once(lambda dt: self.update_qr())
 
     def get_URI(self):
         from electrum_dash.util import create_bip21_uri
         amount = self.screen.amount
+        addr = self.screen.address
+        if (self.app.wallet.is_used(addr)
+                or addr in self.app.wallet.db.get_ps_reserved()):
+            return ''
         if amount:
             a, u = self.screen.amount.split()
             assert u == self.app.base_unit
@@ -560,12 +624,14 @@ class ReceiveScreen(CScreen):
 
     def do_share(self):
         uri = self.get_URI()
-        self.app.do_share(uri, _("Share Dash Request"))
+        if uri:
+            self.app.do_share(uri, _("Share Dash Request"))
 
     def do_copy(self):
         uri = self.get_URI()
-        self.app._clipboard.copy(uri)
-        self.app.show_info(_('Request copied to clipboard'))
+        if uri:
+            self.app._clipboard.copy(uri)
+            self.app.show_info(_('Request copied to clipboard'))
 
     def save_request(self):
         addr = self.screen.address
@@ -591,7 +657,21 @@ class ReceiveScreen(CScreen):
     def do_new(self):
         is_unused = self.get_new_address()
         if not is_unused:
-            self.app.show_info(_('Please use the existing requests first.'))
+            from electrum_dash.gui.kivy.uix.dialogs.question import Question
+            q = _('Warning: The next address will not be recovered'
+                  ' automatically if you restore your wallet from seed;'
+                  ' you may need to add it manually.\n\nThis occurs because'
+                  ' you have too many unused addresses in your wallet.'
+                  ' To avoid this situation, use the existing addresses'
+                  ' first.\n\nCreate anyway?')
+            d = Question(q, self._create_new_address)
+            d.open()
+
+    def _create_new_address(self, create):
+        if create:
+            self.app.wallet.create_new_address(False)
+            self.screen.address = ''
+            self.update()
 
     def do_save(self):
         if self.save_request():

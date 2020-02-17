@@ -300,7 +300,7 @@ class ElectrumGui:
             cmd = cmd.lower()
             subcmds = cmd[1:].split()
             print_filtered = True if 'f' in subcmds else False
-            print_tail = True if not 'a' in subcmds else False
+            print_tail = True if 'a' not in subcmds else False
             log_handler = self.wallet.psman.log_handler
             p_from = log_handler.tail - 20 if print_tail else log_handler.head
             p_from = max(p_from, log_handler.head)
