@@ -1725,15 +1725,26 @@ class PSWalletTestCase(TestCaseForTestnet):
             [100001]*11 + [1000010]*4,
             [100001]*8,
         ]
-        for txid in wfl.tx_order:
-            test_amounts = all_test_amounts.pop(0)
+        for i, txid in enumerate(wfl.tx_order):
             tx = w.db.get_transaction(txid)
-            if txid == wfl.tx_order[0]:  # check ps_collateral amount
-                assert tx.outputs()[0].value == CREATE_COLLATERAL_VAL
-                outputs_v = [o.value for o in tx.outputs()[1:-1]]  # no change
+            collaterals_count = 0
+            denoms_count = 0
+            change_count = 0
+            for o in tx.outputs():
+                val = o.value
+                if val == CREATE_COLLATERAL_VAL:
+                    collaterals_count += 1
+                elif val in PS_DENOMS_VALS:
+                    assert all_test_amounts[i][denoms_count] == val
+                    denoms_count += 1
+                else:
+                    change_count += 1
+            if i == 0:
+                assert collaterals_count == 1
             else:
-                outputs_v = [o.value for o in tx.outputs()[:-1]]  # no change
-            assert outputs_v == test_amounts
+                assert collaterals_count == 0
+            assert denoms_count == len(all_test_amounts[i])
+            assert change_count == 1
         assert len(w.db.select_ps_reserved(data=wfl.uuid)) == 85
 
         wfl.completed = False
@@ -1755,11 +1766,23 @@ class PSWalletTestCase(TestCaseForTestnet):
             [100001]*11 + [1000010]*4,
             [100001]*8,
         ]
-        for txid in wfl.tx_order:
-            test_amounts = all_test_amounts.pop(0)
+        for i, txid in enumerate(wfl.tx_order):
             tx = w.db.get_transaction(txid)
-            outputs_v = [o.value for o in tx.outputs()[:-1]]  # no change
-            assert outputs_v == test_amounts
+            collaterals_count = 0
+            denoms_count = 0
+            change_count = 0
+            for o in tx.outputs():
+                val = o.value
+                if val == CREATE_COLLATERAL_VAL:
+                    collaterals_count += 1
+                elif val in PS_DENOMS_VALS:
+                    assert all_test_amounts[i][denoms_count] == val
+                    denoms_count += 1
+                else:
+                    change_count += 1
+            assert collaterals_count == 0
+            assert denoms_count == len(all_test_amounts[i])
+            assert change_count == 1
         assert len(w.db.select_ps_reserved(data=wfl.uuid)) == 84
 
         # check not created if enoug denoms exists

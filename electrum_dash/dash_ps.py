@@ -2301,17 +2301,6 @@ class PSManager(Logger):
                 res.update({outpoint: denom})
         return res
 
-    def sort_outputs(self, tx):
-        def sort_denoms_fn(o):
-            if o.value == CREATE_COLLATERAL_VAL:
-                rank = 0
-            elif o.value in PS_DENOMS_VALS:
-                rank = 1
-            else:  # change
-                rank = 2
-            return (rank, o.value)
-        tx._outputs.sort(key=sort_denoms_fn)
-
     # Workflow methods for pay collateral transaction
     def get_confirmed_ps_collateral_data(self):
         w = self.wallet
@@ -2676,8 +2665,6 @@ class PSManager(Logger):
         in0 = inputs[0]['address']
         tx = w.make_unsigned_transaction(inputs, outputs,
                                          self.config, change_addr=in0)
-        # sort ouptus again (change last)
-        self.sort_outputs(tx)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
@@ -3019,8 +3006,6 @@ class PSManager(Logger):
         in0 = inputs[0]['address']
         tx = w.make_unsigned_transaction(inputs, outputs,
                                          self.config, change_addr=in0)
-        # sort ouptus again (change last)
-        self.sort_outputs(tx)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
@@ -3692,54 +3677,56 @@ class PSManager(Logger):
         if not full_check:
             return
 
-        o_last, o_prev_h, o_prev_n = outputs[-1]
-        i_first, i_prev_h, i_prev_n, is_mine = inputs[0]
-        if o_last.address == i_first.address:  # seems it is change value
-            denoms_outputs = outputs[:-1]
-        elif o_last.value in PS_DENOMS_VALS:  # maybe no change happens
-            denoms_outputs = outputs
-        else:
-            return f'Unsuitable last output value={o_last.value}'
         dval_cnt = 0
+        change_count = 0
         collateral_count = 0
         denoms_cnt = 0
         last_denom_val = PS_DENOMS_VALS[0]  # must start with minimal denom
-        for o, prev_h, prev_n in denoms_outputs:
-            val = o.value
-            if val not in PS_DENOMS_VALS:
-                if collateral_count > 0:  # one collateral already found
-                    return f'Unsuitable output value={val}'
-                if val == CREATE_COLLATERAL_VAL:
-                    collateral_count += 1
+        txin0_addr = inputs[0][0].address
+        for i, (o, prev_h, prev_n) in enumerate(outputs):
+            if o.address == txin0_addr:
+                if change_count == 0:
+                    change_count += 1
+                else:
+                    return f'Excess change output i={i}'
                 continue
-            elif val < last_denom_val:  # must increase or be the same
-                return (f'Unsuitable denom value={val}, must be'
-                        f' {last_denom_val} or greater')
-            elif val == last_denom_val:
-                dval_cnt += 1
-                if dval_cnt > 11:  # max 11 times of same denom val
-                    return f'To many denoms of value={val}'
+            val = o.value
+            if val == CREATE_COLLATERAL_VAL:
+                if collateral_count > 0:
+                    return f'Excess collateral output i={i}'
+                else:
+                    collateral_count += 1
+            elif val in PS_DENOMS_VALS:
+                if val < last_denom_val:  # must increase or be the same
+                    return (f'Unsuitable denom value={val}, must be'
+                            f' {last_denom_val} or greater')
+                elif val == last_denom_val:
+                    dval_cnt += 1
+                    if dval_cnt > 11:  # max 11 times of same denom val
+                        return f'To many denoms of value={val}'
+                else:
+                    dval_cnt = 1
+                    last_denom_val = val
+                denoms_cnt += 1
             else:
-                dval_cnt = 1
-                last_denom_val = val
-            denoms_cnt += 1
-        if denoms_cnt == 0:
-            return 'Transaction has no denoms'
+                return f'Unsuitable output value={val}'
+        if denoms_cnt < 1:
+            return 'Transaction has no denom outputs'
 
     def _add_new_denoms_ps_data(self, txid, tx):
         w = self.wallet
         self._add_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
-        last_ouput_idx = len(outputs) - 1
         new_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            val = o.value
-            if i == last_ouput_idx and val not in PS_DENOMS_VALS:  # change
+            if o.address == txin0_addr:
                 continue
+            val = o.value
             new_outpoint = f'{txid}:{i}'
-            if i == 0 and val == CREATE_COLLATERAL_VAL:  # collaterral
-                new_outpoints.append((new_outpoint, o.address, val))
-            elif val in PS_DENOMS_VALS:  # denom round 0
+            if val == CREATE_COLLATERAL_VAL or val in PS_DENOMS_VALS:
                 new_outpoints.append((new_outpoint, o.address, val))
         with self.denoms_lock, self.collateral_lock:
             for new_outpoint, addr, val in new_outpoints:
@@ -3754,16 +3741,16 @@ class PSManager(Logger):
         w = self.wallet
         self._rm_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
-        last_ouput_idx = len(outputs) - 1
         rm_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            val = o.value
-            if i == last_ouput_idx and val not in PS_DENOMS_VALS:  # change
+            if o.address == txin0_addr:
                 continue
+            val = o.value
             rm_outpoint = f'{txid}:{i}'
-            if i == 0 and val == CREATE_COLLATERAL_VAL:  # collaterral
-                rm_outpoints.append((rm_outpoint, val))
-            elif val in PS_DENOMS_VALS:  # denom
+            if val == CREATE_COLLATERAL_VAL or val in PS_DENOMS_VALS:
                 rm_outpoints.append((rm_outpoint, val))
         with self.denoms_lock, self.collateral_lock:
             for rm_outpoint, val in rm_outpoints:
@@ -3782,41 +3769,66 @@ class PSManager(Logger):
             return 'Transaction has OP_RETURN outputs'
         if mine_icnt == 0:
             return 'Transaction has not enough inputs count'
-
-        i_first = inputs[0][0]
-        o_last = outputs[-1][0]
-        if ocnt == 2:
-            if o_last.address != i_first.address:  # check it is change output
-                return 'Transaction has wrong change address'
-            o_first = outputs[0][0]
-            if o_first.value != CREATE_COLLATERAL_VAL:
-                return 'Transaction has wrong output value'
-        elif ocnt == 1:
-            if o_last.value != CREATE_COLLATERAL_VAL:  # maybe no change
-                return 'Transaction has wrong output value'
-        else:
+        if ocnt > 2:
             return 'Transaction has wrong outputs count'
+        change_count = 0
+        collateral_count = 0
+        txin0_addr = inputs[0][0].address
+        for i, (o, prev_h, prev_n) in enumerate(outputs):
+            if o.address == txin0_addr:
+                if change_count == 0:
+                    change_count += 1
+                else:
+                    return f'Excess change output i={i}'
+                continue
+            val = o.value
+            if val == CREATE_COLLATERAL_VAL:
+                if collateral_count > 0:
+                    return f'Excess collateral output i={i}'
+                else:
+                    collateral_count += 1
+            else:
+                return f'Unsuitable output value={val}'
+        if collateral_count < 1:
+            return 'Transaction has no collateral outputs'
 
     def _add_new_collateral_ps_data(self, txid, tx):
         w = self.wallet
         self._add_spent_ps_outpoints_ps_data(txid, tx)
-        out0 = tx.outputs()[0]
-        addr = out0.address
-        val = out0.value
-        new_outpoint = f'{txid}:{0}'
+        outputs = tx.outputs()
+        new_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
+        for i, o in enumerate(outputs):
+            if o.address == txin0_addr:
+                continue
+            val = o.value
+            new_outpoint = f'{txid}:{i}'
+            if val == CREATE_COLLATERAL_VAL:
+                new_outpoints.append((new_outpoint, o.address, val))
         with self.collateral_lock:
-            if val == CREATE_COLLATERAL_VAL:  # collaterral
+            for new_outpoint, addr, val in new_outpoints:
                 new_collateral = (addr, val)
                 w.db.add_ps_collateral(new_outpoint, new_collateral)
 
     def _rm_new_collateral_ps_data(self, txid, tx):
         w = self.wallet
         self._rm_spent_ps_outpoints_ps_data(txid, tx)
-        out0 = tx.outputs()[0]
-        val = out0.value
-        rm_outpoint = f'{txid}:{0}'
+        outputs = tx.outputs()
+        rm_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
+        for i, o in enumerate(outputs):
+            if o.address == txin0_addr:
+                continue
+            val = o.value
+            rm_outpoint = f'{txid}:{i}'
+            if val == CREATE_COLLATERAL_VAL:
+                rm_outpoints.append(rm_outpoint)
         with self.collateral_lock:
-            if val == CREATE_COLLATERAL_VAL:  # collaterral
+            for rm_outpoint in rm_outpoints:
                 w.db.pop_ps_collateral(rm_outpoint)
 
     @unpack_io_values
