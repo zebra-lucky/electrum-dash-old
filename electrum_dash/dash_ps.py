@@ -9,7 +9,7 @@ from bls_py import bls
 from enum import IntEnum
 from collections import defaultdict, deque
 from decimal import Decimal
-from math import ceil
+from math import floor, ceil
 from uuid import uuid4
 
 from . import constants
@@ -1527,30 +1527,31 @@ class PSManager(Logger):
         # calc need sign denoms for each round
         total_denoms_cnt = old_denoms_cnt + new_denoms_cnt
         sign_denoms_cnt = 0
-        # calc rounds down to 0, round 0 calculated later
-        for r in range(self.mix_rounds-1, 0, -1):
+        for r in range(1, self.mix_rounds):  # round 0 calculated later
             next_rounds_denoms_cnt = len(w.db.get_ps_denoms(min_rounds=r+1))
             sign_denoms_cnt += (total_denoms_cnt - next_rounds_denoms_cnt)
+
+        # additional reserve for addrs used by denoms with rounds eq mix_rounds
+        sign_denoms_cnt += (total_denoms_cnt - next_rounds_denoms_cnt)
 
         # Dash Core charges the collateral randomly in 1/10 mixing transactions
         # * avg denoms in mixing transactions is 5 (1-9), but real count
         #   currently is about ~1.1 on testnet, use same for mainnet
         pay_collateral_cnt = ceil(sign_denoms_cnt/10/1.1)
+        # new collateral contain 4 pay collateral amounts
+        new_collateral_cnt = ceil(pay_collateral_cnt*0.25)
         # * pay collateral uses change in 3/4 of cases (1/4 OP_RETURN output)
         need_sign_change_cnt = ceil(pay_collateral_cnt*0.75)
-        # * new collateral has value for 4 pay collateral txs
-        new_collateral_cnt = ceil(pay_collateral_cnt*0.25)
 
-        # take in account already presented ps_collaterals
-        for addr, value in w.db.get_ps_collaterals().values():
-            if w.is_change(addr):
-                need_sign_change_cnt = max(0, need_sign_change_cnt - 1)
-            else:
-                new_collateral_cnt = max(0, new_collateral_cnt - 1)
+        # calc existing ps_collaterals by amounts
+        old_collaterals_val = 0
+        for ps_collateral in w.db.get_ps_collaterals().values():
+            old_collaterals_val += ps_collateral[1]
+        old_collaterals_cnt = floor(old_collaterals_val/CREATE_COLLATERAL_VAL)
+        new_collateral_cnt = max(0, new_collateral_cnt - old_collaterals_cnt)
 
-        # add round 0 denoms which do not produce pay collateral txs
-        next_rounds_denoms_cnt = len(w.db.get_ps_denoms(min_rounds=1))
-        sign_denoms_cnt += (total_denoms_cnt - next_rounds_denoms_cnt)
+        # add round 0 denoms (no pay collaterals need to create)
+        sign_denoms_cnt += (total_denoms_cnt - old_denoms_cnt)
 
         need_sign_cnt = sign_denoms_cnt + new_collateral_cnt
         return need_sign_cnt, need_sign_change_cnt
@@ -1624,8 +1625,8 @@ class PSManager(Logger):
 
         sign_cnt, sign_change_cnt = self.calc_need_new_keypairs_cnt()
         # add spendable ps coins keys (already presented denoms/collateral)
-        ps_spendable_addrs = list(self._keypairs_cache[KP_PS_SPENDABLE].keys())
         cached = 0
+        ps_spendable_cache = self._keypairs_cache[KP_PS_SPENDABLE]
         for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
             prev_h = c['prevout_hash']
             prev_n = c['prevout_n']
@@ -1634,16 +1635,12 @@ class PSManager(Logger):
             if ps_denom and ps_denom[2] >= self.mix_rounds:
                 continue
             addr = c['address']
-            if w.is_change(addr):
-                sign_change_cnt -= 1
-            else:
-                sign_cnt -= 1
-            if addr in ps_spendable_addrs:
+            if addr in ps_spendable_cache:
                 continue
             sequence = w.get_address_index(addr)
             x_pubkey = w.keystore.get_xpubkey(*sequence)
             sec = w.keystore.get_private_key(sequence, password)
-            self._keypairs_cache[KP_PS_SPENDABLE][addr] = (x_pubkey, sec)
+            ps_spendable_cache[addr] = (x_pubkey, sec)
             cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_PS_SPENDABLE} type')
@@ -1654,8 +1651,8 @@ class PSManager(Logger):
             return
 
         # add new denoms/collateral signing keys to future coins
-        ps_change_addrs = list(self._keypairs_cache[KP_PS_CHANGE].keys())
-        ps_coins_addrs = list(self._keypairs_cache[KP_PS_COINS].keys())
+        ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
+        ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
 
         # add keys for ps_reserved addresses
         cached = 0
@@ -1667,35 +1664,32 @@ class PSManager(Logger):
                 continue
             if w.is_change(addr):
                 sign_change_cnt -= 1
-                if addr in ps_change_addrs:
+                if addr in ps_change_cache:
                     continue
                 sequence = w.get_address_index(addr)
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_CHANGE][addr] = (x_pubkey, sec)
+                ps_change_cache[addr] = (x_pubkey, sec)
                 cached += 1
             else:
                 sign_cnt -= 1
-                if addr in ps_coins_addrs:
+                if addr in ps_coins_cache:
                     continue
                 sequence = w.get_address_index(addr)
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_COINS][addr] = (x_pubkey, sec)
+                ps_coins_cache[addr] = (x_pubkey, sec)
                 cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys for ps_reserved addresses')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
-
-        ps_change_addrs = list(self._keypairs_cache[KP_PS_CHANGE].keys())
-        ps_coins_addrs = list(self._keypairs_cache[KP_PS_COINS].keys())
 
         # add keys for unused addresses
         if sign_change_cnt > 0:
             first_change_index = self.first_unused_index(for_change=True)
             cached = 0
             ci = first_change_index
-            while cached < sign_change_cnt:
+            while sign_change_cnt > 0:
                 if self.state != PSStates.Mixing:
                     self._cleanup_unfinished_keypairs_cache()
                     return
@@ -1703,10 +1697,13 @@ class PSManager(Logger):
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 _, addr = xpubkey_to_address(x_pubkey)
                 ci += 1
-                if w.is_used(addr) or addr in ps_change_addrs:
+                if w.is_used(addr):
+                    continue
+                sign_change_cnt -= 1
+                if addr in ps_change_cache:
                     continue
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_CHANGE][addr] = (x_pubkey, sec)
+                ps_change_cache[addr] = (x_pubkey, sec)
                 cached += 1
                 if not cached % 100:
                     self.logger.info(f'Cached {cached} keys'
@@ -1720,7 +1717,7 @@ class PSManager(Logger):
             first_recv_index = self.first_unused_index(for_change=False)
             cached = 0
             ri = first_recv_index
-            while cached < sign_cnt:
+            while sign_cnt > 0:
                 if self.state != PSStates.Mixing:
                     self._cleanup_unfinished_keypairs_cache()
                     return
@@ -1728,10 +1725,13 @@ class PSManager(Logger):
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 _, addr = xpubkey_to_address(x_pubkey)
                 ri += 1
-                if w.is_used(addr) or addr in ps_coins_addrs:
+                if w.is_used(addr):
+                    continue
+                sign_cnt -= 1
+                if addr in ps_coins_cache:
                     continue
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_COINS][addr] = (x_pubkey, sec)
+                ps_coins_cache[addr] = (x_pubkey, sec)
                 cached += 1
                 if not cached % 100:
                     self.logger.info(f'Cached {cached} keys'
