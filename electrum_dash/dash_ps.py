@@ -1972,6 +1972,8 @@ class PSManager(Logger):
         with self.state_lock:
             if self.state == PSStates.Mixing:
                 self.state = PSStates.StopMixing
+            elif self.state == PSStates.StopMixing:
+                return
             else:
                 msg = self.MIXING_NOT_RUNNING_MSG
                 self.trigger_callback('ps-state-changes', w, msg, 'inf')
