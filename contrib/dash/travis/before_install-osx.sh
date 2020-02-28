@@ -2,6 +2,7 @@
 set -ev
 
 if [[ -n $TRAVIS_TAG ]]; then
+    brew untap homebrew/homebrew-versions
     brew update
     brew tap zebra-lucky/qt5
     brew install zebra-lucky/qt5/qt
