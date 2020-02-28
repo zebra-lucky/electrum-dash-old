@@ -146,6 +146,7 @@ class PSStates(IntEnum):
     StopMixing = 6
     FindingUntracked = 7
     Errored = 8
+    Cleaning = 9
 
 
 # Keypairs cache types
@@ -1299,6 +1300,8 @@ class PSManager(Logger):
                 return _('Enable PrivateSend')
             elif self.state == PSStates.Initializing:
                 return _('Initializing ...')
+            elif self.state == PSStates.Cleaning:
+                return _('Cleaning PS Data ...')
             else:
                 return _('Check Log For Errors')
 
@@ -4381,19 +4384,34 @@ class PSManager(Logger):
 
     # Auxiliary methods
     def clear_ps_data(self):
+        if self.loop:
+            coro = self._clear_ps_data()
+            asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    async def _clear_ps_data(self):
         w = self.wallet
-        msg = None
-        with self.state_lock:
-            if self.state in self.mixing_running_states:
-                msg = _('To clear PrivateSend data stop PrivateSend mixing')
-            elif self.state == PSStates.FindingUntracked:
-                msg = _('Can not clear PrivateSend data. Process of finding'
-                        ' untracked PS transactions is currently run')
-            else:
-                self.logger.info(f'Clearing PrivateSend wallet data')
-                w.db.clear_ps_data()
-                self.state == PSStates.Initializing
-                self.logger.info(f'All PrivateSend wallet data cleared')
+
+        def _do_clear_ps_data():
+            msg = None
+            with self.state_lock:
+                if self.state in self.mixing_running_states:
+                    msg = _('To clear PrivateSend data'
+                            ' stop PrivateSend mixing')
+                elif self.state == PSStates.FindingUntracked:
+                    msg = _('Can not clear PrivateSend data. Process'
+                            ' of finding untracked PS transactions'
+                            ' is currently run')
+                elif self.state == PSStates.Cleaning:
+                    return
+                else:
+                    self.state = PSStates.Cleaning
+                    self.trigger_callback('ps-state-changes', w, None, None)
+                    self.logger.info(f'Clearing PrivateSend wallet data')
+                    w.db.clear_ps_data()
+                    self.state = PSStates.Ready
+                    self.logger.info(f'All PrivateSend wallet data cleared')
+            return msg
+        msg = await self.loop.run_in_executor(None, _do_clear_ps_data)
         if msg:
             self.trigger_callback('ps-state-changes', w, msg, None)
         else:
@@ -4472,7 +4490,7 @@ class PSManager(Logger):
                     self.logger.info(str_err)
         if failed != 0:
             with self.state_lock:
-                self.state == PSStates.Errored
+                self.state = PSStates.Errored
         if found:
             self.postpone_notification('ps-data-changes', w)
 
