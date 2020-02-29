@@ -1,7 +1,7 @@
 import re
 
 
-ELECTRUM_VERSION = '3.3.8.3rc6' # version of the client package
+ELECTRUM_VERSION = '3.3.8.3' # version of the client package
 APK_VERSION = '3.3.8.3'      # read by buildozer.spec
 
 PROTOCOL_VERSION = '1.4.2'   # protocol version requested
