@@ -73,7 +73,17 @@ class GetDataThread(QThread):
 class UTXOModel(QAbstractItemModel, Logger):
 
     data_ready = pyqtSignal()
+
     SELECT_ROWS = QItemSelectionModel.Rows | QItemSelectionModel.Select
+
+    SORT_KEYS = {
+        UTXOColumns.ADDRESS: lambda x: x['address'],
+        UTXOColumns.LABEL: lambda x: x['label'],
+        UTXOColumns.PS_ROUNDS: lambda x: x['ix'],
+        UTXOColumns.AMOUNT: lambda x: x['balance'],
+        UTXOColumns.HEIGHT: lambda x: x['height'],
+        UTXOColumns.OUTPOINT: lambda x: x['outpoint'],
+    }
 
     def __init__(self, parent):
         super(UTXOModel, self).__init__(parent)
@@ -130,21 +140,7 @@ class UTXOModel(QAbstractItemModel, Logger):
             self.process_changes(self.sorted(self.coin_items, col, order))
 
     def sorted(self, coin_items, col, order):
-        if col == UTXOColumns.ADDRESS:
-            key = lambda x: x['address']
-        elif col == UTXOColumns.LABEL:
-            key = lambda x: x['label']
-        elif col == UTXOColumns.PS_ROUNDS:
-            key = lambda x: x['ix']
-        elif col == UTXOColumns.AMOUNT:
-            key = lambda x: x['balance']
-        elif col == UTXOColumns.HEIGHT:
-            key = lambda x: x['height']
-        elif col == UTXOColumns.OUTPOINT:
-            key = lambda x: x['outpoint']
-        else:
-            key = lambda x: x['ix']
-        return sorted(coin_items, key=key, reverse=order)
+        return sorted(coin_items, key=self.SORT_KEYS[col], reverse=order)
 
     def data(self, index: QModelIndex, role: Qt.ItemDataRole) -> QVariant:
         assert index.isValid()

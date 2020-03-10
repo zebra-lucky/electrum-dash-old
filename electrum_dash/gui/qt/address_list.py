@@ -76,7 +76,18 @@ class GetDataThread(QThread):
 class AddressModel(QAbstractItemModel, Logger):
 
     data_ready = pyqtSignal()
+
     SELECT_ROWS = QItemSelectionModel.Rows | QItemSelectionModel.Select
+
+    SORT_KEYS = {
+        AddrColumns.TYPE: lambda x: (x['addr_type'], x['ix']),
+        AddrColumns.ADDRESS: lambda x: x['addr'],
+        AddrColumns.LABEL: lambda x: x['label'],
+        AddrColumns.COIN_BALANCE: lambda x: x['balance'],
+        AddrColumns.FIAT_BALANCE: lambda x: x['fiat_balance'],
+        AddrColumns.NUM_TXS: lambda x: x['num_txs'],
+        AddrColumns.PS_TYPE: lambda x: x['is_ps'],
+    }
 
     def __init__(self, parent):
         super(AddressModel, self).__init__(parent)
@@ -140,23 +151,7 @@ class AddressModel(QAbstractItemModel, Logger):
             self.process_changes(self.sorted(self.addr_items, col, order))
 
     def sorted(self, addr_items, col, order):
-        if col == AddrColumns.TYPE:
-            key = lambda x: (x['addr_type'], x['ix'])
-        elif col == AddrColumns.ADDRESS:
-            key = lambda x: x['addr']
-        elif col == AddrColumns.LABEL:
-            key = lambda x: x['label']
-        elif col == AddrColumns.COIN_BALANCE:
-            key = lambda x: x['balance']
-        elif col == AddrColumns.FIAT_BALANCE:
-            key = lambda x: x['fiat_balance']
-        elif col == AddrColumns.NUM_TXS:
-            key = lambda x: x['num_txs']
-        elif col == AddrColumns.PS_TYPE:
-            key = lambda x: x['is_ps']
-        else:
-            key = lambda x: x['ix']
-        return sorted(addr_items, key=key, reverse=order)
+        return sorted(addr_items, key=self.SORT_KEYS[col], reverse=order)
 
     def data(self, index: QModelIndex, role: Qt.ItemDataRole) -> QVariant:
         assert index.isValid()

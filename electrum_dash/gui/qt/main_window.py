@@ -1501,7 +1501,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.extra_payload = ExtraPayloadWidget(self)
         self.extra_payload.hide()
         msg = _('Extra payload.') + '\n\n'\
-              + _('Dash DIP2 Special Transations extra payload.')
+              + _('Dash DIP2 Special Transaction extra payload.')
         self.extra_payload_label = HelpLabel(_('Extra payload'), msg)
         self.extra_payload_label.hide()
         grid.addWidget(self.extra_payload_label, 9, 0)

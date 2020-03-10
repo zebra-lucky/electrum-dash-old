@@ -126,7 +126,8 @@ class TxOutPoint(namedtuple('TxOutPoint', 'hash index')):
                           self.index)
 
     def serialize(self):
-        assert len(self.hash) == 32
+        assert len(self.hash) == 32, \
+            f'{len(self.hash)} not 32'
         return (
             self.hash +                         # hash
             struct.pack('<I', self.index)       # index
@@ -163,7 +164,8 @@ class CTxIn(namedtuple('CTxIn', 'hash index scriptSig sequence')):
         return CTxIn(h, idx, scriptSig, sequence)
 
     def serialize(self):
-        assert len(self.hash) == 32
+        assert len(self.hash) == 32, \
+            f'{len(self.hash)} not 32'
         return (
             self.hash +                         # hash
             struct.pack('<I', self.index) +     # index
@@ -267,10 +269,14 @@ class DashProRegTx(ProTxBase):
                    bh2u(self.scriptPayout)))
 
     def serialize(self, full=True):
-        assert len(self.KeyIdOwner) == 20
-        assert len(self.PubKeyOperator) == 48
-        assert len(self.KeyIdVoting) == 20
-        assert len(self.inputsHash) == 32
+        assert len(self.KeyIdOwner) == 20, \
+            f'{len(self.KeyIdOwner)} not 20'
+        assert len(self.PubKeyOperator) == 48, \
+            f'{len(self.PubKeyOperator)} not 48'
+        assert len(self.KeyIdVoting) == 20, \
+            f'{len(self.KeyIdVoting)} not 20'
+        assert len(self.inputsHash) == 32, \
+            f'{len(self.inputsHash)} not 32'
         ipAddress = ip_address(self.ipAddress)
         ipAddress = serialize_ip(ipAddress)
         payloadSig = to_varbytes(self.payloadSig) if full else b''
@@ -382,9 +388,12 @@ class DashProUpServTx(ProTxBase):
         return res
 
     def serialize(self, full=True):
-        assert len(self.proTxHash) == 32
-        assert len(self.inputsHash) == 32
-        assert len(self.payloadSig) == 96
+        assert len(self.proTxHash) == 32, \
+            f'{len(self.proTxHash)} not 32'
+        assert len(self.inputsHash) == 32, \
+            f'{len(self.inputsHash)} not 32'
+        assert len(self.payloadSig) == 96, \
+            f'{len(self.payloadSig)} not 96'
         ipAddress = ip_address(self.ipAddress)
         ipAddress = serialize_ip(ipAddress)
         payloadSig = self.payloadSig if full else b''
@@ -474,10 +483,14 @@ class DashProUpRegTx(ProTxBase):
                    bh2u(self.scriptPayout)))
 
     def serialize(self, full=True):
-        assert len(self.proTxHash) == 32
-        assert len(self.PubKeyOperator) == 48
-        assert len(self.KeyIdVoting) == 20
-        assert len(self.inputsHash) == 32
+        assert len(self.proTxHash) == 32, \
+            f'{len(self.proTxHash)} not 32'
+        assert len(self.PubKeyOperator) == 48, \
+            f'{len(self.PubKeyOperator)} not 48'
+        assert len(self.KeyIdVoting) == 20, \
+            f'{len(self.KeyIdVoting)} not 20'
+        assert len(self.inputsHash) == 32, \
+            f'{len(self.inputsHash)} not 32'
         payloadSig = to_varbytes(self.payloadSig) if full else b''
         return (
             struct.pack('<H', self.version) +           # version
@@ -548,9 +561,12 @@ class DashProUpRevTx(ProTxBase):
                    self.reason))
 
     def serialize(self, full=True):
-        assert len(self.proTxHash) == 32
-        assert len(self.inputsHash) == 32
-        assert len(self.payloadSig) == 96
+        assert len(self.proTxHash) == 32, \
+            f'{len(self.proTxHash)} not 32'
+        assert len(self.inputsHash) == 32, \
+            f'{len(self.inputsHash)} not 32'
+        assert len(self.payloadSig) == 96, \
+            f'{len(self.payloadSig)} not 96'
         payloadSig = self.payloadSig if full else b''
         return (
             struct.pack('<H', self.version) +           # version
@@ -608,14 +624,16 @@ class DashCbTx(ProTxBase):
         return res
 
     def serialize(self):
-        assert len(self.merkleRootMNList) == 32
+        assert len(self.merkleRootMNList) == 32, \
+            f'{len(self.merkleRootMNList)} not 32'
         res = (
             struct.pack('<H', self.version) +           # version
             struct.pack('<I', self.height) +            # height
             self.merkleRootMNList                       # merkleRootMNList
         )
         if self.version > 1:
-            assert len(self.merkleRootQuorums) == 32
+            assert len(self.merkleRootQuorums) == 32, \
+                f'{len(self.merkleRootQuorums)} not 32'
             res += self.merkleRootQuorums               # merkleRootQuorums
         return res
 
@@ -643,8 +661,10 @@ class DashSubTxRegister(ProTxBase):
                    bh2u(self.pubKey)))
 
     def serialize(self):
-        assert len(self.pubKey) == 48
-        assert len(self.payloadSig) == 96
+        assert len(self.pubKey) == 48, \
+            f'{len(self.pubKey)} not 48'
+        assert len(self.payloadSig) == 96, \
+            f'{len(self.payloadSig)} not 96'
         return (
             struct.pack('<H', self.version) +           # version
             to_varbytes(self.userName) +                # userName
@@ -674,7 +694,8 @@ class DashSubTxTopup(ProTxBase):
                    bh2u(self.regTxHash[::-1])))
 
     def serialize(self):
-        assert len(self.regTxHash) == 32
+        assert len(self.regTxHash) == 32, \
+            f'{len(self.regTxHash)} not 32'
         return (
             struct.pack('<H', self.version) +           # version
             self.regTxHash                              # regTxHash
@@ -707,10 +728,14 @@ class DashSubTxResetKey(ProTxBase):
                    bh2u(self.newPubKey)))
 
     def serialize(self):
-        assert len(self.regTxHash) == 32
-        assert len(self.hashPrevSubTx) == 32
-        assert len(self.newPubKey) == 48
-        assert len(self.payloadSig) == 96
+        assert len(self.regTxHash) == 32, \
+            f'{len(self.regTxHash)} not 32'
+        assert len(self.hashPrevSubTx) == 32, \
+            f'{len(self.hashPrevSubTx)} not 32'
+        assert len(self.newPubKey) == 48, \
+            f'{len(self.newPubKey)} not 48'
+        assert len(self.payloadSig) == 96, \
+            f'{len(self.payloadSig)} not 96'
         return (
             struct.pack('<H', self.version) +           # version
             self.regTxHash +                            # regTxHash
@@ -749,9 +774,12 @@ class DashSubTxCloseAccount(ProTxBase):
                    self.creditFee))
 
     def serialize(self):
-        assert len(self.regTxHash) == 32
-        assert len(self.hashPrevSubTx) == 32
-        assert len(self.payloadSig) == 96
+        assert len(self.regTxHash) == 32, \
+            f'{len(self.regTxHash)} not 32'
+        assert len(self.hashPrevSubTx) == 32, \
+            f'{len(self.hashPrevSubTx)} not 32'
+        assert len(self.payloadSig) == 96, \
+            f'{len(self.payloadSig)} not 96'
         return (
             struct.pack('<H', self.version) +           # version
             self.regTxHash +                            # regTxHash

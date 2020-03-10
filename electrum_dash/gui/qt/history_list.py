@@ -139,6 +139,22 @@ class HistoryModel(QAbstractItemModel, Logger):
         self.get_data_thread = GetDataThread(self, self.data_ready, self)
         self.get_data_thread.start()
 
+        # sort keys methods for columns
+        self.SORT_KEYS = {
+            HistoryColumns.TX_GROUP: self.sort_ix,
+            HistoryColumns.STATUS_ICON: self.sort_ix,
+            HistoryColumns.STATUS_TEXT: self.sort_status_text,
+            HistoryColumns.DIP2: self.sort_dip2,
+            HistoryColumns.DESCRIPTION: self.sort_label,
+            HistoryColumns.COIN_VALUE: self.sort_coin_value,
+            HistoryColumns.RUNNING_COIN_BALANCE: \
+                self.sort_running_coin_balance,
+            HistoryColumns.FIAT_VALUE: self.sort_fiat_value,
+            HistoryColumns.FIAT_ACQ_PRICE: self.sort_fiat_acq_price,
+            HistoryColumns.FIAT_CAP_GAINS: self.sort_fiat_cap_gains,
+            HistoryColumns.TXID: self.sort_txid,
+        }
+
     def set_view(self, history_list: 'HistoryList'):
         # FIXME HistoryModel and HistoryList mutually depend on each other.
         # After constructing both, this method needs to be called.
@@ -289,30 +305,7 @@ class HistoryModel(QAbstractItemModel, Logger):
             return x[0]['txid']
 
     def sorted(self, tx_tree, col, order):
-        if col == HistoryColumns.TX_GROUP:
-            key = self.sort_ix
-        if col == HistoryColumns.STATUS_ICON:
-            key = self.sort_ix
-        elif col == HistoryColumns.STATUS_TEXT:
-            key = self.sort_status_text
-        elif col == HistoryColumns.DIP2:
-            key = self.sort_dip2
-        elif col == HistoryColumns.DESCRIPTION:
-            key = self.sort_label
-        elif col == HistoryColumns.COIN_VALUE:
-            key = self.sort_coin_value
-        elif col == HistoryColumns.RUNNING_COIN_BALANCE:
-            key = self.sort_running_coin_balance
-        elif col == HistoryColumns.FIAT_VALUE:
-            key = self.sort_fiat_value
-        elif col == HistoryColumns.FIAT_ACQ_PRICE:
-            key = self.sort_fiat_acq_price
-        elif col == HistoryColumns.FIAT_CAP_GAINS:
-            key = self.sort_fiat_cap_gains
-        elif col == HistoryColumns.TXID:
-            key = self.sort_txid
-        else:
-            key = self.sort_ix
+        key = self.SORT_KEYS[col]
         if self.group_ps:
             tx_tree = sorted(tx_tree, key=key, reverse=order)
             for i in range(len(tx_tree)):
@@ -506,7 +499,7 @@ class HistoryModel(QAbstractItemModel, Logger):
                 if children:
                     parent_idx = self.index(i, 0, QModelIndex())
                     self.beginRemoveRows(parent_idx, 0, len(children)-1)
-                    for c_tx_item  in children:
+                    for c_tx_item in children:
                         child_txid = c_tx_item['txid']
                         del self.transactions[child_txid]
                     self.tx_tree[i] = [tx_item, []]

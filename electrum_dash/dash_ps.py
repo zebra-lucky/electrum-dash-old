@@ -381,20 +381,8 @@ class PSDenominateWorkflow:
             return False
         elif id(self) == id(other):
             return True
-        elif self.uuid != other.uuid:
-            return False
-        elif self.denom != other.denom:
-            return False
-        elif self.rounds != other.rounds:
-            return False
-        elif self.inputs != other.inputs:
-            return False
-        elif self.outputs != other.outputs:
-            return False
-        elif self.completed != other.completed:
-            return False
-        else:
-            return True
+        return not any(getattr(self, field) != getattr(other, field)
+                       for field in self.__slots__)
 
 
 class PSMinRoundsCheckFailed(Exception):
@@ -473,7 +461,7 @@ class PSMixSession:
 
     async def run_peer(self):
         if self.dash_peer:
-            raise Exception('Sesions already have running DashPeer')
+            raise Exception('Session already have running DashPeer')
         self.dash_peer = await self.dash_net.run_mixing_peer(self.peer_str,
                                                              self.sml_entry,
                                                              self)
@@ -2552,7 +2540,7 @@ class PSManager(Logger):
         try:
             txid, tx = self._make_new_collateral_tx(wfl, coins, password)
             if not self.wallet.add_transaction(txid, tx):
-                raise Exception(f'Transactiion with txid: {txid}'
+                raise Exception(f'Transaction with txid: {txid}'
                                 f' conflicts with current history')
             with self.new_collateral_wfl_lock:
                 saved = self.new_collateral_wfl
@@ -2586,7 +2574,7 @@ class PSManager(Logger):
             w = self.wallet
             # add_transaction need run in network therad
             if not w.add_transaction(txid, tx):
-                raise Exception(f'Transactiion with txid: {txid}'
+                raise Exception(f'Transaction with txid: {txid}'
                                 f' conflicts with current history')
 
             def _after_create_tx():
@@ -2865,7 +2853,7 @@ class PSManager(Logger):
                 txid, tx = self._make_new_denoms_tx(wfl, tx_amounts, i,
                                                     coins, password)
                 if not w.add_transaction(txid, tx):
-                    raise Exception(f'Transactiion with txid: {txid}'
+                    raise Exception(f'Transaction with txid: {txid}'
                                     f' conflicts with current history')
                 if i == last_tx_idx:
                     with self.new_denoms_wfl_lock:
