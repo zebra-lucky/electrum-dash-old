@@ -278,7 +278,7 @@ class HistoryScreen(CScreen):
         selected_node = None
         selected_txid = self.selected_txid
         for (txid, tx_type, tx_mined_status, value, balance,
-             islock, group_txid, group_data)  in history:
+             islock, group_txid, group_data) in history:
             label = None
             if group_txid is None and not group_data:
                 txs.append((txid, tx_type, tx_mined_status,

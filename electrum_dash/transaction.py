@@ -991,7 +991,7 @@ class Transaction:
         s, r = self.signature_count()
         return r == s
 
-    def sign(self, keypairs) -> None:
+    def sign(self, keypairs) -> int:
         # keypairs:  (x_)pubkey -> secret_bytes
         signed_txins_cnt = 0
         for i, txin in enumerate(self.inputs()):
