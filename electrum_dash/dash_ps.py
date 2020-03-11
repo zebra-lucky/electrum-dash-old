@@ -1602,7 +1602,6 @@ class PSManager(Logger):
         return False, prev_kp_state
 
     def _cache_keypairs(self, password):
-        w = self.wallet
         self.logger.info('Making Keyparis Cache')
         with self.keypairs_state_lock:
             self.keypairs_state = KPStates.Caching
@@ -1611,9 +1610,44 @@ class PSManager(Logger):
             if cache_type not in self._keypairs_cache:
                 self._keypairs_cache[cache_type] = {}
 
-        # add spendable regular coins keys
+        if not self._cache_kp_spendable(password):
+            return
+
+        if not self._cache_kp_ps_spendable(password):
+            return
+
+        kp_left, kp_chg_left = self.calc_need_new_keypairs_cnt()
+        kp_left, kp_chg_left = self._cache_kp_ps_reserved(password,
+                                                          kp_left, kp_chg_left)
+        if kp_left is None:
+            return
+
+        kp_left, kp_chg_left = self._cache_kp_ps_change(password,
+                                                        kp_left, kp_chg_left)
+        if kp_left is None:
+            return
+
+        kp_left, kp_chg_left = self._cache_kp_ps_coins(password,
+                                                       kp_left, kp_chg_left)
+        if kp_left is None:
+            return
+
+        with self.keypairs_state_lock:
+            self.keypairs_state = KPStates.Ready
+        self.logger.info('Keyparis Cache Done')
+
+    def _cache_kp_spendable(self, password):
+        '''Cache spendable regular coins keys'''
+        w = self.wallet
         cached = 0
-        for c in w.get_utxos(None):
+        utxos = w.get_utxos(None,
+                            excluded_addresses=w.frozen_addresses,
+                            mature_only=True)
+        utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
+        for c in utxos:
+            if self.state != PSStates.Mixing:
+                self._cleanup_unfinished_keypairs_cache()
+                return
             addr = c['address']
             if addr in self._keypairs_cache[KP_SPENDABLE]:
                 continue
@@ -1625,12 +1659,17 @@ class PSManager(Logger):
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_SPENDABLE} type')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return True
 
-        sign_cnt, sign_change_cnt = self.calc_need_new_keypairs_cnt()
-        # add spendable ps coins keys (already presented denoms/collateral)
+    def _cache_kp_ps_spendable(self, password):
+        '''Cache spendable ps coins keys (existing denoms/collaterals)'''
+        w = self.wallet
         cached = 0
         ps_spendable_cache = self._keypairs_cache[KP_PS_SPENDABLE]
         for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
+            if self.state != PSStates.Mixing:
+                self._cleanup_unfinished_keypairs_cache()
+                return
             prev_h = c['prevout_hash']
             prev_n = c['prevout_n']
             outpoint = f'{prev_h}:{prev_n}'
@@ -1648,21 +1687,17 @@ class PSManager(Logger):
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_PS_SPENDABLE} type')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return True
 
-        if self.state != PSStates.Mixing:
-            self._cleanup_unfinished_keypairs_cache()
-            return
-
-        # add new denoms/collateral signing keys to future coins
+    def _cache_kp_ps_reserved(self, password, sign_cnt, sign_change_cnt):
+        w = self.wallet
         ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
         ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
-
-        # add keys for ps_reserved addresses
         cached = 0
         for addr, data in self.wallet.db.get_ps_reserved().items():
             if self.state != PSStates.Mixing:
                 self._cleanup_unfinished_keypairs_cache()
-                return
+                return None, None
             if w.is_used(addr):
                 continue
             if w.is_change(addr):
@@ -1686,16 +1721,20 @@ class PSManager(Logger):
         if cached:
             self.logger.info(f'Cached {cached} keys for ps_reserved addresses')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return sign_cnt, sign_change_cnt
 
-        # add keys for unused addresses
+    def _cache_kp_ps_change(self, password, sign_cnt, sign_change_cnt):
         if sign_change_cnt > 0:
+            w = self.wallet
             first_change_index = self.first_unused_index(for_change=True)
+            ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
+            ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
             cached = 0
             ci = first_change_index
             while sign_change_cnt > 0:
                 if self.state != PSStates.Mixing:
                     self._cleanup_unfinished_keypairs_cache()
-                    return
+                    return None, None
                 sequence = [1, ci]
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 _, addr = xpubkey_to_address(x_pubkey)
@@ -1715,15 +1754,20 @@ class PSManager(Logger):
                 self.logger.info(f'Cached {cached} keys'
                                  f' of {KP_PS_CHANGE} type')
                 self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return sign_cnt, sign_change_cnt
 
+    def _cache_kp_ps_coins(self, password, sign_cnt, sign_change_cnt):
         if sign_cnt > 0:
+            w = self.wallet
             first_recv_index = self.first_unused_index(for_change=False)
+            ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
+            ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
             cached = 0
             ri = first_recv_index
             while sign_cnt > 0:
                 if self.state != PSStates.Mixing:
                     self._cleanup_unfinished_keypairs_cache()
-                    return
+                    return None, None
                 sequence = [0, ri]
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 _, addr = xpubkey_to_address(x_pubkey)
@@ -1743,9 +1787,7 @@ class PSManager(Logger):
                 self.logger.info(f'Cached {cached} keys'
                                  f' of {KP_PS_COINS} type')
                 self.postpone_notification('ps-keypairs-changes', self.wallet)
-        with self.keypairs_state_lock:
-            self.keypairs_state = KPStates.Ready
-        self.logger.info('Keyparis Cache Done')
+        return sign_cnt, sign_change_cnt
 
     def _find_addrs_not_in_keypairs(self, addrs):
         addrs = set(addrs)
