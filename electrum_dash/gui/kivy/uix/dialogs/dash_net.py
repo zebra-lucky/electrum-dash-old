@@ -24,17 +24,47 @@ Builder.load_string('''
     _sent: _('Sent') + ': %s KiB' % self.sent
     title: ', '.join([self._total, self._received, self._sent])
     description: _('Data flow over Dash network')
-    action: lambda x: None
+
+
+<DashNetDataFlowDialog@Popup>
+    title: _('Data flow over Dash network')
+    data: data
+    ScrollView:
+        Label:
+            id: data
+            text: ''
+            halign: 'left'
+            valign: 'top'
+            size_hint_y: None
+            text_size: self.width, None
+            height: self.texture_size[1]
+            padding: dp(5), dp(5)
 
 
 <ProTxListStatItem@SettingsItem>
-    llmq_height: 0
-    local_height: 0
-    _llmq_height: _('LLMQ Height') + ': %s' % self.llmq_height
-    _local_height: _('Local height') + ': %s' % self.local_height
-    title: ', '.join([self._llmq_height, self._local_height])
-    description: _('LLMQ list height and local blockchain height')
-    action: lambda x: None
+    protx_ready: ''
+    protx_info_completeness: '0%'
+    llmq_ready: ''
+    _protx: _('ProTx') + ': %s' % self.protx_ready
+    _protx_info: _('ProTx Info') + ': %s' % self.protx_info_completeness
+    _llmq: _('LLMQ') + ': %s' % self.llmq_ready
+    title: ', '.join([self._protx, self._protx_info, self._llmq])
+    description: _('ProTx, ProTx Info, LLMQ readiness')
+
+
+<ProTxStatsDialog@Popup>
+    title: _('ProTx, ProTx Info, LLMQ stats')
+    data: data
+    ScrollView:
+        Label:
+            id: data
+            text: ''
+            halign: 'left'
+            valign: 'top'
+            size_hint_y: None
+            text_size: self.width, None
+            height: self.texture_size[1]
+            padding: dp(5), dp(5)
 
 
 <ListColLabel@Label>
@@ -251,6 +281,7 @@ Builder.load_string('''
 
 <DashNetDialog@Popup>
     title: _('Dash Network')
+    id: dlg
     BoxLayout:
         orientation: 'vertical'
         ScrollView:
@@ -261,20 +292,23 @@ Builder.load_string('''
                 height: self.minimum_height
                 padding: '10dp'
                 CardSeparator
-                DashNetStatItem
-                    total: root.total
-                    received: root.received
-                    sent: root.sent
-                CardSeparator
-                ProTxListStatItem
-                    llmq_height: root.llmq_height
-                    local_height: root.local_height
-                CardSeparator
                 SettingsItem:
                     value: ': ON' if root.run_dash_net else ': OFF'
                     title: _('Enable Dash Network') + self.value
                     description: _('Enable or Disable Dash network')
                     action: root.toggle_dash_net
+                CardSeparator
+                DashNetStatItem
+                    total: root.total
+                    received: root.received
+                    sent: root.sent
+                    action: dlg.show_data_flow
+                CardSeparator
+                ProTxListStatItem
+                    protx_ready: root.protx_ready
+                    protx_info_completeness: root.protx_info_completeness
+                    llmq_ready: root.llmq_ready
+                    action: dlg.show_protx_stats
                 CardSeparator
                 SettingsItem:
                     title: _('Connected Peers') + ': %s' % len(root.peers)
@@ -313,6 +347,80 @@ Builder.load_string('''
                     description: _('Show bls_py verify signature speed')
                     action: root.show_bls_speed
 ''')
+
+
+class DashNetDataFlowDialog(Factory.Popup):
+
+    def __init__(self, dn_dlg):
+        Factory.Popup.__init__(self)
+        self.dn_dlg = dn_dlg
+        self.update()
+
+    def open(self, *args, **kwargs):
+        super(DashNetDataFlowDialog, self).open(*args, **kwargs)
+        self.dn_dlg.dash_net.register_callback(self.update_cb,
+                                               ['dash-net-activity',
+                                                'dash-peers-updated'])
+
+    def dismiss(self, *args, **kwargs):
+        super(DashNetDataFlowDialog, self).dismiss(*args, **kwargs)
+        self.dn_dlg.dash_net.unregister_callback(self.update_cb)
+
+    def update_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.update())
+
+    def update(self):
+        res = ''
+        peers = self.dn_dlg.dash_net.peers
+        for peer, dash_peer in sorted(list(peers.items())):
+            ping_time = str(dash_peer.ping_time)
+            read_kbytes = str(round(dash_peer.read_bytes/1024, 1))
+            write_kbytes = str(round(dash_peer.write_bytes/1024, 1))
+            res += f'{peer}:\n\n'
+            res += f'Ping time (ms): {ping_time}\n'
+            res += f'Received KiB: {read_kbytes}\n'
+            res += f'Sent KiB: {write_kbytes}\n\n'
+        self.data.text = res
+
+
+class ProTxStatsDialog(Factory.Popup):
+
+    def __init__(self, dn_dlg):
+        Factory.Popup.__init__(self)
+        self.dn_dlg = dn_dlg
+        self.update()
+        self.trigger_update = Clock.create_trigger(self.update, 1)
+
+    def open(self, *args, **kwargs):
+        super(ProTxStatsDialog, self).open(*args, **kwargs)
+        net = self.dn_dlg.net
+        mn_list = net.mn_list
+        mn_list.register_callback(self.update_cb, ['mn-list-diff-updated',
+                                                   'mn-list-info-updated'])
+        net.register_callback(self.update_cb, ['network_updated'])
+
+    def dismiss(self, *args, **kwargs):
+        super(ProTxStatsDialog, self).dismiss(*args, **kwargs)
+        net = self.dn_dlg.net
+        mn_list = net.mn_list
+        mn_list.unregister_callback(self.update_cb)
+        net.unregister_callback(self.update_cb)
+
+    def update_cb(self, event, *args):
+        self.trigger_update()
+
+    def update(self, dt=None):
+        dn_dlg = self.dn_dlg
+        res = 'Actual Heights:\n'
+        res += f'Local: {dn_dlg.local_height}\n'
+        res += f'ProTx: {dn_dlg.protx_height}\n'
+        res += f'LLMQ: {dn_dlg.llmq_height}\n'
+        res += '\nReadiness:\n'
+        res += f'ProTx: {dn_dlg.protx_ready}\n'
+        res += f'LLMQ: {dn_dlg.llmq_ready}\n'
+        res += '\nCompleteness:\n'
+        res += f'ProTx Info: {dn_dlg.protx_info_completeness}\n'
+        self.data.text = res
 
 
 class DashPeerCard(Factory.BoxLayout):
@@ -526,8 +634,12 @@ class DashNetDialog(Factory.Popup):
     static_peers = StringProperty()
     sporks = ListProperty()
     banlist = ListProperty()
-    local_height = NumericProperty()
-    llmq_height = NumericProperty()
+    local_height = StringProperty()
+    protx_height = StringProperty()
+    llmq_height = StringProperty()
+    protx_ready = StringProperty()
+    protx_info_completeness = StringProperty()
+    llmq_ready = StringProperty()
 
     def __init__(self, app):
         self.app = app
@@ -540,6 +652,8 @@ class DashNetDialog(Factory.Popup):
         layout.bind(minimum_height=layout.setter('height'))
         if not self.app.testnet:
             layout.remove_widget(self.ids.bls_speed_item)
+        self.trigger_mn_list_info_updated = \
+            Clock.create_trigger(self.on_mn_list_info_updated, 1)
 
     def update(self):
         self.on_dash_net_activity()
@@ -555,36 +669,45 @@ class DashNetDialog(Factory.Popup):
 
     def open(self, *args, **kwargs):
         super(DashNetDialog, self).open(*args, **kwargs)
-        self.dash_net.register_callback(self.on_dash_net_activity,
+        self.dash_net.register_callback(self.on_dash_net_activity_cb,
                                         ['dash-net-activity'])
-        self.dash_net.register_callback(self.on_sporks_activity,
+        self.dash_net.register_callback(self.on_sporks_activity_cb,
                                         ['sporks-activity'])
-        self.dash_net.register_callback(self.on_dash_peers_updated,
+        self.dash_net.register_callback(self.on_dash_peers_updated_cb,
                                         ['dash-peers-updated'])
-        self.dash_net.register_callback(self.on_dash_banlist_updated,
+        self.dash_net.register_callback(self.on_dash_banlist_updated_cb,
                                         ['dash-banlist-updated'])
-        self.mn_list.register_callback(self.on_mn_list_diff_updated,
+        self.mn_list.register_callback(self.on_mn_list_diff_updated_cb,
                                        ['mn-list-diff-updated'])
-        self.net.register_callback(self.on_network_updated,
+        self.mn_list.register_callback(self.on_mn_list_info_updated_cb,
+                                       ['mn-list-info-updated'])
+        self.net.register_callback(self.on_network_updated_cb,
                                    ['network_updated'])
 
     def dismiss(self, *args, **kwargs):
         super(DashNetDialog, self).dismiss(*args, **kwargs)
-        self.dash_net.unregister_callback(self.on_dash_net_activity)
-        self.dash_net.unregister_callback(self.on_sporks_activity)
-        self.dash_net.unregister_callback(self.on_dash_peers_updated)
-        self.dash_net.unregister_callback(self.on_dash_banlist_updated)
-        self.mn_list.unregister_callback(self.on_mn_list_diff_updated)
-        self.net.unregister_callback(self.on_network_updated)
+        self.dash_net.unregister_callback(self.on_dash_net_activity_cb)
+        self.dash_net.unregister_callback(self.on_sporks_activity_cb)
+        self.dash_net.unregister_callback(self.on_dash_peers_updated_cb)
+        self.dash_net.unregister_callback(self.on_dash_banlist_updated_cb)
+        self.mn_list.unregister_callback(self.on_mn_list_diff_updated_cb)
+        self.mn_list.unregister_callback(self.on_mn_list_info_updated_cb)
+        self.net.unregister_callback(self.on_network_updated_cb)
 
-    def on_dash_net_activity(self, *args, **kwargs):
+    def on_dash_net_activity_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_dash_net_activity())
+
+    def on_dash_net_activity(self):
         read_bytes = self.dash_net.read_bytes
         write_bytes = self.dash_net.write_bytes
         self.total = round((write_bytes + read_bytes)/1024, 1)
         self.received = round(read_bytes/1024, 1)
         self.sent = round(write_bytes/1024, 1)
 
-    def on_sporks_activity(self, *args, **kwargs):
+    def on_sporks_activity_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_sporks_activity())
+
+    def on_sporks_activity(self):
         sporks_dict = self.dash_net.sporks.as_dict()
         self.sporks = []
         for k in sorted(list(sporks_dict.keys())):
@@ -597,23 +720,48 @@ class DashNetDialog(Factory.Popup):
             spork_item = [name, active, value]
             self.sporks.append(spork_item)
 
-    def on_dash_peers_updated(self, *args, **kwargs):
+    def on_dash_peers_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_dash_peers_updated())
+
+    def on_dash_peers_updated(self):
         self.peers = []
         for peer, dash_peer in self.dash_net.peers.items():
             ua = dash_peer.version.user_agent.decode('utf-8')
             self.peers.append((peer, ua))
 
-    def on_dash_banlist_updated(self, *args, **kwargs):
+    def on_dash_banlist_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_dash_banlist_updated())
+
+    def on_dash_banlist_updated(self):
         banlist = self.dash_net.banlist
         self.banlist = []
         for peer, banned in sorted(list(banlist.items())):
             self.banlist.append((peer, banned['ua']))
 
-    def on_mn_list_diff_updated(self, *args, **kwargs):
-        self.llmq_height = self.mn_list.llmq_human_height
+    def on_mn_list_diff_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_mn_list_diff_updated())
 
-    def on_network_updated(self, *args, **kwargs):
-        self.local_height = self.net.get_local_height()
+    def on_mn_list_diff_updated(self):
+        mn_list = self.mn_list
+        self.protx_height = str(mn_list.protx_height)
+        self.protx_ready = 'Yes' if mn_list.protx_ready else 'No'
+        completeness = mn_list.protx_info_completeness
+        self.protx_info_completeness = '%s%%' % round(completeness*100)
+        self.llmq_height = str(mn_list.llmq_human_height)
+        self.llmq_ready = 'Yes' if mn_list.llmq_ready else 'No'
+
+    def on_mn_list_info_updated_cb(self, event, *args):
+        self.trigger_mn_list_info_updated()
+
+    def on_mn_list_info_updated(self, dt=None):
+        completeness = self.mn_list.protx_info_completeness
+        self.protx_info_completeness = '%s%%' % round(completeness*100)
+
+    def on_network_updated_cb(self, event, *args):
+        Clock.schedule_once(lambda dt: self.on_network_updated())
+
+    def on_network_updated(self):
+        self.local_height = str(self.net.get_local_height())
 
     def toggle_dash_net(self, *args):
         self.run_dash_net = not self.config.get('run_dash_net', True)
@@ -644,3 +792,9 @@ class DashNetDialog(Factory.Popup):
 
     def show_bls_speed(self, *args):
         BlsSpeedPopup(self).open()
+
+    def show_data_flow(self, *args):
+        DashNetDataFlowDialog(self).open()
+
+    def show_protx_stats(self, *args):
+        ProTxStatsDialog(self).open()

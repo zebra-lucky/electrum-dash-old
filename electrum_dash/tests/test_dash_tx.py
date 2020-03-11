@@ -1,7 +1,5 @@
-import unittest
-
 from electrum_dash import transaction
-from electrum_dash.util import bh2u, bfh
+from electrum_dash.util import bfh
 from electrum_dash.commands import Commands
 
 from . import SequentialTestCase

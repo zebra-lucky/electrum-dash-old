@@ -1,3 +1,15 @@
+# Release 3.3.8.3
+
+ * add Dash PrivateSend support (qt/kivy gui supported)
+ * update ecdsa version to 0.14.1
+ * some Dash P2P network related code/gui fixes
+ * fix islocks handling
+ * some ProTx masternodes related code/gui fixes, gather protx
+   info masternodes data and save to local file (protx_info.gz)
+ * some kivy gui fixes
+ * add new servers to servers.json, servers_testnet.json
+
+
 # Release 3.3.8.2
 
  * fix wallet locking during verification of DIP3 transactions
