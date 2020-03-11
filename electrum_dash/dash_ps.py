@@ -1426,7 +1426,6 @@ class PSManager(Logger):
         if self.new_denoms_wfl:
             res.append(f'New denoms workflow data exists')
 
-        dwfl_cnt = 0
         completed_dwfl_cnt = 0
         dwfl_list = self.denominate_wfl_list
         dwfl_cnt = len(dwfl_list)
@@ -3429,7 +3428,7 @@ class PSManager(Logger):
         with self.denominate_wfl_lock:
             saved = self.get_denominate_wfl(wfl.uuid)
             if not saved:
-                raise Exception('denominate_wfl {wfl.lid} not found')
+                raise Exception(f'denominate_wfl {wfl.lid} not found')
             wfl = saved
             wfl.outputs = output_addrs
             self.set_denominate_wfl(saved)
