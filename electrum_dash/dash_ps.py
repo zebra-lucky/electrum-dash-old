@@ -9,7 +9,7 @@ from bls_py import bls
 from enum import IntEnum
 from collections import defaultdict, deque
 from decimal import Decimal
-from math import ceil
+from math import floor, ceil
 from uuid import uuid4
 
 from . import constants
@@ -146,6 +146,7 @@ class PSStates(IntEnum):
     StopMixing = 6
     FindingUntracked = 7
     Errored = 8
+    Cleaning = 9
 
 
 # Keypairs cache types
@@ -1299,6 +1300,8 @@ class PSManager(Logger):
                 return _('Enable PrivateSend')
             elif self.state == PSStates.Initializing:
                 return _('Initializing ...')
+            elif self.state == PSStates.Cleaning:
+                return _('Cleaning PS Data ...')
             else:
                 return _('Check Log For Errors')
 
@@ -1527,30 +1530,31 @@ class PSManager(Logger):
         # calc need sign denoms for each round
         total_denoms_cnt = old_denoms_cnt + new_denoms_cnt
         sign_denoms_cnt = 0
-        # calc rounds down to 0, round 0 calculated later
-        for r in range(self.mix_rounds-1, 0, -1):
+        for r in range(1, self.mix_rounds):  # round 0 calculated later
             next_rounds_denoms_cnt = len(w.db.get_ps_denoms(min_rounds=r+1))
             sign_denoms_cnt += (total_denoms_cnt - next_rounds_denoms_cnt)
+
+        # additional reserve for addrs used by denoms with rounds eq mix_rounds
+        sign_denoms_cnt += (total_denoms_cnt - next_rounds_denoms_cnt)
 
         # Dash Core charges the collateral randomly in 1/10 mixing transactions
         # * avg denoms in mixing transactions is 5 (1-9), but real count
         #   currently is about ~1.1 on testnet, use same for mainnet
         pay_collateral_cnt = ceil(sign_denoms_cnt/10/1.1)
+        # new collateral contain 4 pay collateral amounts
+        new_collateral_cnt = ceil(pay_collateral_cnt*0.25)
         # * pay collateral uses change in 3/4 of cases (1/4 OP_RETURN output)
         need_sign_change_cnt = ceil(pay_collateral_cnt*0.75)
-        # * new collateral has value for 4 pay collateral txs
-        new_collateral_cnt = ceil(pay_collateral_cnt*0.25)
 
-        # take in account already presented ps_collaterals
-        for addr, value in w.db.get_ps_collaterals().values():
-            if w.is_change(addr):
-                need_sign_change_cnt = max(0, need_sign_change_cnt - 1)
-            else:
-                new_collateral_cnt = max(0, new_collateral_cnt - 1)
+        # calc existing ps_collaterals by amounts
+        old_collaterals_val = 0
+        for ps_collateral in w.db.get_ps_collaterals().values():
+            old_collaterals_val += ps_collateral[1]
+        old_collaterals_cnt = floor(old_collaterals_val/CREATE_COLLATERAL_VAL)
+        new_collateral_cnt = max(0, new_collateral_cnt - old_collaterals_cnt)
 
-        # add round 0 denoms which do not produce pay collateral txs
-        next_rounds_denoms_cnt = len(w.db.get_ps_denoms(min_rounds=1))
-        sign_denoms_cnt += (total_denoms_cnt - next_rounds_denoms_cnt)
+        # add round 0 denoms (no pay collaterals need to create)
+        sign_denoms_cnt += (total_denoms_cnt - old_denoms_cnt)
 
         need_sign_cnt = sign_denoms_cnt + new_collateral_cnt
         return need_sign_cnt, need_sign_change_cnt
@@ -1598,7 +1602,6 @@ class PSManager(Logger):
         return False, prev_kp_state
 
     def _cache_keypairs(self, password):
-        w = self.wallet
         self.logger.info('Making Keyparis Cache')
         with self.keypairs_state_lock:
             self.keypairs_state = KPStates.Caching
@@ -1607,9 +1610,44 @@ class PSManager(Logger):
             if cache_type not in self._keypairs_cache:
                 self._keypairs_cache[cache_type] = {}
 
-        # add spendable regular coins keys
+        if not self._cache_kp_spendable(password):
+            return
+
+        if not self._cache_kp_ps_spendable(password):
+            return
+
+        kp_left, kp_chg_left = self.calc_need_new_keypairs_cnt()
+        kp_left, kp_chg_left = self._cache_kp_ps_reserved(password,
+                                                          kp_left, kp_chg_left)
+        if kp_left is None:
+            return
+
+        kp_left, kp_chg_left = self._cache_kp_ps_change(password,
+                                                        kp_left, kp_chg_left)
+        if kp_left is None:
+            return
+
+        kp_left, kp_chg_left = self._cache_kp_ps_coins(password,
+                                                       kp_left, kp_chg_left)
+        if kp_left is None:
+            return
+
+        with self.keypairs_state_lock:
+            self.keypairs_state = KPStates.Ready
+        self.logger.info('Keyparis Cache Done')
+
+    def _cache_kp_spendable(self, password):
+        '''Cache spendable regular coins keys'''
+        w = self.wallet
         cached = 0
-        for c in w.get_utxos(None):
+        utxos = w.get_utxos(None,
+                            excluded_addresses=w.frozen_addresses,
+                            mature_only=True)
+        utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
+        for c in utxos:
+            if self.state != PSStates.Mixing:
+                self._cleanup_unfinished_keypairs_cache()
+                return
             addr = c['address']
             if addr in self._keypairs_cache[KP_SPENDABLE]:
                 continue
@@ -1621,12 +1659,17 @@ class PSManager(Logger):
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_SPENDABLE} type')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return True
 
-        sign_cnt, sign_change_cnt = self.calc_need_new_keypairs_cnt()
-        # add spendable ps coins keys (already presented denoms/collateral)
-        ps_spendable_addrs = list(self._keypairs_cache[KP_PS_SPENDABLE].keys())
+    def _cache_kp_ps_spendable(self, password):
+        '''Cache spendable ps coins keys (existing denoms/collaterals)'''
+        w = self.wallet
         cached = 0
+        ps_spendable_cache = self._keypairs_cache[KP_PS_SPENDABLE]
         for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
+            if self.state != PSStates.Mixing:
+                self._cleanup_unfinished_keypairs_cache()
+                return
             prev_h = c['prevout_hash']
             prev_n = c['prevout_n']
             outpoint = f'{prev_h}:{prev_n}'
@@ -1634,79 +1677,75 @@ class PSManager(Logger):
             if ps_denom and ps_denom[2] >= self.mix_rounds:
                 continue
             addr = c['address']
-            if w.is_change(addr):
-                sign_change_cnt -= 1
-            else:
-                sign_cnt -= 1
-            if addr in ps_spendable_addrs:
+            if addr in ps_spendable_cache:
                 continue
             sequence = w.get_address_index(addr)
             x_pubkey = w.keystore.get_xpubkey(*sequence)
             sec = w.keystore.get_private_key(sequence, password)
-            self._keypairs_cache[KP_PS_SPENDABLE][addr] = (x_pubkey, sec)
+            ps_spendable_cache[addr] = (x_pubkey, sec)
             cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_PS_SPENDABLE} type')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return True
 
-        if self.state != PSStates.Mixing:
-            self._cleanup_unfinished_keypairs_cache()
-            return
-
-        # add new denoms/collateral signing keys to future coins
-        ps_change_addrs = list(self._keypairs_cache[KP_PS_CHANGE].keys())
-        ps_coins_addrs = list(self._keypairs_cache[KP_PS_COINS].keys())
-
-        # add keys for ps_reserved addresses
+    def _cache_kp_ps_reserved(self, password, sign_cnt, sign_change_cnt):
+        w = self.wallet
+        ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
+        ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
         cached = 0
         for addr, data in self.wallet.db.get_ps_reserved().items():
             if self.state != PSStates.Mixing:
                 self._cleanup_unfinished_keypairs_cache()
-                return
+                return None, None
             if w.is_used(addr):
                 continue
             if w.is_change(addr):
                 sign_change_cnt -= 1
-                if addr in ps_change_addrs:
+                if addr in ps_change_cache:
                     continue
                 sequence = w.get_address_index(addr)
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_CHANGE][addr] = (x_pubkey, sec)
+                ps_change_cache[addr] = (x_pubkey, sec)
                 cached += 1
             else:
                 sign_cnt -= 1
-                if addr in ps_coins_addrs:
+                if addr in ps_coins_cache:
                     continue
                 sequence = w.get_address_index(addr)
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_COINS][addr] = (x_pubkey, sec)
+                ps_coins_cache[addr] = (x_pubkey, sec)
                 cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys for ps_reserved addresses')
             self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return sign_cnt, sign_change_cnt
 
-        ps_change_addrs = list(self._keypairs_cache[KP_PS_CHANGE].keys())
-        ps_coins_addrs = list(self._keypairs_cache[KP_PS_COINS].keys())
-
-        # add keys for unused addresses
+    def _cache_kp_ps_change(self, password, sign_cnt, sign_change_cnt):
         if sign_change_cnt > 0:
+            w = self.wallet
             first_change_index = self.first_unused_index(for_change=True)
+            ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
+            ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
             cached = 0
             ci = first_change_index
-            while cached < sign_change_cnt:
+            while sign_change_cnt > 0:
                 if self.state != PSStates.Mixing:
                     self._cleanup_unfinished_keypairs_cache()
-                    return
+                    return None, None
                 sequence = [1, ci]
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 _, addr = xpubkey_to_address(x_pubkey)
                 ci += 1
-                if w.is_used(addr) or addr in ps_change_addrs:
+                if w.is_used(addr):
+                    continue
+                sign_change_cnt -= 1
+                if addr in ps_change_cache:
                     continue
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_CHANGE][addr] = (x_pubkey, sec)
+                ps_change_cache[addr] = (x_pubkey, sec)
                 cached += 1
                 if not cached % 100:
                     self.logger.info(f'Cached {cached} keys'
@@ -1715,23 +1754,31 @@ class PSManager(Logger):
                 self.logger.info(f'Cached {cached} keys'
                                  f' of {KP_PS_CHANGE} type')
                 self.postpone_notification('ps-keypairs-changes', self.wallet)
+        return sign_cnt, sign_change_cnt
 
+    def _cache_kp_ps_coins(self, password, sign_cnt, sign_change_cnt):
         if sign_cnt > 0:
+            w = self.wallet
             first_recv_index = self.first_unused_index(for_change=False)
+            ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
+            ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
             cached = 0
             ri = first_recv_index
-            while cached < sign_cnt:
+            while sign_cnt > 0:
                 if self.state != PSStates.Mixing:
                     self._cleanup_unfinished_keypairs_cache()
-                    return
+                    return None, None
                 sequence = [0, ri]
                 x_pubkey = w.keystore.get_xpubkey(*sequence)
                 _, addr = xpubkey_to_address(x_pubkey)
                 ri += 1
-                if w.is_used(addr) or addr in ps_coins_addrs:
+                if w.is_used(addr):
+                    continue
+                sign_cnt -= 1
+                if addr in ps_coins_cache:
                     continue
                 sec = w.keystore.get_private_key(sequence, password)
-                self._keypairs_cache[KP_PS_COINS][addr] = (x_pubkey, sec)
+                ps_coins_cache[addr] = (x_pubkey, sec)
                 cached += 1
                 if not cached % 100:
                     self.logger.info(f'Cached {cached} keys'
@@ -1740,9 +1787,7 @@ class PSManager(Logger):
                 self.logger.info(f'Cached {cached} keys'
                                  f' of {KP_PS_COINS} type')
                 self.postpone_notification('ps-keypairs-changes', self.wallet)
-        with self.keypairs_state_lock:
-            self.keypairs_state = KPStates.Ready
-        self.logger.info('Keyparis Cache Done')
+        return sign_cnt, sign_change_cnt
 
     def _find_addrs_not_in_keypairs(self, addrs):
         addrs = set(addrs)
@@ -1969,6 +2014,8 @@ class PSManager(Logger):
         with self.state_lock:
             if self.state == PSStates.Mixing:
                 self.state = PSStates.StopMixing
+            elif self.state == PSStates.StopMixing:
+                return
             else:
                 msg = self.MIXING_NOT_RUNNING_MSG
                 self.trigger_callback('ps-state-changes', w, msg, 'inf')
@@ -2300,17 +2347,6 @@ class PSManager(Logger):
             if not w.db.get_ps_spending_denom(outpoint):
                 res.update({outpoint: denom})
         return res
-
-    def sort_outputs(self, tx):
-        def sort_denoms_fn(o):
-            if o.value == CREATE_COLLATERAL_VAL:
-                rank = 0
-            elif o.value in PS_DENOMS_VALS:
-                rank = 1
-            else:  # change
-                rank = 2
-            return (rank, o.value)
-        tx._outputs.sort(key=sort_denoms_fn)
 
     # Workflow methods for pay collateral transaction
     def get_confirmed_ps_collateral_data(self):
@@ -2676,8 +2712,6 @@ class PSManager(Logger):
         in0 = inputs[0]['address']
         tx = w.make_unsigned_transaction(inputs, outputs,
                                          self.config, change_addr=in0)
-        # sort ouptus again (change last)
-        self.sort_outputs(tx)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
@@ -3019,8 +3053,6 @@ class PSManager(Logger):
         in0 = inputs[0]['address']
         tx = w.make_unsigned_transaction(inputs, outputs,
                                          self.config, change_addr=in0)
-        # sort ouptus again (change last)
-        self.sort_outputs(tx)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
@@ -3692,54 +3724,56 @@ class PSManager(Logger):
         if not full_check:
             return
 
-        o_last, o_prev_h, o_prev_n = outputs[-1]
-        i_first, i_prev_h, i_prev_n, is_mine = inputs[0]
-        if o_last.address == i_first.address:  # seems it is change value
-            denoms_outputs = outputs[:-1]
-        elif o_last.value in PS_DENOMS_VALS:  # maybe no change happens
-            denoms_outputs = outputs
-        else:
-            return f'Unsuitable last output value={o_last.value}'
         dval_cnt = 0
+        change_count = 0
         collateral_count = 0
         denoms_cnt = 0
         last_denom_val = PS_DENOMS_VALS[0]  # must start with minimal denom
-        for o, prev_h, prev_n in denoms_outputs:
-            val = o.value
-            if val not in PS_DENOMS_VALS:
-                if collateral_count > 0:  # one collateral already found
-                    return f'Unsuitable output value={val}'
-                if val == CREATE_COLLATERAL_VAL:
-                    collateral_count += 1
+        txin0_addr = inputs[0][0].address
+        for i, (o, prev_h, prev_n) in enumerate(outputs):
+            if o.address == txin0_addr:
+                if change_count == 0:
+                    change_count += 1
+                else:
+                    return f'Excess change output i={i}'
                 continue
-            elif val < last_denom_val:  # must increase or be the same
-                return (f'Unsuitable denom value={val}, must be'
-                        f' {last_denom_val} or greater')
-            elif val == last_denom_val:
-                dval_cnt += 1
-                if dval_cnt > 11:  # max 11 times of same denom val
-                    return f'To many denoms of value={val}'
+            val = o.value
+            if val == CREATE_COLLATERAL_VAL:
+                if collateral_count > 0:
+                    return f'Excess collateral output i={i}'
+                else:
+                    collateral_count += 1
+            elif val in PS_DENOMS_VALS:
+                if val < last_denom_val:  # must increase or be the same
+                    return (f'Unsuitable denom value={val}, must be'
+                            f' {last_denom_val} or greater')
+                elif val == last_denom_val:
+                    dval_cnt += 1
+                    if dval_cnt > 11:  # max 11 times of same denom val
+                        return f'To many denoms of value={val}'
+                else:
+                    dval_cnt = 1
+                    last_denom_val = val
+                denoms_cnt += 1
             else:
-                dval_cnt = 1
-                last_denom_val = val
-            denoms_cnt += 1
-        if denoms_cnt == 0:
-            return 'Transaction has no denoms'
+                return f'Unsuitable output value={val}'
+        if denoms_cnt < 1:
+            return 'Transaction has no denom outputs'
 
     def _add_new_denoms_ps_data(self, txid, tx):
         w = self.wallet
         self._add_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
-        last_ouput_idx = len(outputs) - 1
         new_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            val = o.value
-            if i == last_ouput_idx and val not in PS_DENOMS_VALS:  # change
+            if o.address == txin0_addr:
                 continue
+            val = o.value
             new_outpoint = f'{txid}:{i}'
-            if i == 0 and val == CREATE_COLLATERAL_VAL:  # collaterral
-                new_outpoints.append((new_outpoint, o.address, val))
-            elif val in PS_DENOMS_VALS:  # denom round 0
+            if val == CREATE_COLLATERAL_VAL or val in PS_DENOMS_VALS:
                 new_outpoints.append((new_outpoint, o.address, val))
         with self.denoms_lock, self.collateral_lock:
             for new_outpoint, addr, val in new_outpoints:
@@ -3754,16 +3788,16 @@ class PSManager(Logger):
         w = self.wallet
         self._rm_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
-        last_ouput_idx = len(outputs) - 1
         rm_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            val = o.value
-            if i == last_ouput_idx and val not in PS_DENOMS_VALS:  # change
+            if o.address == txin0_addr:
                 continue
+            val = o.value
             rm_outpoint = f'{txid}:{i}'
-            if i == 0 and val == CREATE_COLLATERAL_VAL:  # collaterral
-                rm_outpoints.append((rm_outpoint, val))
-            elif val in PS_DENOMS_VALS:  # denom
+            if val == CREATE_COLLATERAL_VAL or val in PS_DENOMS_VALS:
                 rm_outpoints.append((rm_outpoint, val))
         with self.denoms_lock, self.collateral_lock:
             for rm_outpoint, val in rm_outpoints:
@@ -3782,41 +3816,66 @@ class PSManager(Logger):
             return 'Transaction has OP_RETURN outputs'
         if mine_icnt == 0:
             return 'Transaction has not enough inputs count'
-
-        i_first = inputs[0][0]
-        o_last = outputs[-1][0]
-        if ocnt == 2:
-            if o_last.address != i_first.address:  # check it is change output
-                return 'Transaction has wrong change address'
-            o_first = outputs[0][0]
-            if o_first.value != CREATE_COLLATERAL_VAL:
-                return 'Transaction has wrong output value'
-        elif ocnt == 1:
-            if o_last.value != CREATE_COLLATERAL_VAL:  # maybe no change
-                return 'Transaction has wrong output value'
-        else:
+        if ocnt > 2:
             return 'Transaction has wrong outputs count'
+        change_count = 0
+        collateral_count = 0
+        txin0_addr = inputs[0][0].address
+        for i, (o, prev_h, prev_n) in enumerate(outputs):
+            if o.address == txin0_addr:
+                if change_count == 0:
+                    change_count += 1
+                else:
+                    return f'Excess change output i={i}'
+                continue
+            val = o.value
+            if val == CREATE_COLLATERAL_VAL:
+                if collateral_count > 0:
+                    return f'Excess collateral output i={i}'
+                else:
+                    collateral_count += 1
+            else:
+                return f'Unsuitable output value={val}'
+        if collateral_count < 1:
+            return 'Transaction has no collateral outputs'
 
     def _add_new_collateral_ps_data(self, txid, tx):
         w = self.wallet
         self._add_spent_ps_outpoints_ps_data(txid, tx)
-        out0 = tx.outputs()[0]
-        addr = out0.address
-        val = out0.value
-        new_outpoint = f'{txid}:{0}'
+        outputs = tx.outputs()
+        new_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
+        for i, o in enumerate(outputs):
+            if o.address == txin0_addr:
+                continue
+            val = o.value
+            new_outpoint = f'{txid}:{i}'
+            if val == CREATE_COLLATERAL_VAL:
+                new_outpoints.append((new_outpoint, o.address, val))
         with self.collateral_lock:
-            if val == CREATE_COLLATERAL_VAL:  # collaterral
+            for new_outpoint, addr, val in new_outpoints:
                 new_collateral = (addr, val)
                 w.db.add_ps_collateral(new_outpoint, new_collateral)
 
     def _rm_new_collateral_ps_data(self, txid, tx):
         w = self.wallet
         self._rm_spent_ps_outpoints_ps_data(txid, tx)
-        out0 = tx.outputs()[0]
-        val = out0.value
-        rm_outpoint = f'{txid}:{0}'
+        outputs = tx.outputs()
+        rm_outpoints = []
+        txin0 = copy.deepcopy(tx.inputs()[0])
+        w.add_input_info(txin0)
+        txin0_addr = txin0['address']
+        for i, o in enumerate(outputs):
+            if o.address == txin0_addr:
+                continue
+            val = o.value
+            rm_outpoint = f'{txid}:{i}'
+            if val == CREATE_COLLATERAL_VAL:
+                rm_outpoints.append(rm_outpoint)
         with self.collateral_lock:
-            if val == CREATE_COLLATERAL_VAL:  # collaterral
+            for rm_outpoint in rm_outpoints:
                 w.db.pop_ps_collateral(rm_outpoint)
 
     @unpack_io_values
@@ -4369,19 +4428,34 @@ class PSManager(Logger):
 
     # Auxiliary methods
     def clear_ps_data(self):
+        if self.loop:
+            coro = self._clear_ps_data()
+            asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    async def _clear_ps_data(self):
         w = self.wallet
-        msg = None
-        with self.state_lock:
-            if self.state in self.mixing_running_states:
-                msg = _('To clear PrivateSend data stop PrivateSend mixing')
-            elif self.state == PSStates.FindingUntracked:
-                msg = _('Can not clear PrivateSend data. Process of finding'
-                        ' untracked PS transactions is currently run')
-            else:
-                self.logger.info(f'Clearing PrivateSend wallet data')
-                w.db.clear_ps_data()
-                self.state == PSStates.Initializing
-                self.logger.info(f'All PrivateSend wallet data cleared')
+
+        def _do_clear_ps_data():
+            msg = None
+            with self.state_lock:
+                if self.state in self.mixing_running_states:
+                    msg = _('To clear PrivateSend data'
+                            ' stop PrivateSend mixing')
+                elif self.state == PSStates.FindingUntracked:
+                    msg = _('Can not clear PrivateSend data. Process'
+                            ' of finding untracked PS transactions'
+                            ' is currently run')
+                elif self.state == PSStates.Cleaning:
+                    return
+                else:
+                    self.state = PSStates.Cleaning
+                    self.trigger_callback('ps-state-changes', w, None, None)
+                    self.logger.info(f'Clearing PrivateSend wallet data')
+                    w.db.clear_ps_data()
+                    self.state = PSStates.Ready
+                    self.logger.info(f'All PrivateSend wallet data cleared')
+            return msg
+        msg = await self.loop.run_in_executor(None, _do_clear_ps_data)
         if msg:
             self.trigger_callback('ps-state-changes', w, msg, None)
         else:
@@ -4460,7 +4534,7 @@ class PSManager(Logger):
                     self.logger.info(str_err)
         if failed != 0:
             with self.state_lock:
-                self.state == PSStates.Errored
+                self.state = PSStates.Errored
         if found:
             self.postpone_notification('ps-data-changes', w)
 

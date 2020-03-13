@@ -107,13 +107,16 @@ class GetDataThread(QThread):
 
     def run(self):
         while True:
-            self.need_update.wait()
-            self.need_update.clear()
-            self.res = self.model.get_full_history_for_model(self.group_ps)
             try:
-                self.data_ready_sig.emit()
-            except AttributeError:
-                pass  # data_ready signal is already unbound on gui close
+                self.need_update.wait()
+                self.need_update.clear()
+                self.res = self.model.get_full_history_for_model(self.group_ps)
+                try:
+                    self.data_ready_sig.emit()
+                except AttributeError:
+                    pass  # data_ready signal is already unbound on gui close
+            except Exception as e:
+                self.model.logger.error(f'GetDataThread error: {str(e)}')
 
 
 class HistoryModel(QAbstractItemModel, Logger):
@@ -260,18 +263,27 @@ class HistoryModel(QAbstractItemModel, Logger):
         if child:
             return x['dip2']
         else:
+            group_dip2 = x[0].get('group_dip2')
+            if group_dip2:
+                return group_dip2
             return x[0]['dip2']
 
     def sort_label(self, x, child=False):
         if child:
             return x['label']
         else:
+            group_label = x[0].get('group_label')
+            if group_label:
+                return group_label
             return x[0]['label']
 
     def sort_coin_value(self, x, child=False):
         if child:
             return x['value'].value
         else:
+            group_value = x[0].get('group_value')
+            if group_value:
+                return group_value.value
             return x[0]['value'].value
 
     def sort_running_coin_balance(self, x, child=False):

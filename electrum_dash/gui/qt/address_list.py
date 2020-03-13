@@ -64,13 +64,16 @@ class GetDataThread(QThread):
 
     def run(self):
         while True:
-            self.need_update.wait()
-            self.need_update.clear()
-            self.addr_items = self.model.get_addresses()
             try:
-                self.data_ready_sig.emit()
-            except AttributeError:
-                pass  # data_ready signal is already unbound on gui close
+                self.need_update.wait()
+                self.need_update.clear()
+                self.addr_items = self.model.get_addresses()
+                try:
+                    self.data_ready_sig.emit()
+                except AttributeError:
+                    pass  # data_ready signal is already unbound on gui close
+            except Exception as e:
+                self.model.logger.error(f'GetDataThread error: {str(e)}')
 
 
 class AddressModel(QAbstractItemModel, Logger):

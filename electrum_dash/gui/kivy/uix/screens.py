@@ -9,6 +9,7 @@ from kivy.app import App
 from kivy.cache import Cache
 from kivy.clock import Clock
 from kivy.compat import string_types
+from kivy.logger import Logger
 from kivy.properties import (ObjectProperty, DictProperty, NumericProperty,
                              ListProperty, StringProperty, BooleanProperty)
 
@@ -150,14 +151,17 @@ class GetHistoryDataThread(threading.Thread):
     def run(self):
         app = self.screen.app
         while True:
-            self.need_update.wait()
-            self.need_update.clear()
-            if self._stopped:
-                return
-            config = app.electrum_config
-            group_ps = app.wallet.psman.group_history
-            res = app.wallet.get_history(config=config, group_ps=group_ps)
-            Clock.schedule_once(lambda dt: self.screen.update_data(res))
+            try:
+                self.need_update.wait()
+                self.need_update.clear()
+                if self._stopped:
+                    return
+                config = app.electrum_config
+                group_ps = app.wallet.psman.group_history
+                res = app.wallet.get_history(config=config, group_ps=group_ps)
+                Clock.schedule_once(lambda dt: self.screen.update_data(res))
+            except Exception as e:
+                Logger.info(f'GetHistoryDataThread error: {str(e)}')
 
     def stop(self):
         self._stopped = True

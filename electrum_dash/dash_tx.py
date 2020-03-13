@@ -882,7 +882,7 @@ def read_extra_payload(vds, tx_type):
             extra_payload = read_method(vds)
             assert isinstance(extra_payload, spec_tx_class)
         else:
-            extra_payload = vds.read_bytes(extra_payload_size)
+            raise DashTxError(f'Unkonwn tx type {tx_type}')
         assert vds.read_cursor == end
     else:
         extra_payload = b''

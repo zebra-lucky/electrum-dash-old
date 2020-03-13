@@ -33,13 +33,6 @@ fi
 
 
 source contrib/dash/travis/electrum_dash_version_env.sh
-# Check is release
-SIMPLIFIED_VERSION_PATTERN="^([^A-Za-z]+).*"
-if [[ ${DASH_ELECTRUM_VERSION} =~ ${SIMPLIFIED_VERSION_PATTERN} ]]; then
-    if [[ ${BASH_REMATCH[1]} == ${DASH_ELECTRUM_VERSION} ]]; then
-        IS_RELEASE=y
-    fi
-fi
 if [[ -n $IS_RELEASE ]]; then
     echo electrum-dash version is $DASH_ELECTRUM_VERSION, release build
 else

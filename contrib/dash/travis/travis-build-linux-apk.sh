@@ -1,6 +1,11 @@
 #!/bin/bash
 set -ev
 
+if [[ $ELECTRUM_MAINNET == "true" ]] && [[ -z $IS_RELEASE ]]; then
+    # do not build mainnet apk if is not release
+    exit 0
+fi
+
 cd build
 if [[ -n $TRAVIS_TAG ]]; then
     BUILD_REPO_URL=https://github.com/akhavr/electrum-dash.git
@@ -8,6 +13,7 @@ if [[ -n $TRAVIS_TAG ]]; then
 else
     git clone .. electrum-dash
 fi
+
 
 pushd electrum-dash
 ./contrib/make_locale
