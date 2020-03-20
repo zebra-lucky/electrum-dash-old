@@ -138,6 +138,7 @@ PPA_SERIES = {
     'bionic': '18.04.1',
     'disco': '19.04.1',
     'eoan': '19.10.1',
+    'focal': '20.04.1',
 }
 PEP440_PUBVER_PATTERN = re.compile('^((\d+)!)?'
                                    '((\d+)(\.\d+)*)'
