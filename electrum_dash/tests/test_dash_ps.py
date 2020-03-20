@@ -16,8 +16,10 @@ from electrum_dash.dash_ps import (COLLATERAL_VAL, PSPossibleDoubleSpendError,
                                    CREATE_COLLATERAL_VAL, to_duffs, PSTxData,
                                    PSTxWorkflow, PSDenominateWorkflow,
                                    PSMinRoundsCheckFailed, PS_DENOMS_VALS,
-                                   FILTERED_TXID, filter_log_line,
-                                   KP_ALL_TYPES, PSStates, FILTERED_ADDR)
+                                   filter_log_line, KPStates, KP_ALL_TYPES,
+                                   KP_SPENDABLE, KP_PS_SPENDABLE, KP_PS_COINS,
+                                   KP_PS_CHANGE, PSStates,
+                                   FILTERED_TXID, FILTERED_ADDR)
 from electrum_dash.dash_tx import PSTxTypes, PSCoinRounds, SPEC_TX_NAMES
 from electrum_dash.keystore import xpubkey_to_address
 from electrum_dash.simple_config import SimpleConfig
@@ -2336,6 +2338,64 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         psman.mix_rounds = 16
         assert psman.calc_need_new_keypairs_cnt() == (3645, 237)
+
+    def test_check_need_new_keypairs(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+        psman.state = PSStates.Mixing
+        psman.mix_rounds = 2
+        psman.keep_amount = 2
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        # check when wallet has no password
+        assert psman.check_need_new_keypairs() == (False, None)
+
+        # mock wallet.has_password
+        prev_has_password = w.has_password
+        w.has_password = lambda: True
+        assert psman.check_need_new_keypairs() == (True, KPStates.Empty)
+        assert psman.keypairs_state == KPStates.NeedCache
+
+        assert psman.check_need_new_keypairs() == (False, None)
+        assert psman.keypairs_state == KPStates.NeedCache
+
+        psman._keypairs_state = KPStates.Caching
+        assert psman.check_need_new_keypairs() == (False, None)
+        assert psman.keypairs_state == KPStates.Caching
+
+        psman.keypairs_state = KPStates.Empty
+        psman._cache_keypairs(password=None)
+        assert psman.keypairs_state == KPStates.Ready
+
+        assert psman.check_need_new_keypairs() == (False, None)
+        assert psman.keypairs_state == KPStates.Ready
+
+        psman.keypairs_state = KPStates.Unused
+        assert psman.check_need_new_keypairs() == (False, None)
+        assert psman.keypairs_state == KPStates.Ready
+
+        # clean some keypairs and check again
+        psman.keypairs_state = KPStates.Unused
+        psman._keypairs_cache[KP_SPENDABLE] = {}
+        assert psman.check_need_new_keypairs() == (True, KPStates.Unused)
+        assert psman.keypairs_state == KPStates.NeedCache
+        psman._cache_keypairs(password=None)
+
+        psman.keypairs_state = KPStates.Unused
+        psman._keypairs_cache[KP_PS_COINS] = {}
+        assert psman.check_need_new_keypairs() == (True, KPStates.Unused)
+        assert psman.keypairs_state == KPStates.NeedCache
+        psman._cache_keypairs(password=None)
+
+        psman.keypairs_state = KPStates.Unused
+        psman._keypairs_cache[KP_PS_CHANGE] = {}
+        assert psman.check_need_new_keypairs() == (True, KPStates.Unused)
+        assert psman.keypairs_state == KPStates.NeedCache
+        psman._cache_keypairs(password=None)
+
+        w.has_password = prev_has_password
 
     def test_cache_keypairs(self):
         w = self.wallet

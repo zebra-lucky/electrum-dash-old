@@ -1560,21 +1560,30 @@ class PSManager(Logger):
         return need_sign_cnt, need_sign_change_cnt
 
     def check_need_new_keypairs(self):
-        with self.keypairs_state_lock:
-            prev_kp_state = self.keypairs_state
-            self.keypairs_state = KPStates.NeedCache
-
         w = self.wallet
         if not w.has_password():
-            self.keypairs_state = prev_kp_state
-            return False, prev_kp_state
+            return False, None
+
+        with self.keypairs_state_lock:
+            prev_kp_state = self.keypairs_state
+            if prev_kp_state in [KPStates.NeedCache, KPStates.Caching]:
+                return False, None
+            self.keypairs_state = KPStates.NeedCache
 
         if prev_kp_state == KPStates.Empty:
             return True, prev_kp_state
 
+        for cache_type in KP_ALL_TYPES:
+            if cache_type not in self._keypairs_cache:
+                return True, prev_kp_state
+
         with w.lock:
             # check spendable regular coins keys
-            for c in w.get_utxos(None):
+            utxos = w.get_utxos(None,
+                                excluded_addresses=w.frozen_addresses,
+                                mature_only=True)
+            utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
+            for c in utxos:
                 if c['address'] not in self._keypairs_cache[KP_SPENDABLE]:
                     return True, prev_kp_state
 
@@ -1598,8 +1607,9 @@ class PSManager(Logger):
                 return True, prev_kp_state
             if sign_change_cnt - len(self._keypairs_cache[KP_PS_CHANGE]) > 0:
                 return True, prev_kp_state
-        self.keypairs_state = KPStates.Ready
-        return False, prev_kp_state
+        with self.keypairs_state_lock:
+            self.keypairs_state = KPStates.Ready
+        return False, None
 
     def _cache_keypairs(self, password):
         self.logger.info('Making Keyparis Cache')
