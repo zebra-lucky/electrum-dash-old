@@ -1,3 +1,14 @@
+# Release 3.3.8.4
+
+ * Trezor/KeepKey plugins: fix signing of CbTx outputs
+ * Disable PrivateSend and PrivateSend UI for HW wallets (unsupported),
+   allow mixing amounts below keep amount, other PS fixses
+ * android receive screen: copy address instead Payment Request if
+   amount is not set
+ * add PPA for Focal Fossa (Ubuntu 20.04), android arm64-v8a apk build
+ * update Tor Proxy in win builds to 0.4.2.6
+
+
 # Release 3.3.8.3
 
  * add Dash PrivateSend support (qt/kivy gui supported)
