@@ -58,11 +58,14 @@ class GetDataThread(QThread):
         self.data_ready_sig = data_ready_sig
         self.need_update = threading.Event()
         self.coin_items = []
+        self.stopping = False
 
     def run(self):
-        while True:
+        while not self.stopping:
             try:
                 self.need_update.wait()
+                if self.stopping:
+                    return
                 self.need_update.clear()
                 self.coin_items = self.model.get_coins()
                 try:
@@ -71,6 +74,11 @@ class GetDataThread(QThread):
                     pass  # data_ready signal is already unbound on gui close
             except Exception as e:
                 self.model.logger.error(f'GetDataThread error: {str(e)}')
+
+    def stop(self):
+        self.stopping = True
+        self.need_update.set()
+        self.wait(0)
 
 
 class UTXOModel(QAbstractItemModel, Logger):
