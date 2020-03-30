@@ -757,17 +757,28 @@ class PSManager(Logger):
         self.config = None
         self._state = PSStates.Unsupported
         self.wallet_types_supported = ['standard']
-        if wallet.wallet_type in self.wallet_types_supported:
+        self.keystore_types_supported = ['bip32']
+        keystore = wallet.db.get('keystore')
+        if keystore:
+            keystore_type = keystore.get('type', 'unknown')
+        else:
+            keystore_type = 'unknown'
+        if (wallet.wallet_type in self.wallet_types_supported
+                and keystore_type in self.keystore_types_supported):
             if wallet.db.get_ps_data('ps_enabled', False):
                 self.state = PSStates.Initializing
             else:
                 self.state = PSStates.Disabled
         if self.unsupported:
-            supported_str = ', '.join(self.wallet_types_supported)
+            supported_w = ', '.join(self.wallet_types_supported)
+            supported_ks = ', '.join(self.keystore_types_supported)
             this_type = wallet.wallet_type
+            this_ks_type = keystore_type
             self.unsupported_msg = _(f'PrivateSend is currently supported on'
-                                     f' next wallet types: {supported_str}.'
-                                     f'\n\nThis wallet has type: {this_type}.')
+                                     f' next wallet types: "{supported_w}"'
+                                     f' and keystore types: "{supported_ks}".'
+                                     f'\n\nThis wallet has type "{this_type}"'
+                                     f' and kestore type "{this_ks_type}".')
         else:
             self.unsupported_msg = ''
 
