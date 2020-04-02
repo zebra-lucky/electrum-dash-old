@@ -1087,7 +1087,8 @@ class PSManager(Logger):
 
     def notify_ps_txs_data(self, full_txt=False):
         if full_txt:
-            return _('Notify when PrivateSend mixing transactions is arrived')
+            return _('Notify when PrivateSend mixing transactions'
+                     ' have arrived')
         else:
             return _('Notify on PrivateSend transactions')
 
