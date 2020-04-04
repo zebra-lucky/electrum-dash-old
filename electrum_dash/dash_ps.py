@@ -61,6 +61,35 @@ def filter_log_line(line):
     return output_line
 
 
+def varint_size(size):
+    if size < 253:
+        return 1
+    elif size < 2**16:
+        return 3
+    elif size < 2**32:
+        return 5
+    elif size < 2**64:
+        return 9
+
+
+def calc_tx_size(in_cnt, out_cnt, max_size=False):
+    # base size is 4 bytes version + 4 bytes lock_time
+    max_tx_size = 4 + 4
+    # in size is 36 bytes outpoint + 1b len + iscript + 4 bytes sequence_no
+    # iscript is 1b varint + sig (71-73 bytes) + 1b varint + 33 bytes pubk
+    # max in size is 36 + 1 + (1 + 73 + 1 + 33) + 4 = 149
+    max_tx_size += varint_size(in_cnt) + in_cnt * (149 if max_size else 148)
+
+    # out size is 8 byte value + 1b varint + 25 bytes p2phk script
+    # out size is 8 + 1 + 25 = 34
+    max_tx_size += varint_size(out_cnt) + out_cnt * 34
+    return max_tx_size
+
+
+def calc_tx_fee(in_cnt, out_cnt, fee_per_kb, max_size=False):
+    return round(calc_tx_size(in_cnt, out_cnt, max_size) * fee_per_kb / 1000)
+
+
 def to_duffs(amount):
     return round(Decimal(amount)*COIN)
 
@@ -1527,18 +1556,12 @@ class PSManager(Logger):
                 return
             await asyncio.sleep(1)
 
-    def calc_need_new_keypairs_cnt(self):
+    def calc_need_sign_cnt(self, new_denoms_cnt):
         w = self.wallet
         # calc already presented ps_denoms
         old_denoms_cnt = len(w.db.get_ps_denoms(min_rounds=0))
         old_denoms_amnt = sum(self.wallet.get_balance(include_ps=False,
                                                       min_rounds=0))
-        # check if new denoms tx will be created
-        keep_value = to_duffs(self.keep_amount)
-        need_amnt = keep_value - old_denoms_amnt + COLLATERAL_VAL
-        new_denoms_approx = self.find_denoms_approx(need_amnt)
-        new_denoms_cnt = sum([len(a) for a in new_denoms_approx])
-
         # calc need sign denoms for each round
         total_denoms_cnt = old_denoms_cnt + new_denoms_cnt
         sign_denoms_cnt = 0
@@ -1569,7 +1592,12 @@ class PSManager(Logger):
         sign_denoms_cnt += (total_denoms_cnt - old_denoms_cnt)
 
         need_sign_cnt = sign_denoms_cnt + new_collateral_cnt
-        return need_sign_cnt, need_sign_change_cnt
+        return need_sign_cnt, need_sign_change_cnt, new_collateral_cnt
+
+    def calc_need_new_keypairs_cnt(self):
+        new_denoms_amounts = self.calc_need_denoms_amounts()
+        new_denoms_cnt = sum([len(a) for a in new_denoms_amounts])
+        return self.calc_need_sign_cnt(new_denoms_cnt)[0:2]
 
     def check_need_new_keypairs(self):
         w = self.wallet
@@ -2305,27 +2333,105 @@ class PSManager(Logger):
             w.synchronizer.remove_addr(addr)
 
     def calc_need_denoms_amounts(self, coins=None, use_cache=False):
+        w = self.wallet
+        fee_per_kb = self.config.fee_per_kb()
+        if fee_per_kb is None:
+            raise NoDynamicFeeEstimates()
+
+        if coins is not None:  # calc on coins selected from GUI
+            return self._calc_denoms_amounts_from_coins(coins, fee_per_kb)
+
         if use_cache:
-            denoms_amount = self._ps_denoms_amount_cache
+            old_denoms_val = self._ps_denoms_amount_cache
         else:
-            denoms_amount = sum(self.wallet.get_balance(include_ps=False,
-                                                        min_rounds=0))
-        if coins is not None:
-            coins_amount = 0
-            for c in coins:
-                coins_amount += c['value']
-            max_keep_amount_duffs = to_duffs(self.max_keep_amount)
-            if coins_amount + denoms_amount > max_keep_amount_duffs:
-                need_amount = max_keep_amount_duffs
+            old_denoms_val = sum(self.wallet.get_balance(include_ps=False,
+                                                         min_rounds=0))
+
+        need_val = to_duffs(self.keep_amount) + CREATE_COLLATERAL_VAL
+        if need_val < old_denoms_val:  # already have need value of denoms
+            return []
+
+        # calc spendable coins val
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        coins_val = sum([c['value'] for c in coins])
+        if coins_val < PS_DENOMS_VALS[0]:  # no coins to create denoms
+            return []
+
+        approx_val = need_val - old_denoms_val
+        outputs_amounts = self.find_denoms_approx(approx_val)
+        if coins_val >= self._calc_total_need_val(coins, outputs_amounts,
+                                                  fee_per_kb):
+            return outputs_amounts
+
+        approx_val = coins_val
+        while True:
+            if approx_val < CREATE_COLLATERAL_VAL:
+                return []
+            outputs_amounts = self.find_denoms_approx(approx_val)
+            if coins_val >= self._calc_total_need_val(coins, outputs_amounts,
+                                                      fee_per_kb):
+                return outputs_amounts
             else:
-                need_amount = coins_amount
-                # room for fees
-                need_amount -= PS_DENOMS_VALS[0] + COLLATERAL_VAL + 1
-        else:
-            keep_amount_duffs = to_duffs(self.keep_amount)
-            need_amount = keep_amount_duffs - denoms_amount
-            need_amount += COLLATERAL_VAL  # room for fees
-        return self.find_denoms_approx(need_amount)
+                approx_val -= PS_DENOMS_VALS[0]
+
+    def _calc_total_need_val(self, coins, outputs_amounts, fee_per_kb):
+        new_denoms_val = sum([sum(a) for a in outputs_amounts])
+        new_denoms_cnt = sum([len(a) for a in outputs_amounts])
+
+        # calc future new collaterals count and value
+        new_collateral_cnt = self.calc_need_sign_cnt(new_denoms_cnt)[2]
+        if not self.ps_collateral_cnt and outputs_amounts:
+            new_collateral_cnt -= 1
+            outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
+        new_collaterals_val = CREATE_COLLATERAL_VAL * new_collateral_cnt
+
+        # calc new denoms fee
+        new_denoms_fee = 0
+        for i, amounts in enumerate(outputs_amounts):
+            if i == 0:  # use all coins as inputs, add change output
+                new_denoms_fee += calc_tx_fee(len(coins), len(amounts) + 1,
+                                              fee_per_kb, max_size=True)
+            else:  # use change from prev txs as input
+                new_denoms_fee += calc_tx_fee(1, len(amounts) + 1,
+                                              fee_per_kb, max_size=True)
+
+        # calc future new collaterals fee
+        new_collateral_fee = calc_tx_fee(1, 2, fee_per_kb, max_size=True)
+        new_collaterals_fee = new_collateral_cnt * new_collateral_fee
+
+        # have coins enough to create new denoms and future new collaterals
+        return (new_denoms_val + new_denoms_fee +
+                new_collaterals_val + new_collaterals_fee)
+
+    def _calc_denoms_amounts_from_coins(self, coins, fee_per_kb):
+        coins_val = sum([c['value'] for c in coins])
+        approx_val = coins_val
+        while True:
+            if approx_val < CREATE_COLLATERAL_VAL:
+                return []
+            outputs_amounts = self.find_denoms_approx(approx_val)
+            new_denoms_cnt = sum([len(a) for a in outputs_amounts])
+            if not self.ps_collateral_cnt and outputs_amounts:
+                outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
+            new_denoms_val = sum([sum(a) for a in outputs_amounts])
+
+            new_denoms_fee = 0
+            for i, amounts in enumerate(outputs_amounts):
+                if i == 0:  # use all coins as inputs, add change output
+                    new_denoms_fee += calc_tx_fee(len(coins), len(amounts) + 1,
+                                                  fee_per_kb, max_size=True)
+                else:  # use change from prev txs as input
+                    new_denoms_fee += calc_tx_fee(1, len(amounts) + 1,
+                                                  fee_per_kb, max_size=True)
+
+            if coins_val - new_denoms_val - new_denoms_fee > 0:
+                break
+            else:
+                approx_val -= PS_DENOMS_VALS[0] // 2
+
+        return outputs_amounts
 
     def find_denoms_approx(self, need_amount):
         if need_amount < COLLATERAL_VAL:
@@ -2954,20 +3060,6 @@ class PSManager(Logger):
         for i, tx_amounts in enumerate(outputs_amounts):
             try:
                 w = self.wallet
-
-                def _check_enough_funds():
-                    total = sum([sum(a) for a in outputs_amounts])
-                    total += CREATE_COLLATERAL_VAL*3
-                    coins = w.get_utxos(None,
-                                        excluded_addresses=w.frozen_addresses,
-                                        mature_only=True, confirmed_only=True,
-                                        consider_islocks=True)
-                    coins_total = sum([c['value'] for c in coins
-                                       if not w.is_frozen_coin(c)])
-                    if coins_total < total:
-                        raise NotEnoughFunds()
-                if i == 0:
-                    await self.loop.run_in_executor(None, _check_enough_funds)
                 _make_tx = self._make_new_denoms_tx
                 txid, tx = await self.loop.run_in_executor(None, _make_tx,
                                                            wfl, tx_amounts, i)
@@ -3026,11 +3118,6 @@ class PSManager(Logger):
                 self.new_collateral_wfl_lock:
             if self.new_denoms_wfl:
                 return None, None
-
-            if (not self.pay_collateral_wfl
-                    and not self.new_collateral_wfl
-                    and not self.ps_collateral_cnt):
-                outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
 
             uuid = str(uuid4())
             wfl = PSTxWorkflow(uuid=uuid)
