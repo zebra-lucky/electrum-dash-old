@@ -1560,8 +1560,6 @@ class PSManager(Logger):
         w = self.wallet
         # calc already presented ps_denoms
         old_denoms_cnt = len(w.db.get_ps_denoms(min_rounds=0))
-        old_denoms_amnt = sum(self.wallet.get_balance(include_ps=False,
-                                                      min_rounds=0))
         # calc need sign denoms for each round
         total_denoms_cnt = old_denoms_cnt + new_denoms_cnt
         sign_denoms_cnt = 0
@@ -1778,7 +1776,6 @@ class PSManager(Logger):
             w = self.wallet
             first_change_index = self.first_unused_index(for_change=True)
             ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
-            ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
             cached = 0
             ci = first_change_index
             while sign_change_cnt > 0:
@@ -1810,7 +1807,6 @@ class PSManager(Logger):
         if sign_cnt > 0:
             w = self.wallet
             first_recv_index = self.first_unused_index(for_change=False)
-            ps_change_cache = self._keypairs_cache[KP_PS_CHANGE]
             ps_coins_cache = self._keypairs_cache[KP_PS_COINS]
             cached = 0
             ri = first_recv_index
@@ -2412,7 +2408,6 @@ class PSManager(Logger):
             if approx_val < CREATE_COLLATERAL_VAL:
                 return []
             outputs_amounts = self.find_denoms_approx(approx_val)
-            new_denoms_cnt = sum([len(a) for a in outputs_amounts])
             if not self.ps_collateral_cnt and outputs_amounts:
                 outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
             new_denoms_val = sum([sum(a) for a in outputs_amounts])

@@ -17,7 +17,7 @@ from electrum_dash.dash_ps import (COLLATERAL_VAL, PSPossibleDoubleSpendError,
                                    PSTxWorkflow, PSDenominateWorkflow,
                                    PSMinRoundsCheckFailed, PS_DENOMS_VALS,
                                    filter_log_line, KPStates, KP_ALL_TYPES,
-                                   KP_SPENDABLE, KP_PS_SPENDABLE, KP_PS_COINS,
+                                   KP_SPENDABLE, KP_PS_COINS,
                                    KP_PS_CHANGE, PSStates, calc_tx_size,
                                    calc_tx_fee, FILTERED_TXID, FILTERED_ADDR)
 from electrum_dash.dash_tx import PSTxTypes, PSCoinRounds, SPEC_TX_NAMES
