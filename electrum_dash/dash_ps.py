@@ -2820,8 +2820,10 @@ class PSManager(Logger):
             utxos = w.get_utxos(None,
                                 excluded_addresses=w.frozen_addresses,
                                 mature_only=True, confirmed_only=True,
-                                consider_islocks=True)
+                                consider_islocks=True, include_ps=True)
             utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
+            utxos = [utxo for utxo in utxos if utxo['ps_rounds'] is None
+                     or utxo['value'] == PS_DENOMS_VALS[0]]
         else:
             utxos = coins
         tx = w.make_unsigned_transaction(utxos, outputs, self.config)

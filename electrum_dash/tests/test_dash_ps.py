@@ -1428,6 +1428,58 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert txouts[0].value == CREATE_COLLATERAL_VAL
         assert txouts[0].address in w.db.select_ps_reserved(data=wfl.uuid)
 
+    def test_create_new_collateral_wfl_from_ps_denoms(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        coins = w.get_spendable_coins(domain=None, config=self.config)
+
+        c_outpoint, ps_collateral = w.db.get_ps_collateral()
+        w.db.pop_ps_collateral(c_outpoint)
+        w.db.add_ps_other(c_outpoint, ps_collateral)
+
+        coro = psman.create_new_collateral_wfl()
+        asyncio.get_event_loop().run_until_complete(coro)
+        assert psman.new_collateral_wfl
+
+        wfl = psman.new_collateral_wfl
+        txid = wfl.tx_order[0]
+        raw_tx = wfl.tx_data[txid].raw_tx
+        tx = Transaction(raw_tx)
+        for txin in  tx.inputs():
+            ch_tx = w.db.get_transaction(txin['prevout_hash'])
+            prev_n = txin['prevout_n']
+            ch_txout = ch_tx.outputs()[prev_n]
+            assert ch_txout.value not in PS_DENOMS_VALS
+        psman.clear_new_collateral_wfl()
+
+        for c in coins:
+            prev_h = c['prevout_hash']
+            prev_n = c['prevout_n']
+            c_outpoint = f'{prev_h}:{prev_n}'
+            c_other = (c['address'], c['value'])
+            w.db.add_ps_other(c_outpoint, c_other)
+
+        coins = w.get_spendable_coins(domain=None, include_ps=False,
+                                      config=self.config)
+        assert coins == []
+
+        coro = psman.create_new_collateral_wfl()
+        asyncio.get_event_loop().run_until_complete(coro)
+        assert psman.new_collateral_wfl
+        wfl = psman.new_collateral_wfl
+        txid = wfl.tx_order[0]
+        raw_tx = wfl.tx_data[txid].raw_tx
+        tx = Transaction(raw_tx)
+        for txin in  tx.inputs():
+            ch_tx = w.db.get_transaction(txin['prevout_hash'])
+            prev_n = txin['prevout_n']
+            ch_txout = ch_tx.outputs()[prev_n]
+            assert ch_txout.value == PS_DENOMS_VALS[0]
+
     def test_cleanup_new_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
