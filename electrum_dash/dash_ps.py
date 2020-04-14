@@ -2121,7 +2121,8 @@ class PSManager(Logger):
     async def _check_all_mixed(self):
         while not self.main_taskgroup.closed():
             await asyncio.sleep(10)
-            if self.all_mixed:
+            if (self.all_mixed
+                    and not self.calc_need_denoms_amounts(use_cache=True)):
                 await self.stop_mixing_from_async_thread(self.ALL_MIXED_MSG,
                                                          'inf')
 
