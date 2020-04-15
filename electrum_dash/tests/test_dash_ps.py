@@ -19,7 +19,8 @@ from electrum_dash.dash_ps import (COLLATERAL_VAL, PSPossibleDoubleSpendError,
                                    filter_log_line, KPStates, KP_ALL_TYPES,
                                    KP_SPENDABLE, KP_PS_COINS,
                                    KP_PS_CHANGE, PSStates, calc_tx_size,
-                                   calc_tx_fee, FILTERED_TXID, FILTERED_ADDR)
+                                   calc_tx_fee, FILTERED_TXID, FILTERED_ADDR,
+                                   CREATE_COLLATERAL_VALS)
 from electrum_dash.dash_tx import PSTxTypes, PSCoinRounds, SPEC_TX_NAMES
 from electrum_dash.keystore import xpubkey_to_address
 from electrum_dash.simple_config import SimpleConfig

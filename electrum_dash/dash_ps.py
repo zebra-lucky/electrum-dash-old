@@ -123,7 +123,9 @@ PS_DENOM_REVERSE_DICT = {int(v): k for k, v in PS_DENOMS_DICT.items()}
 
 COLLATERAL_VAL = to_duffs(0.0001)
 CREATE_COLLATERAL_VAL = COLLATERAL_VAL*4
+CREATE_COLLATERAL_VALS = [COLLATERAL_VAL*i for i in range(1,10)]
 PS_DENOMS_VALS = sorted(PS_DENOMS_DICT.keys())
+PS_VALS = PS_DENOMS_VALS + CREATE_COLLATERAL_VALS
 
 PS_MIXING_TX_TYPES = list(map(lambda x: x.value, [PSTxTypes.NEW_DENOMS,
                                                   PSTxTypes.NEW_COLLATERAL,
@@ -3712,16 +3714,17 @@ class PSManager(Logger):
                 prev_h = i['prevout_hash']
                 prev_n = i['prevout_n']
                 prev_tx = w.db.get_transaction(prev_h)
+                tx_type = w.db.get_ps_tx(prev_h)[0]
                 if prev_tx:
                     o = prev_tx.outputs()[prev_n]
-                    if w.is_mine(o.address):
-                        inputs.append((o, prev_h, prev_n, True))  # mine
+                    if w.is_mine(o.address):  # mine
+                        inputs.append((o, prev_h, prev_n, True, tx_type))
                         mine_icnt += 1
-                    else:
-                        inputs.append((o, prev_h, prev_n, False))  # others
+                    else:  # others
+                        inputs.append((o, prev_h, prev_n, False, tx_type))
                         others_icnt += 1
-                else:
-                    inputs.append((None, prev_h, prev_n, False))  # others
+                else:  # possible others
+                    inputs.append((None, prev_h, prev_n, False, tx_type))
                     others_icnt += 1
             for idx, o in enumerate(tx.outputs()):
                 ocnt += 1
@@ -3840,24 +3843,41 @@ class PSManager(Logger):
             return
 
         dval_cnt = 0
-        change_count = 0
-        collateral_count = 0
+        collateral_cnt = 0
         denoms_cnt = 0
         last_denom_val = PS_DENOMS_VALS[0]  # must start with minimal denom
+
         txin0_addr = inputs[0][0].address
+        txin0_tx_type = inputs[0][4]
+        change_cnt = sum([1 if o.address == txin0_addr else 0
+                          for o, prev_h, prev_n in outputs])
+        change_cnt2 = sum([1 if o.value not in PS_VALS else 0
+                           for o, prev_h, prev_n in outputs])
+        change_cnt = max(change_cnt, change_cnt2)
+        if change_cnt > 1:
+            return f'Excess change outputs'
+
         for i, (o, prev_h, prev_n) in enumerate(outputs):
             if o.address == txin0_addr:
-                if change_count == 0:
-                    change_count += 1
-                else:
-                    return f'Excess change output i={i}'
                 continue
             val = o.value
-            if val == CREATE_COLLATERAL_VAL:
-                if collateral_count > 0:
+            if val in CREATE_COLLATERAL_VALS:
+                if collateral_cnt > 0:
                     return f'Excess collateral output i={i}'
                 else:
-                    collateral_count += 1
+                    if val == CREATE_COLLATERAL_VAL:
+                        collateral_cnt += 1
+                    elif change_cnt > 0:
+                        return f'This type of tx must have no change'
+                    elif icnt > 1:
+                        return f'This type of tx must have one input'
+                    elif txin0_tx_type not in [PSTxTypes.OTHER_PS_COINS,
+                                               PSTxTypes.NEW_DENOMS,
+                                               PSTxTypes.DENOMINATE]:
+                        return (f'This type of tx must have input from'
+                                f' ps other coins/new denoms/denominate txs')
+                    else:
+                        collateral_cnt += 1
             elif val in PS_DENOMS_VALS:
                 if val < last_denom_val:  # must increase or be the same
                     return (f'Unsuitable denom value={val}, must be'
@@ -3884,15 +3904,16 @@ class PSManager(Logger):
         w.add_input_info(txin0)
         txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            if o.address == txin0_addr:
+            addr = o.address
+            if addr == txin0_addr:
                 continue
             val = o.value
-            new_outpoint = f'{txid}:{i}'
-            if val == CREATE_COLLATERAL_VAL or val in PS_DENOMS_VALS:
-                new_outpoints.append((new_outpoint, o.address, val))
+            if val in PS_VALS:
+                new_outpoint = f'{txid}:{i}'
+                new_outpoints.append((new_outpoint, addr, val))
         with self.denoms_lock, self.collateral_lock:
             for new_outpoint, addr, val in new_outpoints:
-                if val == CREATE_COLLATERAL_VAL:  # collaterral
+                if val in CREATE_COLLATERAL_VALS:  # collaterral
                     new_collateral = (addr, val)
                     w.db.add_ps_collateral(new_outpoint, new_collateral)
                 else:  # denom round 0
@@ -3911,12 +3932,12 @@ class PSManager(Logger):
             if o.address == txin0_addr:
                 continue
             val = o.value
-            rm_outpoint = f'{txid}:{i}'
-            if val == CREATE_COLLATERAL_VAL or val in PS_DENOMS_VALS:
+            if val in PS_VALS:
+                rm_outpoint = f'{txid}:{i}'
                 rm_outpoints.append((rm_outpoint, val))
         with self.denoms_lock, self.collateral_lock:
             for rm_outpoint, val in rm_outpoints:
-                if val == CREATE_COLLATERAL_VAL:  # collaterral
+                if val in CREATE_COLLATERAL_VALS:  # collaterral
                     w.db.pop_ps_collateral(rm_outpoint)
                 else:  # denom round 0
                     self.pop_ps_denom(rm_outpoint)
@@ -3933,25 +3954,43 @@ class PSManager(Logger):
             return 'Transaction has not enough inputs count'
         if ocnt > 2:
             return 'Transaction has wrong outputs count'
-        change_count = 0
-        collateral_count = 0
+
+        collateral_cnt = 0
+
         txin0_addr = inputs[0][0].address
+        txin0_tx_type = inputs[0][4]
+        change_cnt = sum([1 if o.address == txin0_addr else 0
+                          for o, prev_h, prev_n in outputs])
+        change_cnt2 = sum([1 if o.value not in CREATE_COLLATERAL_VALS else 0
+                           for o, prev_h, prev_n in outputs])
+        change_cnt = max(change_cnt, change_cnt2)
+        if change_cnt > 1:
+            return f'Excess change outputs'
+
         for i, (o, prev_h, prev_n) in enumerate(outputs):
             if o.address == txin0_addr:
-                if change_count == 0:
-                    change_count += 1
-                else:
-                    return f'Excess change output i={i}'
                 continue
             val = o.value
-            if val == CREATE_COLLATERAL_VAL:
-                if collateral_count > 0:
+            if val in CREATE_COLLATERAL_VALS:
+                if collateral_cnt > 0:
                     return f'Excess collateral output i={i}'
                 else:
-                    collateral_count += 1
+                    if val == CREATE_COLLATERAL_VAL:
+                        collateral_cnt += 1
+                    elif change_cnt > 0:
+                        return f'This type of tx must have no change'
+                    elif icnt > 1:
+                        return f'This type of tx must have one input'
+                    elif txin0_tx_type not in [PSTxTypes.OTHER_PS_COINS,
+                                               PSTxTypes.NEW_DENOMS,
+                                               PSTxTypes.DENOMINATE]:
+                        return (f'This type of tx must have input from'
+                                f' ps other coins/new denoms/denominate txs')
+                    else:
+                        collateral_cnt += 1
             else:
                 return f'Unsuitable output value={val}'
-        if collateral_count < 1:
+        if collateral_cnt < 1:
             return 'Transaction has no collateral outputs'
 
     def _add_new_collateral_ps_data(self, txid, tx):
@@ -3963,12 +4002,13 @@ class PSManager(Logger):
         w.add_input_info(txin0)
         txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            if o.address == txin0_addr:
+            addr = o.address
+            if addr == txin0_addr:
                 continue
             val = o.value
-            new_outpoint = f'{txid}:{i}'
-            if val == CREATE_COLLATERAL_VAL:
-                new_outpoints.append((new_outpoint, o.address, val))
+            if val in CREATE_COLLATERAL_VALS:
+                new_outpoint = f'{txid}:{i}'
+                new_outpoints.append((new_outpoint, addr, val))
         with self.collateral_lock:
             for new_outpoint, addr, val in new_outpoints:
                 new_collateral = (addr, val)
@@ -3986,8 +4026,8 @@ class PSManager(Logger):
             if o.address == txin0_addr:
                 continue
             val = o.value
-            rm_outpoint = f'{txid}:{i}'
-            if val == CREATE_COLLATERAL_VAL:
+            if val in CREATE_COLLATERAL_VALS:
+                rm_outpoint = f'{txid}:{i}'
                 rm_outpoints.append(rm_outpoint)
         with self.collateral_lock:
             for rm_outpoint in rm_outpoints:
@@ -4004,7 +4044,7 @@ class PSManager(Logger):
         if ocnt != 1:
             return 'Transaction has wrong outputs count'
 
-        i, i_prev_h, i_prev_n, is_mine = inputs[0]
+        i, i_prev_h, i_prev_n, is_mine, tx_type = inputs[0]
         if i.value not in [COLLATERAL_VAL*4,  COLLATERAL_VAL*3,
                            COLLATERAL_VAL*2, COLLATERAL_VAL]:
             return 'Wrong collateral amount'
@@ -4110,7 +4150,7 @@ class PSManager(Logger):
             return 'Transaction has OP_RETURN outputs'
 
         denom_val = None
-        for i, prev_h, prev_n, is_mine, in inputs:
+        for i, prev_h, prev_n, is_mine, tx_type in inputs:
             if not is_mine:
                 continue
             if denom_val is None:
@@ -4127,7 +4167,7 @@ class PSManager(Logger):
             return
 
         w = self.wallet
-        for i, prev_h, prev_n, is_mine, in inputs:
+        for i, prev_h, prev_n, is_mine, tx_type in inputs:
             if not is_mine:
                 continue
             denom = w.db.get_ps_denom(f'{prev_h}:{prev_n}')
@@ -4324,7 +4364,7 @@ class PSManager(Logger):
             return 'Transaction has wrong count of outputs'
 
         w = self.wallet
-        for i, prev_h, prev_n, is_mine in inputs:
+        for i, prev_h, prev_n, is_mine, tx_type in inputs:
             if i.value not in PS_DENOMS_VALS:
                 return f'Unsuitable input value={i.value}'
             denom = w.db.get_ps_denom(f'{prev_h}:{prev_n}')
@@ -4343,7 +4383,7 @@ class PSManager(Logger):
             return 'Transaction has not enough inputs count'
 
         w = self.wallet
-        for i, prev_h, prev_n, is_mine in inputs:
+        for i, prev_h, prev_n, is_mine, tx_type in inputs:
             spent_outpoint = f'{prev_h}:{prev_n}'
             if w.db.get_ps_denom(spent_outpoint):
                 return
