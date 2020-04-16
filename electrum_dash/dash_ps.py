@@ -1078,7 +1078,7 @@ class PSManager(Logger):
     def mix_rounds_data(self, full_txt=False):
         if full_txt:
             return _('This setting determines the amount of individual'
-                     ' masternodes that a input will be anonymized through.'
+                     ' masternodes that an input will be anonymized through.'
                      ' More rounds of anonymization gives a higher degree'
                      ' of privacy, but also costs more in fees.')
         else:
@@ -1427,7 +1427,7 @@ class PSManager(Logger):
                      ' You should use trusted ElectrumX server'
                      ' for PrivateSend operation.')
         elif help_txt:
-            return _('Show privacy warning about ElectrumX serves usage')
+            return _('Show privacy warning about ElectrumX servers usage')
         else:
             return _('Privacy Warning ...')
 
