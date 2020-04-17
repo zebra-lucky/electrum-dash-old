@@ -1494,7 +1494,6 @@ class PSManager(Logger):
         dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
         if dn_balance == 0:
             return 0
-        dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
         r = self.mix_rounds if count_on_rounds is None else count_on_rounds
         ps_balance = sum(w.get_balance(include_ps=False, min_rounds=r))
         if dn_balance == ps_balance:

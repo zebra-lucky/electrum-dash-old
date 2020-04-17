@@ -450,6 +450,46 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert wallet.get_balance(include_ps=False, min_rounds=0) == \
             (500005000, 0, 0)
 
+        # check balance with ps_other
+        w = wallet
+        coins = w.get_spendable_coins(domain=None, config=self.config)
+        denom_addr = list(w.db.get_ps_denoms().values())[0][0]
+        outputs = [TxOutput(TYPE_ADDRESS, denom_addr, 300000)]
+        tx = w.make_unsigned_transaction(coins, outputs, config=self.config)
+        w.sign_transaction(tx, None)
+        txid = tx.txid()
+        w.add_transaction(txid, tx)
+        w.db.add_islock(txid)
+
+        # check when transaction is standard
+        assert wallet.get_balance() == (1484831547, 0, 0)
+        assert wallet.get_balance(include_ps=False) == (984506547, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=5) == (0, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=4) == (0, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=3) == (0, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=2) == \
+            (384803848, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=1) == \
+            (384903849, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=0) == \
+            (500005000, 0, 0)
+
+        coro = psman.find_untracked_ps_txs(log=True)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        # check when transaction is other ps coins
+        assert wallet.get_balance() == (1484831547, 0, 0)
+        assert wallet.get_balance(include_ps=False) == (984506547, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=5) == (0, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=4) == (0, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=3) == (0, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=2) == \
+            (384803848, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=1) == \
+            (384903849, 0, 0)
+        assert wallet.get_balance(include_ps=False, min_rounds=0) == \
+            (500005000, 0, 0)
+
     def test_get_ps_addresses(self):
         C_RNDS = PSCoinRounds.COLLATERAL
         assert self.wallet.db.get_ps_addresses() == set()
