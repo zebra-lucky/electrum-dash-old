@@ -1868,11 +1868,17 @@ class PSManager(Logger):
     @unpack_mine_input_addrs
     def _cleanup_spendable_keypairs(self, txid, tx_type, inputs, outputs):
         spendable_cache = self._keypairs_cache.get(KP_SPENDABLE, {})
-        last_output_addr = outputs[-1].address
-        # cleanup spendable keypairs
+        # first input addr used for change in new denoms/collateral txs
+        first_input_addr = inputs[0][1]
+        if first_input_addr in [o.address for o in outputs]:
+            change_addr = first_input_addr
+        else:
+            change_addr = None
+        # cleanup spendable keypairs excluding change address
         for outpoint, addr in inputs:
-            if addr != last_output_addr and addr in spendable_cache:
-                spendable_cache.pop(addr)
+            if change_addr and change_addr == addr:
+                continue
+            spendable_cache.pop(addr)
 
         # move ps coins keypairs to ps spendable cache
         ps_coins_cache = self._keypairs_cache.get(KP_PS_COINS, {})

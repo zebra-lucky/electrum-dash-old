@@ -2655,6 +2655,80 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert psman._keypairs_cache == {}
         psman.state = PSStates.Ready
 
+    def test_cleanup_spendable_keypairs(self):
+        # check spendable keypair for change is not cleaned up if change amount
+        # is small (change output placed in middle of outputs sorted by bip69)
+        w = self.wallet
+        psman = w.psman
+        psman.keep_amount = 16  # raise keep amount to make small change val
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
+
+        # freeze some coins to make small change amount
+        selected_coins_vals = [801806773, 50000000, 1000000]
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c) ]
+        coins = [c for c in coins if not c['value'] in selected_coins_vals]
+        w.set_frozen_state_of_coins(coins, True)
+
+        # check spendable coins
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c) ]
+        coins = sorted([c for c in coins if not w.is_frozen_coin(c)],
+                       key=lambda x: -x['value'])
+        assert coins[0]['address'] == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+        assert coins[0]['value'] == 801806773
+        assert coins[1]['address'] == 'yeeU1n6Bm4Y3rz7Y1JZb9gQAbsc4uv4Y5j'
+        assert coins[1]['value'] == 50000000
+        assert coins[2]['address'] == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+        assert coins[2]['value'] == 1000000
+
+        psman._cache_keypairs(password=None)
+        spendable = ['yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF',
+                     'yeeU1n6Bm4Y3rz7Y1JZb9gQAbsc4uv4Y5j']
+        assert sorted(psman._keypairs_cache[KP_SPENDABLE].keys()) == spendable
+
+        coro = psman.create_new_denoms_wfl()
+        asyncio.get_event_loop().run_until_complete(coro)
+        wfl = psman.new_denoms_wfl
+        assert wfl.completed
+
+        txid = wfl.tx_order[0]
+        tx0 = Transaction(wfl.tx_data[txid].raw_tx)
+        txid = wfl.tx_order[1]
+        tx1 = Transaction(wfl.tx_data[txid].raw_tx)
+        txid = wfl.tx_order[2]
+        tx2 = Transaction(wfl.tx_data[txid].raw_tx)
+        txid = wfl.tx_order[3]
+        tx3 = Transaction(wfl.tx_data[txid].raw_tx)
+
+        outputs = tx0.outputs()
+        assert len(outputs) == 41
+        change = outputs[33]
+        assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+
+        outputs = tx1.outputs()
+        assert len(outputs) == 24
+        change = outputs[22]
+        assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+
+        outputs = tx2.outputs()
+        assert len(outputs) == 18
+        change = outputs[17]
+        assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+
+        outputs = tx3.outputs()
+        assert len(outputs) == 8
+        change = outputs[7]
+        assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+
+        spendable = ['yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF']
+        assert sorted(psman._keypairs_cache[KP_SPENDABLE].keys()) == spendable
+
     def test_filter_log_line(self):
         w = self.wallet
         test_line = ''
