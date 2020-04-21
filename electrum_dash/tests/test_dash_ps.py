@@ -2526,11 +2526,11 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.state = PSStates.Mixing
         psman.mix_rounds = 2
         psman.keep_amount = 2
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
 
         # check when wallet has no password
         assert psman.check_need_new_keypairs() == (False, None)
@@ -2579,6 +2579,54 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman._cache_keypairs(password=None)
 
         w.has_password = prev_has_password
+
+    def test_find_addrs_not_in_keypairs(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+        psman.mix_rounds = 2
+        psman.keep_amount = 2
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        psman.state = PSStates.Mixing
+
+        spendable = ['yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF',
+                     'yUV122HRSuL1scPnvnqSqoQ3TV8SWpRcYd',
+                     'yXYkfpHkyR8PRE9GtLB6huKpGvS27wqmTw',
+                     'yZwFosFcLXGWomh11ddUNgGBKCBp7yueyo',
+                     'yeeU1n6Bm4Y3rz7Y1JZb9gQAbsc4uv4Y5j']
+
+        ps_spendable = ['yextsfRiRvGD5Gv36yhZ96ErYmtKxf4Ffp',
+                        'ydeK8hNyBKs1o7eoCr7hC3QAHBTXyJudGU',
+                        'ydxBaF2BKMTn7VSUeR7A3zk1jxYt6zCPQ2',
+                        'yTAotTVzQipPEHFaR1CcsKEMGtyrdf1mo7',
+                        'yVgfDzEodzZh6vfgkGTkmPXv1eJCUytdQS']
+
+        ps_coins = ['yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns',
+                    'yXwT5tUAp84wTfFuAJdkedtqGXkh3RP5zv',
+                    'yh8nPSALi6mhsFbK5WPoCzBWWjHwonp5iz',
+                    'yazd3VRfghZ2VhtFmzpmnYifJXdhLTm9np',
+                    'ygEFS3cdoDosJCTdR2moQ9kdrik4UUcNge']
+
+        ps_change = ['yanRmD5ZR66L1G51ixvXvUiJEmso5trn97',
+                     'yaWPA5UrUe1kbnLfAbpdYtm3ePZje4YQ1G',
+                     'yePrR43WFHSAXirUFsXKxXXRk6wJKiYXzU',
+                     'yiYQjsdvXpPGt72eSy7wACwea85Enpa1p4',
+                     'ydsi9BZnNUBWNbxN3ymYp4wkuw8q37rTfK']
+
+        psman._cache_keypairs(password=None)
+        unk_addrs = [w.dummy_address()] * 2
+        res = psman._find_addrs_not_in_keypairs(unk_addrs + spendable)
+        assert res == {unk_addrs[0]}
+
+        res = psman._find_addrs_not_in_keypairs(ps_coins + unk_addrs)
+        assert res == {unk_addrs[0]}
+
+        res = psman._find_addrs_not_in_keypairs(ps_change + unk_addrs)
+        assert res == {unk_addrs[0]}
+
+        res = psman._find_addrs_not_in_keypairs(ps_change + spendable)
+        assert res == set()
 
     def test_cache_keypairs(self):
         w = self.wallet

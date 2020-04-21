@@ -1836,17 +1836,11 @@ class PSManager(Logger):
 
     def _find_addrs_not_in_keypairs(self, addrs):
         addrs = set(addrs)
-        found = set()
+        keypairs_addrs = set()
         for cache_type in KP_ALL_TYPES:
             if cache_type in self._keypairs_cache:
-                cache = self._keypairs_cache[cache_type]
-                for c_addrs in cache.keys():
-                    for addr in addrs:
-                        if addr in found:
-                            continue
-                        if addr in c_addrs:
-                            found.add(addr)
-        return addrs - found
+                keypairs_addrs |= self._keypairs_cache[cache_type].keys()
+        return addrs - keypairs_addrs
 
     def unpack_mine_input_addrs(func):
         '''Decorator to prepare tx inputs addresses'''
@@ -2549,7 +2543,7 @@ class PSManager(Logger):
                 not_found_addrs = ', '.join(list(not_found_addrs))
                 raise NotFoundInKeypairs(f'Input addresses is not found'
                                          f' in the keypairs cache:'
-                                         f' {not_found_addrs} ')
+                                         f' {not_found_addrs}')
 
         self.add_ps_spending_collateral(outpoint, wfl.uuid)
         if value >= COLLATERAL_VAL*2:
@@ -2837,7 +2831,7 @@ class PSManager(Logger):
                 not_found_addrs = ', '.join(list(not_found_addrs))
                 raise NotFoundInKeypairs(f'Input addresses is not found'
                                          f' in the keypairs cache:'
-                                         f' {not_found_addrs} ')
+                                         f' {not_found_addrs}')
 
         # use first input address as a change, use selected inputs
         in0 = inputs[0]['address']
@@ -3159,7 +3153,7 @@ class PSManager(Logger):
                 not_found_addrs = ', '.join(list(not_found_addrs))
                 raise NotFoundInKeypairs(f'Input addresses is not found'
                                          f' in the keypairs cache:'
-                                         f' {not_found_addrs} ')
+                                         f' {not_found_addrs}')
 
         # use first input address as a change, use selected inputs
         in0 = inputs[0]['address']
@@ -3556,7 +3550,7 @@ class PSManager(Logger):
                 not_found_addrs = ', '.join(list(not_found_addrs))
                 raise NotFoundInKeypairs(f'Input addresses is not found'
                                          f' in the keypairs cache:'
-                                         f' {not_found_addrs} ')
+                                         f' {not_found_addrs}')
 
         output_addrs = []
         found_outpoints = []
