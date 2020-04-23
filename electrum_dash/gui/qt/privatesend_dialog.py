@@ -3,18 +3,34 @@
 import time
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QPainter, QTextCursor, QIcon
+from PyQt5.QtGui import QColor, QPainter, QTextCursor, QIcon, QFont
 from PyQt5.QtWidgets import (QPlainTextEdit, QCheckBox, QSpinBox, QVBoxLayout,
                              QPushButton, QLabel, QDialog, QGridLayout,
                              QTabWidget, QWidget, QProgressBar, QHBoxLayout,
                              QMessageBox, QStyle, QStyleOptionSpinBox, QAction,
-                             QApplication)
+                             QApplication, QComboBox, QScrollArea, QFileDialog)
 
-from electrum_dash.dash_ps import filter_log_line, PSLogSubCat, PSStates
+from electrum_dash.bitcoin import COIN
+from electrum_dash.dash_ps import (filter_log_line, PSLogSubCat, PSStates,
+                                   PS_DENOMS_VALS)
 from electrum_dash.i18n import _
 
 from .util import (HelpLabel, MessageBoxMixin, read_QIcon, custom_message_box,
                    ColorScheme)
+
+
+try:
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Qt5Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_qt5agg import \
+        FigureCanvasQTAgg as FigureCanvas
+    import networkx as nx
+
+    NETWORKX_IMPORTED = True
+except ImportError:
+    NETWORKX_IMPORTED = False
 
 
 ps_dialogs = []  # Otherwise python randomly garbage collects the dialogs
@@ -209,6 +225,9 @@ class PSDialog(QDialog, MessageBoxMixin):
         self.info_update()
         self.info_data_buttons_update()
         self.add_log_tab()
+        if NETWORKX_IMPORTED:
+            self.add_graph_tab()
+            self.tabs.setCurrentIndex(3)
         self.mwin.ps_signal.connect(self.on_ps_signal)
         self.ps_signal_connected = True
         self.is_hiding = False
@@ -569,6 +588,120 @@ class PSDialog(QDialog, MessageBoxMixin):
         log_vbox.addWidget(clear_log_btn)
         self.log_tab.setLayout(log_vbox)
         self.tabs.addTab(self.log_tab, _('Log'))
+
+    def add_graph_tab(self):
+        psman = self.psman
+        self.graph_tab = QWidget()
+        grid = QGridLayout()
+        self.graph_tab.setLayout(grid)
+        grid.setColumnStretch(0, 1)
+
+        cbLabel = QLabel(_('Denoms Value'))
+        denom_val_cb = QComboBox(self)
+        for t in sorted(PS_DENOMS_VALS):
+            item = f'{t/COIN} Dash'
+            denom_val_cb.addItem(item, t)
+        denom_val_cb.setCurrentIndex(4)
+
+        grid.addWidget(cbLabel, 0, 1)
+        grid.addWidget(denom_val_cb, 0, 2)
+
+        refresh_graph_btn = QPushButton(_('Refresh Graph'))
+
+        def on_refresh_graph(*args):
+            denom_val = denom_val_cb.currentData()
+            gr_data = psman.make_denominate_tx_graph()
+            self.DG = psman.parse_graph_for_nx(gr_data[denom_val])
+            self.draw_denominate_tx_graph()
+
+        refresh_graph_btn.clicked.connect(on_refresh_graph)
+        grid.addWidget(refresh_graph_btn, 0, 3)
+
+        save_graph_btn = QPushButton(_('Save Graph'))
+
+        def on_save_graph(*args):
+            options = QFileDialog.Options()
+            options |= QFileDialog.DontUseNativeDialog
+            #fileName, _ = QFileDialog.getSaveFileName(self, 'Save Graph',
+            #                                          'ps_graph.png',
+            #                                          'Png Files (*.png)',
+            #                                          options=options)
+            fileName, _ = QFileDialog.getSaveFileName(self,
+                                                      'Save Graphviz file',
+                                                      'ps_graph.dot',
+                                                      'Dot Files (*.dot)',
+                                                      options=options)
+            if fileName:
+                nx.nx_agraph.write_dot(self.DG, fileName)
+                #self.figure.savefig(fileName)
+
+        save_graph_btn.clicked.connect(on_save_graph)
+        grid.addWidget(save_graph_btn, 0, 4)
+
+        self.figsize = (16, 120)
+        self.figure = figure = plt.figure(figsize=self.figsize)
+        self.canvas = FigureCanvas(self.figure)
+        self.canvas_scroll = QScrollArea()
+        self.canvas_scroll.setWidget(self.canvas)
+        grid.addWidget(self.canvas_scroll, 1, 0, 1, -1)
+
+        self.tabs.addTab(self.graph_tab, _('Graph'))
+
+        gr_data = psman.make_denominate_tx_graph()
+        denom_val = denom_val_cb.currentData()
+        self.DG = psman.parse_graph_for_nx(gr_data[denom_val])
+        self.draw_denominate_tx_graph()
+
+    def draw_denominate_tx_graph(self):
+        psman = self.psman
+        DG = self.DG
+
+        cf = self.figure
+        cf.clf()
+        ax = cf.add_axes((0, 0, 1, 1))
+
+        dimensions = psman.get_graph_dimensions(DG)
+        (x_dim, y_dim, x_padding, x_spacing,
+         y_padding, y_spacing, symbol_size, x_total, y_total,
+         nodes_pos) = dimensions
+
+        ax.set_xlim(0, x_total)
+        ax.set_ylim(0, y_total)
+        ax.invert_yaxis()
+
+        nodelist = [n for n in DG.graph['new_denoms_txs']]
+        nx.draw_networkx_nodes(DG, pos=nodes_pos, ax=ax, nodelist=nodelist,
+                               node_color='green', node_shape='s')
+
+        nodelist = [n[0] for n in DG.graph['denominate_txs']
+                    if n[1]]
+        nx.draw_networkx_nodes(DG, pos=nodes_pos, ax=ax, nodelist=nodelist,
+                               node_color='red', node_shape='s')
+
+        nodelist = [n[0] for n in DG.graph['denominate_txs']
+                    if not n[1]]
+        nx.draw_networkx_nodes(DG, pos=nodes_pos, ax=ax, nodelist=nodelist,
+                               node_color='yellow', node_shape='s')
+
+        #nodelist = [n for n in DG.graph['denoms']]
+        #nx.draw_networkx_nodes(DG, pos=nodes_pos, ax=ax, nodelist=nodelist,
+        #                       node_color='blue', node_shape='o')
+
+        #nodelist = [n for n in DG.graph['spent_denoms']]
+        #nx.draw_networkx_nodes(DG, pos=nodes_pos, ax=ax, nodelist=nodelist,
+        #                       node_color='gray', node_shape='o')
+
+        nx.draw_networkx_edges(DG, pos=nodes_pos, ax=ax,
+                               edge_color='#88888888')
+
+        for p in nodes_pos:
+           nodes_pos[p][1] -= 2.5
+
+        labels = {n: DG.nodes[n]['label'] for n in DG.nodes}
+        nx.draw_networkx_labels(DG, pos=nodes_pos, ax=ax,
+                                labels=labels, font_size=10)
+
+        self.canvas.draw_idle()
 
     def update_mixing_status(self):
         psman = self.psman

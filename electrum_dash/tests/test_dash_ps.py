@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 import gzip
 import random
 import shutil
@@ -28,6 +29,7 @@ from electrum_dash.storage import WalletStorage
 from electrum_dash.transaction import TxOutput, Transaction
 from electrum_dash.util import Satoshis, NotEnoughFunds, TxMinedInfo, bh2u
 from electrum_dash.wallet import Wallet
+from networkx.algorithms.dag import *
 
 from . import TestCaseForTestnet
 
@@ -65,31 +67,37 @@ class WalletGetTxHeigthMock:
         return TxMinedInfo(height=height, conf=0)
 
 
-class PSWalletTestCase(TestCaseForTestnet):
+class TestDataWalletTestCase(TestCaseForTestnet):
 
     def setUp(self):
-        super(PSWalletTestCase, self).setUp()
+        super(TestDataWalletTestCase, self).setUp()
         self.user_dir = tempfile.mkdtemp()
-        self.wallet_path = os.path.join(self.user_dir, 'wallet_ps1')
-        tests_path = os.path.dirname(os.path.abspath(__file__))
-        test_data_file = os.path.join(tests_path, 'data', 'wallet_ps1.gz')
-        shutil.copyfile(test_data_file, '%s.gz' % self.wallet_path)
-        with gzip.open('%s.gz' % self.wallet_path, 'rb') as rfh:
-            wallet_data = rfh.read()
-            wallet_data = wallet_data.decode('utf-8')
-        with open(self.wallet_path, 'w') as wfh:
-            wfh.write(wallet_data)
         self.config = SimpleConfig({'electrum_path': self.user_dir})
         self.config.set_key('dynamic_fees', False, True)
-        self.storage = WalletStorage(self.wallet_path)
-        self.wallet = Wallet(self.storage)
+        w_name = self.wallet_name
+        wallet_path = os.path.join(self.user_dir, w_name)
+        self.tests_path = os.path.dirname(os.path.abspath(__file__))
+        test_data_file = os.path.join(self.tests_path, 'data', f'{w_name}.gz')
+        shutil.copyfile(test_data_file, '%s.gz' % wallet_path)
+        with gzip.open('%s.gz' % wallet_path, 'rb') as rfh:
+            wallet_data = rfh.read()
+            wallet_data = wallet_data.decode('utf-8')
+        with open(wallet_path, 'w') as wfh:
+            wfh.write(wallet_data)
+        storage = WalletStorage(wallet_path)
+        self.wallet = Wallet(storage)
         psman = self.wallet.psman
         psman.state = PSStates.Ready
         psman.loop = asyncio.get_event_loop()
 
     def tearDown(self):
-        super(PSWalletTestCase, self).tearDown()
+        super(TestDataWalletTestCase, self).tearDown()
         shutil.rmtree(self.user_dir)
+
+
+class PS1WalletTestCase(TestDataWalletTestCase):
+
+    wallet_name = 'wallet_ps1'
 
     def test_PSTxData(self):
         psman = self.wallet.psman
@@ -3225,3 +3233,154 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         psman.keep_amount = 6
         assert not psman.all_mixed
+
+
+class MultiroundsWalletTestCase(TestDataWalletTestCase):
+
+    wallet_name = 'wallet_multirounds'
+
+    def test_get_mixed_denoms_by_rounds(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+
+        assert psman.get_mixed_denoms_by_rounds() == {}
+
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        denoms = psman.get_mixed_denoms_by_rounds()
+        for val in PS_DENOMS_VALS:
+            val_denoms = denoms[val]
+            #assert list(val_denoms.keys()) == []
+            assert list(val_denoms.values()) == []
+
+    def test_make_denominate_tx_graph(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+
+        assert psman.make_denominate_tx_graph() == {
+            100001: {'outpoints': {}, 'txs': {}},
+            1000010: {'outpoints': {}, 'txs': {}},
+            10000100: {'outpoints': {}, 'txs': {}},
+            100001000: {'outpoints': {}, 'txs': {}},
+            1000010000: {'outpoints': {}, 'txs': {}}}
+
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        test_fn = 'test_graph_data_before_normalyze.json.gz'
+        test_data_path = os.path.join(self.tests_path, 'data', test_fn)
+        with gzip.open(test_data_path, 'rb') as rfh:
+            stored_data = rfh.read()
+            stored_data = stored_data.decode('utf-8')
+            stored_data = json.loads(stored_data)
+
+        graph_data = psman.make_denominate_tx_graph()
+        from pprint import pprint
+        pprint(graph_data[1000010000])
+        assert 0
+        assert stored_data == graph_data[1000010000]
+
+    def test_get_graph_dimensions(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        denom_val = 1000010000
+        gr_data = psman.make_denominate_tx_graph()
+        sub_gr_data = gr_data[denom_val]
+        DG = psman.parse_graph_for_nx(sub_gr_data)
+
+        s = DG.graph['cur_denoms'][5]
+        a_nodes = ancestors(DG, s)
+        for i, n in enumerate(DG.nodes):
+            print(i, n)
+
+        assert 0
+        res = psman.get_graph_dimensions(DG)
+        (x_dim, y_dim, x_padding, x_spacing,
+         y_padding, y_spacing, symbol_size, x_total, y_total, nodes_pos) = res
+
+        assert x_dim == 9
+        assert y_dim == 59
+        assert x_padding == 2
+        assert x_spacing == 2
+        assert y_padding == 5
+        assert y_spacing == 20
+        assert symbol_size == 1
+        assert x_total == 31
+        assert y_total == 1888
+        assert 0
+
+    def test_organize_denoms_rounds(self):
+        import math
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        denom_val = 1000010000
+        gr_data = psman.make_denominate_tx_graph()
+        sub_gr_data = gr_data[denom_val]
+
+        DG0 = psman.parse_graph_for_nx0(sub_gr_data)
+        def sort_key(x):
+            n = DG0.nodes[x]
+            out_rounds = n.get('out_rounds')
+            if out_rounds:
+                return max(out_rounds) * 10
+            else:
+                return n['r'] * 10 + 1
+        nodes0 = lexicographical_topological_sort(DG0, sort_key)
+
+        totr = 0
+        totc = 0
+        avgr = 0
+        for i, n in enumerate(nodes0):
+            if ':' in n:
+                dgn = DG0.nodes[n]
+                r = dgn['r']
+                if r:
+                    totc += 1
+                    totr += r
+                    avgr = round(totr/totc, 2) * 2
+                    print(i, n, avgr, r)
+        #assert 0
+        print('_-'*80)
+
+        DG = psman.parse_graph_for_nx(sub_gr_data)
+        def sort_key(x):
+            n = DG.nodes[x]
+            out_rounds = n.get('out_rounds')
+            return max(out_rounds)
+
+        nodes = lexicographical_topological_sort(DG, sort_key)
+
+        totr = 0
+        totc = 0
+        for i, n in enumerate(nodes):
+            dgn = DG.nodes[n]
+            out_rounds = dgn['out_rounds']
+            in_rounds = dgn.get('in_rounds', [])
+            sum_o_r = sum(out_rounds)
+            if 1:
+                totc += len(out_rounds)
+                totr += sum(out_rounds)
+                print(i, n, round(totr/totc, 2)*2, in_rounds, out_rounds)
+
+        assert 0
+
+    def test_find_untracked_denoms_rounds(self):
+        pass
+
+    def tes_find_multiround_parent(self):
+        pass

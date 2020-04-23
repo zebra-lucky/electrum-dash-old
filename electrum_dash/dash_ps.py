@@ -985,6 +985,23 @@ class PSManager(Logger):
                     if args is not None:
                         self.trigger_callback(event, *args)
 
+    def get_mixed_denoms_by_rounds(self):
+        denoms = self.wallet.db.get_ps_denoms()
+        if not denoms:
+            return {}
+
+        denoms_by_rounds = {denom_val: {} for denom_val in PS_DENOMS_VALS}
+        for outpoint, (addr, val, r) in denoms.items():
+            if r == 0:
+                continue
+            r_denoms = denoms_by_rounds[val].get(r)
+            if r_denoms is None:
+                denoms_by_rounds[val][r] = [outpoint]
+            else:
+                denoms_by_rounds[val][r].append(outpoint)
+
+        return denoms_by_rounds
+
     def on_network_start(self, network):
         self.network = network
         self.network.register_callback(self.on_wallet_updated,
@@ -5184,3 +5201,333 @@ class PSManager(Logger):
 
             cur_utxos_a = next_utxos_a[:]
             cur_depth += 1
+
+    @profiler
+    def make_denominate_tx_graph(self):
+        w = self.wallet
+        graph = {val: {'txs': {}, 'outpoints': {}}
+                 for val in PS_DENOMS_VALS}
+        cur_txs = {val: [] for val in PS_DENOMS_VALS}
+
+        for outpoint, denom in sorted(w.db.get_ps_denoms().items()):
+            prev_h = outpoint.split(':')[0]
+            prev_tx_type, completed = w.db.get_ps_tx(prev_h)
+            if not completed or not prev_tx_type == PSTxTypes.DENOMINATE:
+                continue
+            r = denom[2]
+            if r <= 0:
+                continue
+            val = denom[1]
+            if prev_h not in cur_txs[val]:
+                cur_txs[val].append(prev_h)
+
+        for val in PS_DENOMS_VALS:
+            max_r = 0
+            tx_cnt = 0
+            new_denoms_txs = []
+            denominate_txs = []
+            denoms = []
+            spent_denoms = []
+            while cur_txs[val]:
+                txid = cur_txs[val].pop(0)
+                if txid in graph[val]['txs']:
+                    continue
+                tx = w.db.get_transaction(txid)
+                if not tx:
+                    continue
+                tx_type = w.db.get_ps_tx(txid)[0]
+                if tx_type not in [PSTxTypes.DENOMINATE, PSTxTypes.NEW_DENOMS]:
+                    raise Exception(f'{txid}: unsuitable type for graph')
+                inputs = []
+                in_rounds = []
+                outputs = []
+                out_rounds = []
+
+                for i, o in enumerate(tx.outputs()):
+                    outpoint = f'{txid}:{i}'
+                    denom = w.db.get_ps_denom(outpoint)
+                    spent = False
+                    if not denom:
+                        denom = w.db.get_ps_spent_denom(outpoint)
+                        if not denom:
+                            continue
+                        spent = True
+                    r = denom[2]
+                    if tx_type != PSTxTypes.DENOMINATE:
+                        dval = denom[1]
+                        if dval != val:
+                            continue
+                    max_r = max(max_r, r)
+                    outputs.append(outpoint)
+                    out_rounds.append(r)
+                    if outpoint in graph[val]['outpoints']:
+                        continue
+                    if spent:
+                        spent_denoms.append(outpoint)
+                    else:
+                        denoms.append(outpoint)
+                    graph[val]['outpoints'][outpoint] = {'r': r,
+                                                         'prev_h': txid,
+                                                         'spent': spent}
+
+                if tx_type == PSTxTypes.DENOMINATE:
+                    for txin in tx.inputs():
+                        prev_h = txin['prevout_hash']
+                        prev_tx_type = w.db.get_ps_tx(prev_h)[0]
+                        if prev_h not in graph[val]['txs']:
+                            if prev_h not in cur_txs[val]:
+                                cur_txs[val].append(prev_h)
+                        prev_n = txin['prevout_n']
+                        outpoint = f'{prev_h}:{prev_n}'
+                        denom = w.db.get_ps_spent_denom(outpoint)
+                        spent = True
+                        if not denom:
+                            denom = w.db.get_ps_denom(outpoint)
+                            if not denom:
+                                continue
+                            spent = False
+                        r = denom[2]
+                        inputs.append(outpoint)
+                        in_rounds.append(r)
+                        if outpoint in graph[val]['outpoints']:
+                            continue
+                        spent_denoms.append(outpoint)
+                        graph[val]['outpoints'][outpoint] = {'r': r,
+                                                             'prev_h': prev_h,
+                                                             'spent': spent}
+                    multiround = True if  len(set(in_rounds)) > 1 else False
+                    denominate_txs.append(txid)
+                else:
+                    new_denoms_txs.append(txid)
+
+                tx_cnt += 1
+                graph[val]['txs'][txid] = {'tx_type': tx_type,
+                                           'multiround': multiround,
+                                           'inputs': inputs,
+                                           'in_rounds': in_rounds,
+                                           'outputs': outputs,
+                                           'out_rounds': out_rounds}
+            if new_denoms_txs or denominate_txs or denoms or spent_denoms:
+                graph[val]['max_r'] = max_r
+                graph[val]['tx_cnt'] = tx_cnt
+                graph[val]['new_denoms_txs'] = new_denoms_txs
+                graph[val]['denominate_txs'] = denominate_txs
+                graph[val]['denoms'] = denoms
+                graph[val]['spent_denoms'] = spent_denoms
+        return graph
+
+    @profiler
+    def parse_graph_for_nx(self, graph_data):
+        import networkx as nx
+        max_r = graph_data['max_r']
+        tx_cnt = graph_data['tx_cnt']
+        new_denoms_txs = graph_data['new_denoms_txs']
+        denominate_txs = graph_data['denominate_txs']
+        denoms = graph_data['denoms']
+        spent_denoms = graph_data['spent_denoms']
+        DG = nx.DiGraph(max_r=max_r, tx_cnt=tx_cnt,
+                        new_denoms_txs=new_denoms_txs,
+                        denominate_txs=denominate_txs,
+                        denoms=denoms,
+                        spent_denoms=spent_denoms)
+
+        for outpoint, denom_data in graph_data['denoms'].items():
+            prev_h, prev_n = outpoint.split(':')
+            r = denom_data['r']
+            label = f'{prev_h[:9]}...:{prev_n}\n{r}'
+            spent = denom_data['spent']
+            DG.add_node(outpoint, label=label, r=r, spent=spent)
+
+        for txid, tx_data in graph_data['txs'].items():
+            out_rounds = tx_data['out_rounds']
+            out_rounds_str = ', '.join(map(str, out_rounds))
+            if tx_data['tx_type'] == PSTxTypes.DENOMINATE:
+                in_rounds = tx_data['in_rounds']
+                in_rounds_str = ', '.join(map(str, in_rounds))
+                label = f'{txid[:9]}...\n{in_rounds_str} -> {out_rounds_str}'
+                mr = tx_data['multiround']
+                DG.add_node(txid, label=label, out_rounds=out_rounds,
+                            in_rounds=in_rounds, multiround=mr)
+            else:
+                label = f'{txid[:9]}...\n-> {out_rounds_str}'
+                DG.add_node(txid, label=label,
+                            out_rounds=out_rounds, multiround=None)
+            for i in tx_data['inputs']:
+                DG.add_edge(i, txid)
+
+            for o in tx_data['outputs']:
+                DG.add_edge(txid, o)
+        return DG
+
+    @profiler
+    def parse_graph_for_nx1(self, graph_data):
+        import networkx as nx
+        max_r = graph_data['max_r']
+        tx_cnt = graph_data['tx_cnt']
+        new_denoms_txs = graph_data['new_denoms_txs']
+        denominate_txs = graph_data['denominate_txs']
+        denoms = graph_data['denoms']
+        spent_denoms = graph_data['spent_denoms']
+        DG = nx.DiGraph(max_r=max_r, tx_cnt=tx_cnt,
+                        new_denoms_txs=new_denoms_txs,
+                        denominate_txs=denominate_txs,
+                        denoms=denoms,
+                        spent_denoms=spent_denoms)
+
+        for txid, tx_data in graph_data['txs'].items():
+            out_rounds = tx_data['out_rounds']
+            out_rounds_str = ', '.join(map(str, out_rounds))
+            if tx_data['tx_type'] == PSTxTypes.DENOMINATE:
+                in_rounds = tx_data['in_rounds']
+                in_rounds_str = ', '.join(map(str, in_rounds))
+                label = f'{txid[:9]}...\n{in_rounds_str} -> {out_rounds_str}'
+                mr = tx_data['multiround']
+                DG.add_node(txid, label=label, out_rounds=out_rounds,
+                            in_rounds=in_rounds, multiround=mr)
+            else:
+                label = f'{txid[:9]}...\n-> {out_rounds_str}'
+                DG.add_node(txid, label=label,
+                            out_rounds=out_rounds, multiround=None)
+            for i in tx_data['inputs']:
+                prev_txid = i.split(':')[0]
+                DG.add_edge(prev_txid, txid)
+        return DG
+
+    @profiler
+    def get_graph_dimensions(self, DG):
+        from networkx.algorithms.dag import lexicographical_topological_sort
+        symbol_size = 1
+        x_padding = 2
+        x_spacing = 2
+        y_padding = 5
+        y_spacing = 5
+
+        def sort_key(x):
+            n = DG.nodes[x]
+            out_rounds = n.get('out_rounds')
+            if out_rounds:
+                return max(out_rounds) * 10
+            else:
+                return n['r'] * 10 + 1
+
+        nodes = lexicographical_topological_sort(DG, sort_key)
+        txs = {}
+        outpoints = {}
+
+        cur_lvl = 0
+        lvl_cnt = 0
+        tx_items_lvl = True
+        cur_lvl_items = []
+        max_x_dim = 0
+        for n in nodes:
+            if ':' in n:
+                if tx_items_lvl:
+                    txs[cur_lvl] = cur_lvl_items
+                    max_x_dim = max(len(txs[cur_lvl]), max_x_dim)
+                    cur_lvl_items = [n]
+                    tx_items_lvl = False
+                else:
+                    cur_lvl_items.append(n)
+            else:
+                if tx_items_lvl:
+                    cur_lvl_items.append(n)
+                else:
+                    outpoints[cur_lvl] = cur_lvl_items
+                    max_x_dim = max(len(outpoints[cur_lvl]), max_x_dim)
+                    cur_lvl_items = [n]
+                    tx_items_lvl = True
+                    cur_lvl += 1
+        outpoints[cur_lvl] = cur_lvl_items
+        max_x_dim = max(len(outpoints[cur_lvl]), max_x_dim)
+        cur_lvl += 1
+
+        x_dim = max_x_dim - 1
+        y_dim = cur_lvl * 2 - 1
+        x_total = x_dim * (x_spacing + symbol_size) + x_padding * 2
+        y_total = y_dim * (y_spacing + symbol_size) + y_padding * 2
+
+        nodes_pos = {}
+        cur_y = y_padding
+        for r in range(cur_lvl):
+            txs_r = txs.get(r, [])
+            txs_cnt = len(txs_r)
+            step_x = x_total / (txs_cnt + 1)
+            for i in range(txs_cnt):
+                txid = txs[r][i]
+                pos_x = step_x * (i + 1) + random.randint(1, 3)
+                pos_y = cur_y + symbol_size // 2
+                nodes_pos[txid] = [pos_x, pos_y]
+            cur_y += symbol_size + y_spacing
+
+            outpoints_r = outpoints.get(r, [])
+            outpoints_cnt = len(outpoints_r)
+            step_x = x_total / (outpoints_cnt + 1)
+            for i in range(outpoints_cnt):
+                outpoint = outpoints[r][i]
+                pos_x = x_padding + step_x * i
+                pos_y = cur_y + symbol_size // 2
+                nodes_pos[outpoint] = [pos_x, pos_y]
+            cur_y += symbol_size + y_spacing
+
+        return (x_dim, y_dim, x_padding, x_spacing,
+                y_padding, y_spacing, symbol_size, x_total, y_total, nodes_pos)
+
+    @profiler
+    def get_graph_dimensions1(self, DG):
+        from networkx.algorithms.dag import lexicographical_topological_sort
+        symbol_size = 1
+        x_padding = 2
+        x_spacing = 2
+        y_padding = 5
+        y_spacing = 5
+
+        def sort_key(x):
+            return x
+            n = DG.nodes[x]
+            out_rounds = n.get('out_rounds')
+            if out_rounds:
+                return max(out_rounds)
+
+        nodes = lexicographical_topological_sort(DG, sort_key)
+        txs = {}
+
+        cur_lvl = 0
+        lvl_cnt = 0
+        cur_lvl_items = []
+        max_x_dim = 0
+        cur_max_rounds = 0
+        for n in nodes:
+            N = DG.nodes[n]
+            max_rounds = max(N.get('out_rounds'))
+            if cur_max_rounds == max_rounds:
+                cur_lvl_items.append(n)
+            else:
+                txs[cur_lvl] = cur_lvl_items
+                max_x_dim = max(len(txs[cur_lvl]), max_x_dim)
+                cur_lvl_items = [n]
+                cur_lvl += 1
+                cur_max_rounds = max_rounds
+        txs[cur_lvl] = cur_lvl_items
+        max_x_dim = max(len(txs[cur_lvl]), max_x_dim)
+        cur_lvl += 1
+
+        x_dim = max_x_dim - 1
+        y_dim = cur_lvl * 1 - 1
+        x_total = x_dim * (x_spacing + symbol_size) + x_padding * 2
+        y_total = y_dim * (y_spacing + symbol_size) + y_padding * 2
+
+        nodes_pos = {}
+        cur_y = y_padding
+        for r in range(cur_lvl):
+            txs_r = txs.get(r, [])
+            txs_cnt = len(txs_r)
+            step_x = x_total / (txs_cnt + 1)
+            for i in range(txs_cnt):
+                txid = txs[r][i]
+                pos_x = step_x * (i+0.7) + step_x * (0.5-random.random())
+                pos_y = cur_y + symbol_size // 2
+                nodes_pos[txid] = [pos_x, pos_y]
+            cur_y += symbol_size + y_spacing
+
+        return (x_dim, y_dim, x_padding, x_spacing,
+                y_padding, y_spacing, symbol_size, x_total, y_total, nodes_pos)
