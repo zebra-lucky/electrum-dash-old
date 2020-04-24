@@ -531,9 +531,19 @@ class SendScreen(CScreen):
 
     def ps_dialog(self):
         from .dialogs.checkbox_dialog import CheckBoxDialog
+
         def ps_dialog_cb(key):
             self.is_ps = key
+            if self.is_ps:
+                w = self.app.wallet
+                psman = w.psman
+                denoms_by_vals = psman.calc_denoms_by_values()
+                if denoms_by_vals:
+                    if not psman.check_enough_sm_denoms(denoms_by_vals):
+                        psman.postpone_notification('ps-not-enough-sm-denoms',
+                                                     w, denoms_by_vals)
             self.screen.ps_txt = self.privatesend_txt()
+
         d = CheckBoxDialog(_('PrivateSend'),
                            _('Send coins as a PrivateSend transaction'),
                            self.is_ps, ps_dialog_cb)

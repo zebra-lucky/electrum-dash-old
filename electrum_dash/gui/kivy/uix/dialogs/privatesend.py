@@ -299,6 +299,11 @@ Builder.load_string('''
                 action: root.toggle_fiat_dn_balance
             CardSeparator
             SettingsItem:
+                title: root.create_sm_denoms_text
+                description: root.create_sm_denoms_help
+                action: root.create_sm_denoms
+            CardSeparator
+            SettingsItem:
                 title: _('PrivateSend Coins')
                 description: _('Show and use PrivateSend/Standard coins')
                 action: root.show_coins_dialog
@@ -642,6 +647,9 @@ class PSMixingTab(BoxLayout):
         self.dn_balance_text = psman.dn_balance_data()
         self.dn_balance_help = psman.dn_balance_data(full_txt=True)
 
+        self.create_sm_denoms_text = psman.create_sm_denoms_data()
+        self.create_sm_denoms_help = psman.create_sm_denoms_data(full_txt=True)
+
         self.group_history_text = psman.group_history_data()
         self.group_history_help = psman.group_history_data(full_txt=True)
 
@@ -746,6 +754,27 @@ class PSMixingTab(BoxLayout):
     def show_mixing_progress_by_rounds(self, *args):
         d = MixingProgressPopup(self)
         d.open()
+
+    def create_sm_denoms(self, *args):
+        w = self.wallet
+        psman = w.psman
+        denoms_by_vals = psman.calc_denoms_by_values()
+        if (not denoms_by_vals
+                or not psman.check_big_denoms_presented(denoms_by_vals)):
+            msg = psman.create_sm_denoms_data(no_denoms_txt=True)
+            self.app.show_error(msg)
+        else:
+            do_create = False
+            if psman.check_enough_sm_denoms(denoms_by_vals):
+                q = psman.create_sm_denoms_data(enough_txt=True)
+            else:
+                q = psman.create_sm_denoms_data(confirm_txt=True)
+
+            def on_q_answered(b):
+                if b:
+                    self.app.create_small_denoms(denoms_by_vals)
+            d = Question(q, on_q_answered)
+            d.open()
 
     def toggle_group_history(self, *args):
         self.psman.group_history = not self.psman.group_history
