@@ -1872,7 +1872,7 @@ class PSManager(Logger):
         for outpoint, addr in inputs:
             if change_addr and change_addr == addr:
                 continue
-            spendable_cache.pop(addr)
+            spendable_cache.pop(addr, None)
 
         # move ps coins keypairs to ps spendable cache
         ps_coins_cache = self._keypairs_cache.get(KP_PS_COINS, {})
@@ -1893,7 +1893,7 @@ class PSManager(Logger):
         # cleanup ps spendable keypairs
         for outpoint, addr in inputs:
             if addr in ps_spendable_cache:
-                ps_spendable_cache.pop(addr)
+                ps_spendable_cache.pop(addr, None)
 
         # move ps change, ps coins keypairs to ps spendable cache
         w = self.wallet
