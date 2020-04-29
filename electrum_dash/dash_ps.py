@@ -731,7 +731,7 @@ class PSManager(Logger):
 
     LOGGING_SHORTCUT = 'A'
     NOT_FOUND_KEYS_MSG = _('Insufficient keypairs cached to continue mixing.'
-                           ' You can restart mixing to reserve more keyparis')
+                           ' You can restart mixing to reserve more keypairs')
     SIGN_WIHT_KP_FAILED_MSG = _('Sign with keypairs failed.')
     ADD_PS_DATA_ERR_MSG = _('Error on adding PrivateSend transaction data.')
     SPEND_TO_PS_ADDRS_MSG = _('For privacy reasons blocked attempt to'
