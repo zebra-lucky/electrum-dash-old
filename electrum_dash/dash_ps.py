@@ -4045,8 +4045,7 @@ class PSManager(Logger):
             return 'Transaction has wrong outputs count'
 
         i, i_prev_h, i_prev_n, is_mine, tx_type = inputs[0]
-        if i.value not in [COLLATERAL_VAL*4,  COLLATERAL_VAL*3,
-                           COLLATERAL_VAL*2, COLLATERAL_VAL]:
+        if i.value not in CREATE_COLLATERAL_VALS:
             return 'Wrong collateral amount'
 
         o, o_prev_h, o_prev_n = outputs[0]
@@ -4054,9 +4053,10 @@ class PSManager(Logger):
             if o.value != 0:
                 return 'Wrong output collateral amount'
         else:
-            if o.value not in [COLLATERAL_VAL*3,  COLLATERAL_VAL*2,
-                               COLLATERAL_VAL]:
+            if o.value not in CREATE_COLLATERAL_VALS[:-1]:
                 return 'Wrong output collateral amount'
+        if o.value != i.value - COLLATERAL_VAL:
+            return 'Wrong output collateral amount'
 
         if not full_check:
             return
