@@ -736,6 +736,8 @@ class PSManager(Logger):
     ADD_PS_DATA_ERR_MSG = _('Error on adding PrivateSend transaction data.')
     SPEND_TO_PS_ADDRS_MSG = _('For privacy reasons blocked attempt to'
                               ' transfer coins to PrivateSend address.')
+    WATCHING_ONLY_MSG = _('This is a watching-only wallet.'
+                          ' Mixing can not be run.')
     ALL_MIXED_MSG = _('PrivateSend mixing is done')
     CLEAR_PS_DATA_MSG = _('Are you sure to clear all wallet PrivateSend data?'
                           ' This is not recommended if there is'
@@ -1973,7 +1975,9 @@ class PSManager(Logger):
     def start_mixing(self, password, nowait=True):
         w = self.wallet
         msg = None
-        if self.all_mixed and not self.calc_need_denoms_amounts():
+        if w.is_watching_only():
+            msg = self.WATCHING_ONLY_MSG, 'err'
+        elif self.all_mixed and not self.calc_need_denoms_amounts():
             msg = self.ALL_MIXED_MSG, 'inf'
         elif not self.network or not self.network.is_connected():
             msg = self.NO_NETWORK_MSG, 'err'
