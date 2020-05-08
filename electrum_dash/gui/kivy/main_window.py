@@ -888,6 +888,7 @@ class ElectrumWindow(App):
         Clock.schedule_once(lambda dt: self.on_ps_event(event, *args))
 
     def on_ps_event(self, event, *args):
+        psman = self.wallet.psman
         if event == 'ps-data-changes':
             wallet = args[0]
             if wallet == self.wallet:
@@ -899,20 +900,18 @@ class ElectrumWindow(App):
         elif event == 'ps-state-changes':
             wallet, msg, msg_type = args
             if wallet == self.wallet:
-                self.update_ps_btn()
+                is_mixing = (psman.state in psman.mixing_running_states)
+                self.update_ps_btn(is_mixing)
+                if self.receive_screen:
+                    self.receive_screen.block_on_mixing(is_mixing)
                 if msg:
                     if msg_type and msg_type.startswith('inf'):
                         self.show_info(msg)
                     else:
                         WarnDialog(msg, title=_('PrivateSend')).open()
 
-    def update_ps_btn(self):
+    def update_ps_btn(self, is_mixing):
         ps_button = self.root.ids.ps_button
-        is_mixing = False
-        wallet = self.wallet
-        if wallet:
-            psman = wallet.psman
-            is_mixing = (psman.state in psman.mixing_running_states)
         if is_mixing:
             ps_button.icon = self.ps_icon(active=True)
         else:

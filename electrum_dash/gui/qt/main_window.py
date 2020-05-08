@@ -441,7 +441,13 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         elif event == 'ps-state-changes':
             wallet, msg, msg_type = args
             if wallet == self.wallet:
-                self.update_ps_status_btn()
+                psman = self.wallet.psman
+                is_mixing = (psman.state in psman.mixing_running_states)
+                self.update_ps_status_btn(is_mixing)
+                if is_mixing:  # block/unblock receving tab GUI
+                    self.roverlap_w.show()
+                else:
+                    self.roverlap_w.hide()
                 if msg:
                     parent = self
                     d = find_ps_dialog(self)
@@ -462,9 +468,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         icon = (net.dash_net.status_icon() if net else 'dash_net_off.png')
         self.dash_net_button.setIcon(read_QIcon(icon))
 
-    def update_ps_status_btn(self):
-        psman = self.wallet.psman
-        is_mixing = (psman.state in psman.mixing_running_states)
+    def update_ps_status_btn(self, is_mixing):
         icon = 'privatesend_active.png' if is_mixing else 'privatesend.png'
         self.ps_button.setIcon(read_QIcon(icon))
         ps = _('PrivateSend')
@@ -1117,6 +1121,20 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         vbox.addWidget(self.request_list)
         vbox.setStretchFactor(self.request_list, 1000)
 
+        self.roverlap_w = QWidget(w)
+        self.roverlap_w.hide()
+        self.roverlap_w.setObjectName('roverlap_widget')
+        recv_blocked_msg = self.wallet.psman.RECV_BLOCKED_MSG
+        recv_blocked_msg_l = QLabel(recv_blocked_msg)
+        recv_blocked_msg_l.setWordWrap(True)
+        og = QGridLayout(self.roverlap_w)
+        og.addWidget(QWidget(), 0, 0)
+        og.addWidget(recv_blocked_msg_l, 1, 1)
+        og.addWidget(QWidget(), 2, 2)
+        og.setColumnStretch(0, 1)
+        og.setColumnStretch(2, 1)
+        og.setRowStretch(0, 1)
+        og.setRowStretch(2, 1)
         return w
 
 
@@ -2444,7 +2462,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
         self.ps_button = StatusBarButton(read_QIcon('privatesend.png'),
                                          '', lambda: show_ps_dialog(self))
-        self.update_ps_status_btn()
+        self.update_ps_status_btn(False)
         sb.addPermanentWidget(self.ps_button)
 
         run_hook('create_status_bar', sb)
@@ -3564,6 +3582,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if self.need_restart:
             self.show_warning(_('Please restart Dash Electrum to activate the new GUI settings'), title=_('Success'))
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.roverlap_w.setGeometry(0, 0, self.width(), self.height())
 
     def closeEvent(self, event):
         # It seems in some rare cases this closeEvent() is called twice
