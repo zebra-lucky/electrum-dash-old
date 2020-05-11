@@ -480,6 +480,24 @@ class PSDialog(QDialog, MessageBoxMixin):
         i = grid.rowCount()
         grid.addWidget(sub_spent_cb, i, 0, 1, -1)
 
+        # allow_others
+        allow_others_cb = QCheckBox(psman.allow_others_data(full_txt=True))
+        allow_others_cb.setChecked(psman.allow_others)
+
+        def on_allow_others_changed(x):
+            if x == Qt.Checked:
+                q = psman.allow_others_data(qt_question=True)
+                if self.question(q):
+                    psman.allow_others = True
+                else:
+                    allow_others_cb.setCheckState(Qt.Unchecked)
+            else:
+                psman.allow_others = False
+        allow_others_cb.stateChanged.connect(on_allow_others_changed)
+
+        i = grid.rowCount()
+        grid.addWidget(allow_others_cb, i, 0, 1, -1)
+
         # final tab setup
         i = grid.rowCount()
         grid.setRowStretch(i, 1)

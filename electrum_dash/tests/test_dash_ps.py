@@ -574,6 +574,40 @@ class PSWalletTestCase(TestCaseForTestnet):
         coins = self.wallet.get_spendable_coins(None, conf, min_rounds=3)
         assert len(coins) == 0
 
+    def test_get_spendable_coins_allow_others(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        # add other coins
+        coins = w.get_spendable_coins(domain=None, config=config)
+        denom_addr = list(w.db.get_ps_denoms().values())[0][0]
+        outputs = [TxOutput(TYPE_ADDRESS, denom_addr, 300000)]
+        tx = w.make_unsigned_transaction(coins, outputs, config=config)
+        w.sign_transaction(tx, None)
+        txid = tx.txid()
+        w.add_transaction(txid, tx)
+        w.db.add_islock(txid)
+        coro = psman.find_untracked_ps_txs(log=True)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        assert not psman.allow_others
+        coins = w.get_spendable_coins(domain=None, include_ps=True,
+                                      config=config)
+        cset = set([c['ps_rounds'] for c in coins])
+        assert cset == {None, 0, 1, 2, PSCoinRounds.COLLATERAL}
+        assert len(coins) == 138
+
+        psman.allow_others = True
+        coins = w.get_spendable_coins(domain=None, include_ps=True,
+                                      config=config)
+        cset = set([c['ps_rounds'] for c in coins])
+        assert cset == {None, 0, 1, 2,
+                        PSCoinRounds.COLLATERAL, PSCoinRounds.OTHER}
+        assert len(coins) == 139
+
     def test_get_utxos(self):
         C_RNDS = PSCoinRounds.COLLATERAL
         psman = self.wallet.psman

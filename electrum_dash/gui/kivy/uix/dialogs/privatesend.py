@@ -329,6 +329,12 @@ Builder.load_string('''
                 title: root.subscribe_spent_text + self.value
                 description: root.subscribe_spent_help
                 action: root.toggle_sub_spent
+            CardSeparator
+            SettingsItem:
+                value: ': ON' if root.allow_others else ': OFF'
+                title: root.allow_others_text + self.value
+                description: root.allow_others_help
+                action: root.toggle_allow_others
 
 
 <PSInfoTab@BoxLayout>
@@ -613,6 +619,7 @@ class PSMixingTab(BoxLayout):
     ps_balance = StringProperty()
     group_history = BooleanProperty()
     subscribe_spent = BooleanProperty()
+    allow_others = BooleanProperty()
     is_fiat_dn_balance = False
     is_fiat_ps_balance = False
 
@@ -656,6 +663,9 @@ class PSMixingTab(BoxLayout):
         self.subscribe_spent_text = psman.subscribe_spent_data()
         self.subscribe_spent_help = psman.subscribe_spent_data(full_txt=True)
 
+        self.allow_others_text = psman.allow_others_data()
+        self.allow_others_help = psman.allow_others_data(full_txt=True)
+
         super(PSMixingTab, self).__init__()
         self.update()
 
@@ -676,6 +686,7 @@ class PSMixingTab(BoxLayout):
         self.dn_balance = app.format_amount_and_units(val)
         self.group_history = psman.group_history
         self.subscribe_spent = psman.subscribe_spent
+        self.allow_others = psman.allow_others
 
     def show_warn_electrumx(self, *args):
         EXWarnPopup(self.psman).open()
@@ -784,6 +795,22 @@ class PSMixingTab(BoxLayout):
     def toggle_sub_spent(self, *args):
         self.psman.subscribe_spent = not self.psman.subscribe_spent
         self.subscribe_spent = self.psman.subscribe_spent
+
+    def toggle_allow_others(self, *args):
+        if self.psman.allow_others:
+            self.psman.allow_others = False
+            self.allow_others = False
+        else:
+            q = self.psman.allow_others_data(kv_question=True)
+
+            def on_q_answered(b):
+                if b:
+                    self.psman.allow_others = True
+                    self.allow_others = True
+
+            d = Question(q, on_q_answered)
+            d.size_hint = (0.9, 0.9)
+            d.open()
 
     def show_coins_dialog(self, *args):
         self.app.coins_dialog()

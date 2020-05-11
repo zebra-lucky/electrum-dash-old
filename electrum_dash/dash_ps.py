@@ -158,6 +158,7 @@ MAX_PRIVATESEND_SESSIONS = 10
 DEFAULT_GROUP_HISTORY = True
 DEFAULT_NOTIFY_PS_TXS = False
 DEFAULT_SUBSCRIBE_SPENT = False
+DEFAULT_ALLOW_OTHERS = False
 
 POOL_MIN_PARTICIPANTS = 3
 POOL_MAX_PARTICIPANTS = 5
@@ -807,6 +808,7 @@ class PSManager(Logger):
         self.wallet_types_supported = ['standard']
         self.keystore_types_supported = ['bip32']
         keystore = wallet.db.get('keystore')
+        self._allow_others = DEFAULT_ALLOW_OTHERS
         if keystore:
             keystore_type = keystore.get('type', 'unknown')
         else:
@@ -1249,6 +1251,44 @@ class PSManager(Logger):
                      ' on electrum servers')
         else:
             return _('Subscribe to spent PS addresses')
+
+    @property
+    def allow_others(self):
+        return self._allow_others
+
+    @allow_others.setter
+    def allow_others(self, allow_others):
+        if self._allow_others == allow_others:
+            return
+        self._allow_others = allow_others
+
+    def allow_others_data(self, full_txt=False,
+                          qt_question=False, kv_question=False):
+        expl = _('Other PS coins appears if some transaction other than'
+                 ' mixing PrivateSend transactions types send funds to one'
+                 ' of addresses used for PrivateSend mixing.\n\nIt is not'
+                 ' recommended for privacy reasons to spend these funds'
+                 ' in regular way. However, you can mix these funds manually'
+                 ' with PrivateSend mixing process.')
+
+        expl2_qt =  _('You can create new denoms or new collateral from other'
+                      ' PS coins on Coins tab. You can also select individual'
+                      ' coin to spend and return to originating address.')
+
+        expl2_kv =  _('You can create new denoms or new collateral from other'
+                      ' PS coins with Coins dialog from PrivateSend options.')
+
+        q = _('This option allow spend other PS coins as a regular coins'
+              ' without coins selection.'
+              ' Are you sure to enable this option?')
+        if full_txt:
+            return _('Allow spend other PS coins in regular transactions')
+        elif qt_question:
+            return '%s\n\n%s\n\n%s' % (expl, expl2_qt, q)
+        elif kv_question:
+            return '%s\n\n%s\n\n%s' % (expl, expl2_kv, q)
+        else:
+            return _('Allow spend other PS coins')
 
     @property
     def ps_collateral_cnt(self):
