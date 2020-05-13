@@ -93,7 +93,8 @@ from .history_list import HistoryList, HistoryModel
 from .update_checker import UpdateCheck, UpdateCheckThread
 from .masternode_dialog import MasternodeDialog
 from .dash_qt import ExtraPayloadWidget
-from .privatesend_dialog import find_ps_dialog, show_ps_dialog, hide_ps_dialog
+from .privatesend_dialog import (find_ps_dialog, show_ps_dialog,
+                                 hide_ps_dialog, protected_with_parent)
 from .protx_qt import create_dip3_tab
 
 
@@ -275,6 +276,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.wallet.psman.register_callback(self.on_ps_callback,
                                             ['ps-log-changes',
                                              'ps-wfl-changes',
+                                             'ps-not-enough-sm-denoms',
                                              'ps-keypairs-changes',
                                              'ps-reserved-changes',
                                              'ps-data-changes',
@@ -430,6 +432,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.ps_signal.emit(event, args)
 
     def on_ps_signal(self, event, args):
+        psman = self.wallet.psman
+        is_mixing = (psman.state in psman.mixing_running_states)
         if event == 'ps-data-changes':
             wallet = args[0]
             if wallet == self.wallet:
@@ -441,8 +445,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         elif event == 'ps-state-changes':
             wallet, msg, msg_type = args
             if wallet == self.wallet:
-                psman = self.wallet.psman
-                is_mixing = (psman.state in psman.mixing_running_states)
                 self.update_ps_status_btn(is_mixing)
                 if is_mixing:  # block/unblock receving tab GUI
                     self.roverlap_w.show()
@@ -462,6 +464,12 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                         parent.show_warning(msg, title=_('PrivateSend'))
                     if d:
                         d.incoming_msg = False
+        elif event == 'ps-not-enough-sm-denoms':
+            wallet, denoms_by_vals = args
+            if wallet == self.wallet:
+                q = psman.create_sm_denoms_data(confirm_txt=True)
+                if self.question(q):
+                    self.create_small_denoms(denoms_by_vals, self)
 
     def update_dash_net_status_btn(self):
         net = self.network
@@ -1962,15 +1970,58 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
     def sign_tx(self, tx, callback, password):
         self.sign_tx_with_password(tx, callback, password)
 
-    @protected
-    def create_new_collateral_wfl_from_gui(self, coins, password):
-        psman = self.wallet.psman
-        return psman.create_new_collateral_wfl_from_gui(coins, password)
+    def create_small_denoms(self, denoms_by_vals, parent):
+        w = self.wallet
+        psman = w.psman
+        coins = psman.get_biggest_denoms_by_min_round()
+        if not coins:
+            msg = psman.create_sm_denoms_data(no_denoms_txt=True)
+            parent.show_error(msg)
+        self.create_new_denoms(coins[0:1], parent)
 
-    @protected
+    def confirm_wfl_transactions(self, info, parent):
+        q = _('Do you want to create transactions?\n\n{}').format(info)
+        return parent.question(q)
+
+    def create_new_denoms(self, coins, parent):
+        w = self.wallet
+        psman = w.psman
+        info = psman.new_denoms_from_coins_info(coins)
+        if self.confirm_wfl_transactions(info, parent):
+            res = self.create_new_denoms_wfl_from_gui(coins, mwin=self,
+                                                      parent=parent)
+            if res:
+                wfl, err = res
+                if err:
+                    parent.show_error(err)
+                else:
+                    parent.show_message(f'Created New Denoms workflow with'
+                                        f' txids: {", ".join(wfl.tx_order)}')
+
+    @protected_with_parent
     def create_new_denoms_wfl_from_gui(self, coins, password):
         psman = self.wallet.psman
         return psman.create_new_denoms_wfl_from_gui(coins, password)
+
+    def create_new_collateral(self, coins, parent):
+        w = self.wallet
+        psman = w.psman
+        info = psman.new_collateral_from_coins_info(coins)
+        if self.confirm_wfl_transactions(info, parent):
+            res = self.create_new_collateral_wfl_from_gui(coins, mwin=self,
+                                                          parent=parent)
+            if res:
+                wfl, err = res
+                if err:
+                    parent.show_error(err)
+                else:
+                    parent.show_message(f'Created New Collateral workflow with'
+                                        f' txids: {", ".join(wfl.tx_order)}')
+
+    @protected_with_parent
+    def create_new_collateral_wfl_from_gui(self, coins, password):
+        psman = self.wallet.psman
+        return psman.create_new_collateral_wfl_from_gui(coins, password)
 
     def sign_tx_with_password(self, tx, callback, password):
         '''Sign the transaction in a separate thread.  When done, calls
@@ -2247,6 +2298,14 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
     def on_ps_cb(self, is_ps):
         self.set_pay_from([])
         self.update_avalaible_amount()
+        if is_ps:
+            w = self.wallet
+            psman = w.psman
+            denoms_by_vals = psman.calc_denoms_by_values()
+            if denoms_by_vals:
+                if not psman.check_enough_sm_denoms(denoms_by_vals):
+                    psman.postpone_notification('ps-not-enough-sm-denoms',
+                                                 w, denoms_by_vals)
 
     def reset_privatesend(self):
         self.ps_cb.setChecked(False)

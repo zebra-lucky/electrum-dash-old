@@ -9,7 +9,8 @@ import threading
 import asyncio
 
 from electrum_dash.bitcoin import TYPE_ADDRESS
-from electrum_dash.dash_ps import PSPossibleDoubleSpendError
+from electrum_dash.dash_ps import (PSPossibleDoubleSpendError,
+                                   PSSpendToPSAddressesError)
 from electrum_dash.storage import WalletStorage
 from electrum_dash.wallet import Wallet, InternalAddressCorruption
 from electrum_dash.paymentrequest import InvoiceStore
@@ -45,6 +46,7 @@ from .uix.dialogs import InfoBubble, crash_reporter
 from .uix.dialogs import OutputList, OutputItem
 from .uix.dialogs import TopLabel, RefLabel
 from .uix.dialogs.warn_dialog import WarnDialog
+from .uix.dialogs.question import Question
 
 #from kivy.core.window import Window
 #Window.softinput_mode = 'below_target'
@@ -909,6 +911,73 @@ class ElectrumWindow(App):
                         self.show_info(msg)
                     else:
                         WarnDialog(msg, title=_('PrivateSend')).open()
+        elif event == 'ps-not-enough-sm-denoms':
+            wallet, denoms_by_vals = args
+            if wallet == self.wallet:
+                q = psman.create_sm_denoms_data(confirm_txt=True)
+
+                def create_small_denoms():
+                    self.create_small_denoms(denoms_by_vals)
+
+                d = Question(q, create_small_denoms)
+                d.open()
+
+    def create_small_denoms(self, denoms_by_vals):
+        w = self.wallet
+        psman = w.psman
+        coins = psman.get_biggest_denoms_by_min_round()
+        if not coins:
+            msg = psman.create_sm_denoms_data(no_denoms_txt=True)
+            self.show_error(msg)
+        self.create_new_denoms(coins[0:1])
+
+    def create_new_denoms(self, coins):
+        def on_q_answered(confirmed):
+            if confirmed:
+                self.protected(_('Enter your PIN code to sign'
+                                 ' new denoms transactions'),
+                               self._create_new_denoms, (coins,))
+
+        w = self.wallet
+        psman = w.psman
+        info = psman.new_denoms_from_coins_info(coins)
+        q = _('Do you want to create transactions?\n\n{}').format(info)
+        d = Question(q, on_q_answered)
+        d.open()
+
+    def _create_new_denoms(self, coins, password):
+        w = self.wallet
+        psman = w.psman
+        wfl, err = psman.create_new_denoms_wfl_from_gui(coins, password)
+        if err:
+            self.show_error(err)
+        else:
+            self.show_info(f'Created New Denoms workflow with'
+                           f' txids: {", ".join(wfl.tx_order)}')
+
+    def create_new_collateral(self, coins):
+        def on_q_answered(confirmed):
+            if confirmed:
+                self.protected(_('Enter your PIN code to sign'
+                                 ' new collateral transactions'),
+                               self._create_new_collateral, (coins,))
+
+        w = self.wallet
+        psman = w.psman
+        info = psman.new_collateral_from_coins_info(coins)
+        q = _('Do you want to create transactions?\n\n{}').format(info)
+        d = Question(q, on_q_answered)
+        d.open()
+
+    def _create_new_collateral(self, coins, password):
+        w = self.wallet
+        psman = w.psman
+        wfl, err = psman.create_new_collateral_wfl_from_gui(coins, password)
+        if err:
+            self.show_error(err)
+        else:
+            self.show_info(f'Created New Collateral workflow with'
+                           f' txids: {", ".join(wfl.tx_order)}')
 
     def update_ps_btn(self, is_mixing):
         ps_button = self.root.ids.ps_button
@@ -926,6 +995,7 @@ class ElectrumWindow(App):
         self.wallet.psman.register_callback(self.on_ps_callback,
                                             ['ps-data-changes',
                                              'ps-reserved-changes',
+                                             'ps-not-enough-sm-denoms',
                                              'ps-state-changes'])
         self.wallet_name = wallet.basename()
         self.update_wallet()
@@ -1167,6 +1237,8 @@ class ElectrumWindow(App):
         except TxBroadcastError as e:
             msg = e.get_message_for_gui()
         except PSPossibleDoubleSpendError as e:
+            msg = str(e)
+        except PSSpendToPSAddressesError as e:
             msg = str(e)
         except BestEffortRequestFailed as e:
             msg = repr(e)
