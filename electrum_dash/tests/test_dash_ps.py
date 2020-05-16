@@ -3178,3 +3178,50 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert res_r == [0] * 22 + [2] * 39
         assert res_v == ([10000100] * 10 + [1000010] * 12 + [100001000] * 2 +
                          [10000100] * 16 + [1000010] * 21)
+
+    def test_all_mixed(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+
+        # move spendable to ps_others
+        for c in w.get_spendable_coins(domain=None, config=self.config):
+            prev_h = c['prevout_hash']
+            prev_n = c['prevout_n']
+            outpoint = f'{prev_h}:{prev_n}'
+            w.db.add_ps_other(outpoint, (c['address'], c['value']))
+
+        r = psman.mix_rounds
+        dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
+        ps_balance = sum(w.get_balance(include_ps=False, min_rounds=r))
+
+        assert dn_balance == 500005000
+        assert ps_balance == 0
+        assert not psman.all_mixed
+
+        dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
+        ps_balance = sum(w.get_balance(include_ps=False, min_rounds=r))
+
+        # set rounds to psman.mix_rounds
+        for outpoint in list(w.db.get_ps_denoms()):
+            addr, val, prev_r = psman.pop_ps_denom(outpoint)
+            psman.add_ps_denom(outpoint, (addr, val, r))
+
+        dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
+        ps_balance = sum(w.get_balance(include_ps=False, min_rounds=r))
+
+        assert dn_balance == 500005000
+        assert ps_balance == 500005000
+        assert psman.all_mixed
+
+        psman.keep_amount = 4
+        assert psman.all_mixed
+
+        psman.keep_amount = 5
+        assert not psman.all_mixed
+
+        psman.keep_amount = 6
+        assert not psman.all_mixed
