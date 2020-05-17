@@ -26,7 +26,17 @@ class ElectrumGui:
     def __init__(self, config, daemon, plugins):
 
         self.config = config
-        self.network = daemon.network
+        self.network = network = daemon.network
+        if config.get('tor_auto_on', True):
+            if network:
+                proxy_modifiable = config.is_modifiable('proxy')
+                if not proxy_modifiable or not network.detect_tor_proxy():
+                    print(network.TOR_WARN_MSG_TXT)
+                    c = ''
+                    while c != 'y':
+                        c = input("Continue without Tor (y/n)?")
+                        if c == 'n':
+                            exit()
         storage = WalletStorage(config.get_wallet_path())
         if not storage.file_exists():
             print("Wallet not found. try 'electrum-dash create'")
