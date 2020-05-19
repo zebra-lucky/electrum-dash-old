@@ -1,3 +1,9 @@
+# Release 3.3.8.6 (not released yet)
+
+ * PrivateSend: allow start mixing before llmq/protx ready,
+   stop mixing only if keep amount is available on ps balance
+
+
 # Release 3.3.8.5
 
  * PrivateSend: Check on small amount of minimal denoms and propose

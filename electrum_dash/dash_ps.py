@@ -762,10 +762,8 @@ class PSManager(Logger):
                           ' no particular need.')
     NO_NETWORK_MSG = _('Can not start mixing. Network is not available')
     NO_DASH_NET_MSG = _('Can not start mixing. DashNet is not available')
-    LLMQ_DATA_NOT_READY = _('LLMQ quorums data is not fully loaded.'
-                            ' Please try again soon.')
-    MNS_DATA_NOT_READY = _('Masternodes data is not fully loaded.'
-                           ' Please try again soon.')
+    LLMQ_DATA_NOT_READY = _('LLMQ quorums data is not fully loaded.')
+    MNS_DATA_NOT_READY = _('Masternodes data is not fully loaded.')
     NOT_ENABLED_MSG = _('PrivateSend mixing is not enabled')
     INITIALIZING_MSG = _('PrivateSend mixing is initializing.'
                          ' Please try again soon')
@@ -857,6 +855,7 @@ class PSManager(Logger):
         self.new_collateral_wfl_lock = threading.Lock()
         self.pay_collateral_wfl_lock = threading.Lock()
         self.denominate_wfl_lock = threading.Lock()
+        self._not_enough_funds = False
 
         # _ps_denoms_amount_cache recalculated in add_ps_denom/pop_ps_denom
         self._ps_denoms_amount_cache = 0
@@ -1012,6 +1011,7 @@ class PSManager(Logger):
         if w != self.wallet:
             return
         if w.is_up_to_date():
+            self._not_enough_funds = False
             if self.state in [PSStates.Initializing, PSStates.Ready]:
                 await self.find_untracked_ps_txs()
 
@@ -1610,9 +1610,18 @@ class PSManager(Logger):
         dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
         if dn_balance == 0:
             return False
+
         r = self.mix_rounds
         ps_balance = sum(w.get_balance(include_ps=False, min_rounds=r))
-        return (dn_balance and ps_balance >= dn_balance)
+        if ps_balance < dn_balance:
+            return False
+
+        need_val = to_duffs(self.keep_amount) + CREATE_COLLATERAL_VAL
+        approx_val = need_val - dn_balance
+        outputs_amounts = self.find_denoms_approx(approx_val)
+        if outputs_amounts:
+            return False
+        return True
 
     # Methods related to keypairs cache
     def on_wallet_password_set(self):
@@ -2090,16 +2099,12 @@ class PSManager(Logger):
         msg = None
         if w.is_watching_only():
             msg = self.WATCHING_ONLY_MSG, 'err'
-        elif self.all_mixed and not self.calc_need_denoms_amounts():
+        elif self.all_mixed:
             msg = self.ALL_MIXED_MSG, 'inf'
         elif not self.network or not self.network.is_connected():
             msg = self.NO_NETWORK_MSG, 'err'
         elif not self.dash_net.run_dash_net:
             msg = self.NO_DASH_NET_MSG, 'err'
-        elif not self.check_llmq_ready():
-            msg = self.LLMQ_DATA_NOT_READY, 'err'
-        elif not self.check_protx_info_completeness():
-            msg = self.MNS_DATA_NOT_READY, 'err'
         if msg:
             msg, inf = msg
             self.logger.info(f'Can not start PrivateSend Mixing: {msg}')
@@ -2145,6 +2150,7 @@ class PSManager(Logger):
             return
 
         assert not self.main_taskgroup
+        self._not_enough_funds = False
         self.main_taskgroup = main_taskgroup = SilentTaskGroup()
         self.logger.info('Starting PrivateSend Mixing')
 
@@ -2237,8 +2243,7 @@ class PSManager(Logger):
     async def _check_all_mixed(self):
         while not self.main_taskgroup.closed():
             await asyncio.sleep(10)
-            if (self.all_mixed
-                    and not self.calc_need_denoms_amounts(use_cache=True)):
+            if self.all_mixed:
                 await self.stop_mixing_from_async_thread(self.ALL_MIXED_MSG,
                                                          'inf')
 
@@ -2285,9 +2290,15 @@ class PSManager(Logger):
             if wfl:
                 if not wfl.completed or not wfl.tx_order:
                     await self.cleanup_new_collateral_wfl()
-            elif (not self.ps_collateral_cnt
+            elif (not self._not_enough_funds
+                    and not self.ps_collateral_cnt
                     and not self.calc_need_denoms_amounts(use_cache=True)):
-                if kp_wait_state and self.keypairs_state != kp_wait_state:
+                if not self.check_llmq_ready():
+                    self.logger.info(_('New collateral workflow: {}')
+                                     .format(self.LLMQ_DATA_NOT_READY))
+                    await asyncio.sleep(5)
+                    continue
+                elif kp_wait_state and self.keypairs_state != kp_wait_state:
                     self.logger.info(f'New collateral workflow waiting'
                                      f' for keypairs generation')
                     await asyncio.sleep(5)
@@ -2303,8 +2314,14 @@ class PSManager(Logger):
             if wfl:
                 if not wfl.completed or not wfl.tx_order:
                     await self.cleanup_new_denoms_wfl()
-            elif self.calc_need_denoms_amounts(use_cache=True):
-                if kp_wait_state and self.keypairs_state != kp_wait_state:
+            elif (not self._not_enough_funds
+                    and self.calc_need_denoms_amounts(use_cache=True)):
+                if not self.check_llmq_ready():
+                    self.logger.info(_('New denoms workflow: {}')
+                                     .format(self.LLMQ_DATA_NOT_READY))
+                    await asyncio.sleep(5)
+                    continue
+                elif kp_wait_state and self.keypairs_state != kp_wait_state:
                     self.logger.info(f'New denoms workflow waiting'
                                      f' for keypairs generation')
                     await asyncio.sleep(5)
@@ -2327,7 +2344,17 @@ class PSManager(Logger):
             if (self._denoms_to_mix_cache
                     and self.pay_collateral_wfl
                     and self.active_denominate_wfl_cnt < self.max_sessions):
-                if kp_wait_state and self.keypairs_state != kp_wait_state:
+                if not self.check_llmq_ready():
+                    self.logger.info(_('Denominate workflow: {}')
+                                     .format(self.LLMQ_DATA_NOT_READY))
+                    await asyncio.sleep(5)
+                    continue
+                elif not self.check_protx_info_completeness():
+                    self.logger.info(_('Denominate workflow: {}')
+                                     .format(self.MNS_DATA_NOT_READY))
+                    await asyncio.sleep(5)
+                    continue
+                elif kp_wait_state and self.keypairs_state != kp_wait_state:
                     self.logger.info(f'Denominate workflow waiting'
                                      f' for keypairs generation')
                     await asyncio.sleep(5)
@@ -2982,9 +3009,7 @@ class PSManager(Logger):
             elif type_e == SignWithKeypairsFailed:
                 msg = self.SIGN_WIHT_KP_FAILED_MSG
             elif type_e == NotEnoughFunds:
-                msg = _('Insufficient funds to create collateral amount.'
-                        ' You can use coin selector to manually create'
-                        ' collateral amount from PrivateSend coins.')
+                self._not_enough_funds = True
             if msg:
                 await self.stop_mixing_from_async_thread(msg)
 
@@ -3378,9 +3403,7 @@ class PSManager(Logger):
                 elif type_e == SignWithKeypairsFailed:
                     msg = self.SIGN_WIHT_KP_FAILED_MSG
                 elif type_e == NotEnoughFunds:
-                    msg = _('Insufficient funds to create anonymized amount.'
-                            ' You can use PrivateSend settings to change'
-                            ' amount of Dash to keep anonymized.')
+                    self._not_enough_funds = True
                 if msg:
                     await self.stop_mixing_from_async_thread(msg)
                 break
@@ -3442,7 +3465,7 @@ class PSManager(Logger):
             # use first input address as a change, use selected inputs
             in0 = inputs[0]['address']
             tx = w.make_unsigned_transaction(inputs, outputs,
-                                         self.config, change_addr=in0)
+                                             self.config, change_addr=in0)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
