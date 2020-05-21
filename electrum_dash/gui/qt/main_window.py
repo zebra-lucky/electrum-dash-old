@@ -282,11 +282,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                                              'ps-data-changes',
                                              'ps-state-changes'])
 
-        if (self.network
-                and self.network.tor_auto_on and not self.network.tor_on):
-            self.show_warning(self.network.tor_warn_msg +
-                              self.network.tor_docs_uri_qt, rich_text=True)
-
         # If the option hasn't been set yet
         if config.get('check_updates') is None:
             choice = self.question(title="Dash Electrum - " + _("Enable update check"),

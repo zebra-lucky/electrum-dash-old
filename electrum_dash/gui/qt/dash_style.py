@@ -201,6 +201,7 @@ QValidatedLineEdit, QLineEdit, PayToEdit { /* Text Entry Fields */
 
 QValidatedLineEdit:disabled, QLineEdit:disabled, PayToEdit:disabled {
     border: 1px solid #676767;
+    background-color: #eeeeee;
 }
 
 QValidatedLineEdit:read-only, QLineEdit:read-only, PayToEdit:read-only {
@@ -422,7 +423,8 @@ QComboBox { /* Dropdown Menus */
 }
 
 QComboBox::disabled {
-    background:#eeeeee;
+    border: 1px solid #676767;
+    background-color: #eeeeee;
 }
 
 QComboBox::drop-down {
@@ -692,6 +694,12 @@ QTreeView, QTreeWidget, QListWidget, QTableView, QTextEdit, QPlainTextEdit  {
     border: 0px;
     color:#818181;
     background:qradialgradient(cx:0.5, cy:0.5, radius: 0.5, fx:0.5, fy:0.5, stop:0 rgba(255, 255, 255, 255), stop: 1 rgba(246, 246, 246, 255));
+}
+
+QTreeView:disabled, QTreeWidget:disabled, QListWidget:disabled,
+QTableView:disabled, QTextEdit:disabled, QPlainTextEdit:disabled  {
+    border: 1px solid #676767;
+    background-color: #eeeeee;
 }
 
 QTreeView QLineEdit, QTreeWidget QLineEdit {
