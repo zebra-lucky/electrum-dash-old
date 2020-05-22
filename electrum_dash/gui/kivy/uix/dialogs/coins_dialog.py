@@ -62,20 +62,34 @@ Builder.load_string('''
 <CoinsDialog@Popup>
     id: dlg
     title: _('Coins')
+    show_ps_ks: 0
     show_ps: 0
     cmbox: cmbox
     padding: 0
     spacing: 0
     BoxLayout:
         id: box
-        padding: 0
-        spacing: 0
+        padding: '12dp', '12dp', '12dp', '12dp'
+        spacing: '12dp'
         orientation: 'vertical'
-        size_hint: 1, 1.1
+        size_hint: 1, 1
         BoxLayout:
             spacing: '6dp'
             size_hint: 1, None
+            height: self.minimum_height
             orientation: 'horizontal'
+            AddressFilter:
+                opacity: 1
+                size_hint: 1, None
+                height: self.minimum_height
+                spacing: '5dp'
+                AddressButton:
+                    text: {0: _('Main'), \
+                           1: _('PS Keystore'), \
+                           2: _('All')}[root.show_ps_ks]
+                    on_release:
+                        root.show_ps_ks = (root.show_ps_ks + 1) % 3
+                        Clock.schedule_once(lambda dt: root.update())
             AddressFilter:
                 opacity: 1
                 size_hint: 1, None
@@ -190,16 +204,20 @@ class CoinsDialog(Factory.Popup):
         return ci
 
     def update(self):
-        wallet = self.app.wallet
+        w = self.app.wallet
         if self.show_ps == 1:  # PS Other coins
-            utxos = wallet.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
+            utxos = w.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
             utxos = [c for c in utxos if c['ps_rounds'] <= PSCoinRounds.OTHER]
         elif self.show_ps == 2:  # Regular
-            utxos = wallet.get_utxos()
+            utxos = w.get_utxos()
         elif self.show_ps == 3:  # All
-            utxos = wallet.get_utxos(include_ps=True)
+            utxos = w.get_utxos(include_ps=True)
         else:  # PrivateSend
-            utxos = wallet.get_utxos(min_rounds=PSCoinRounds.COLLATERAL)
+            utxos = w.get_utxos(min_rounds=PSCoinRounds.COLLATERAL)
+        if self.show_ps_ks == 0:    # Main
+            utxos = [c for c in utxos if not c['is_ps_ks']]
+        elif self.show_ps_ks == 1:  # PS Keystore
+            utxos = [c for c in utxos if c['is_ps_ks']]
         utxos.sort(key=sort_utxos_by_ps_rounds)
         container = self.ids.scroll_container
         container.layout_manager.clear_selection()

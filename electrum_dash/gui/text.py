@@ -227,7 +227,11 @@ class ElectrumGui:
 
     def print_addresses(self):
         fmt = "%-35s  %-30s"
-        messages = map(lambda addr: fmt % (addr, self.wallet.labels.get(addr,"")), self.wallet.get_addresses())
+        w = self.wallet
+        addrs = w.get_addresses() + w.psman.get_addresses()
+        messages = map(lambda addr: fmt %
+                                    (addr, self.wallet.labels.get(addr,"")),
+                       addrs)
         self.print_list(messages,   fmt % ("Address", "Label"))
 
     def print_edit_line(self, y, label, text, index, size):

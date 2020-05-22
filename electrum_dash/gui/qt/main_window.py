@@ -2761,7 +2761,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if not self.wallet.is_mine(address):
             self.show_message(_('Address not in wallet.'))
             return
-        txin_type = self.wallet.get_txin_type(address)
+        if self.wallet.psman.is_ps_ks(address):
+            txin_type = self.wallet.psman.ps_ks_txin_type
+        else:
+            txin_type = self.wallet.get_txin_type(address)
         if txin_type not in ['p2pkh']:
             self.show_message(_('Cannot sign messages with this type of address:') + \
                               ' ' + txin_type + '\n\n' + self.msg_sign)
@@ -2876,7 +2879,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
         pubkey_e = QLineEdit()
         if address:
-            pubkey = self.wallet.get_public_key(address)
+            if self.wallet.psman.is_ps_ks(address):
+                pubkey = self.wallet.psman.get_public_key(address)
+            else:
+                pubkey = self.wallet.get_public_key(address)
             pubkey_e.setText(pubkey)
         layout.addWidget(QLabel(_('Public key')), 2, 0)
         layout.addWidget(pubkey_e, 2, 1)
@@ -3014,7 +3020,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         vbox.addLayout(Buttons(CancelButton(d), b))
 
         private_keys = {}
-        addresses = self.wallet.get_addresses()
+        w = self.wallet
+        addresses = w.get_addresses() + w.psman.get_addresses()
         done = False
         cancelled = False
         def privkeys_thread():
