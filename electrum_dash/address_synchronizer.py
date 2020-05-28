@@ -941,6 +941,10 @@ class AddressSynchronizer(Logger):
         for addr in domain:
             utxos = self.get_addr_utxo(addr)
             for x in utxos.values():
+                if min_rounds is not None:
+                    ps_rounds = x['ps_rounds']
+                    if ps_rounds is None or ps_rounds < min_rounds:
+                        continue
                 if confirmed_only:
                     if x['height'] <= 0:
                         if not consider_islocks:
