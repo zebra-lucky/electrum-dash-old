@@ -782,12 +782,25 @@ class PSManager(Logger):
                              ' prematurely additional pay collateral may be'
                              ' payd. Do you really want to close wallet?')
     NO_NETWORK_STOP_MSG = _('Network is not available')
+    OTHER_COINS_ARRIVED_MSG1 = _('Some unknown coins arrived on addresses'
+                                 ' reserved for PrivateSend use, txid: {}.')
+    OTHER_COINS_ARRIVED_MSG2 = _('WARNING: it is not recommended to spend'
+                                 ' these coins in regular transactions!')
+    OTHER_COINS_ARRIVED_MSG3 = _('You can use these coins in PrivateSend'
+                                 ' mixing process by manually selecting UTXO'
+                                 ' and creating new denoms or new collateral,'
+                                 ' depending on UTXO value.')
+    OTHER_COINS_ARRIVED_Q = _('Do you want to use other coins now?')
     if is_android():
         NO_DYNAMIC_FEE_MSG = _('{}\n\nYou can switch fee estimation method'
                                ' on send screen')
+        OTHER_COINS_ARRIVED_MSG4 = _('You can view and use these coins from'
+                                     ' Coins popup from PrivateSend options.')
     else:
         NO_DYNAMIC_FEE_MSG = _('{}\n\nYou can switch to static fee estimation'
                                ' on Fees Preferences tab')
+        OTHER_COINS_ARRIVED_MSG4 = _('You can view and use these coins from'
+                                     ' Coins tab.')
 
     def __init__(self, wallet):
         Logger.__init__(self)
@@ -4786,6 +4799,8 @@ class PSManager(Logger):
             self._add_spend_ps_coins_ps_data(txid, tx)
             if self._keypairs_cache:
                 self._cleanup_ps_keypairs(txid, tx, tx_type)
+            # notify ui on ps other coins arrived
+            self.postpone_notification('ps-other-coins-arrived', w, txid)
         else:
             raise AddPSDataError(f'{txid} unknow type {tx_type}')
         w.db.pop_ps_tx_removed(txid)

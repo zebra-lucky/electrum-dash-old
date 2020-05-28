@@ -82,10 +82,12 @@ Builder.load_string('''
                 height: self.minimum_height
                 spacing: '5dp'
                 AddressButton:
-                    text: {0: _('PrivateSend'), 1: _('Regular'), \
-                        2: _('All')}[root.show_ps]
+                    text: {0: _('PrivateSend'), \
+                           1: _('PS Other coins'), \
+                           2: _('Regular'), \
+                           3: _('All')}[root.show_ps]
                     on_release:
-                        root.show_ps = (root.show_ps + 1) % 3
+                        root.show_ps = (root.show_ps + 1) % 4
                         Clock.schedule_once(lambda dt: root.update())
             AddressFilter:
                 opacity: 1
@@ -160,12 +162,13 @@ class CoinsDialog(Factory.Popup):
 
     selected_str = StringProperty('')
 
-    def __init__(self, app):
+    def __init__(self, app, filter_val=0):
         Factory.Popup.__init__(self)
         self.app = app
         self.context_menu = None
         self.coins_selected = []
         self.utxos = []
+        self.show_ps = filter_val
 
     def get_card(self, prev_h, prev_n, addr, amount, height, ps_rounds):
         ci = {}
@@ -188,12 +191,15 @@ class CoinsDialog(Factory.Popup):
 
     def update(self):
         wallet = self.app.wallet
-        if self.show_ps == 1:  # Regular
+        if self.show_ps == 1:  # PS Other coins
+            utxos = wallet.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
+            utxos = [c for c in utxos if c['ps_rounds'] <= PSCoinRounds.OTHER]
+        elif self.show_ps == 2:  # Regular
             utxos = wallet.get_utxos()
-        elif self.show_ps == 2:  # All
+        elif self.show_ps == 3:  # All
             utxos = wallet.get_utxos(include_ps=True)
         else:  # PrivateSend
-            utxos = wallet.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
+            utxos = wallet.get_utxos(min_rounds=PSCoinRounds.COLLATERAL)
         utxos.sort(key=sort_utxos_by_ps_rounds)
         container = self.ids.scroll_container
         container.layout_manager.clear_selection()

@@ -189,7 +189,10 @@ class UTXOModel(QAbstractItemModel, Logger):
         if show_ps == 0:  # All
             utxos = w.get_utxos(include_ps=True)
         elif show_ps == 1:  # PrivateSend
+            utxos = w.get_utxos(min_rounds=PSCoinRounds.COLLATERAL)
+        elif show_ps == 2:  # PS Other coins
             utxos = w.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
+            utxos = [c for c in utxos if c['ps_rounds'] <= PSCoinRounds.OTHER]
         else:  # Regular
             utxos = w.get_utxos()
         utxos.sort(key=sort_utxos_by_ps_rounds)
@@ -293,7 +296,8 @@ class UTXOList(MyTreeView):
         self.show_ps = 0
         self.ps_button = QComboBox(self)
         self.ps_button.currentIndexChanged.connect(self.toggle_ps)
-        for t in [_('All'), _('PrivateSend'), _('Regular')]:
+        for t in [_('All'), _('PrivateSend'),
+                  _('PS Other coins'), _('Regular')]:
             self.ps_button.addItem(t)
 
     def get_toolbar_buttons(self):
@@ -309,6 +313,7 @@ class UTXOList(MyTreeView):
     def toggle_ps(self, state):
         if state == self.show_ps:
             return
+        self.ps_button.setCurrentIndex(state)
         self.show_ps = state
         self.update()
 
