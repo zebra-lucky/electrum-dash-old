@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import re
 import random
@@ -5308,12 +5309,41 @@ class PSManager(Logger):
                                            'outputs': outputs,
                                            'out_rounds': out_rounds}
             if new_denoms_txs or denominate_txs or denoms or spent_denoms:
+                # topological sort
+                top_sorted = []
+                edges_set = set()
+                work_set = set(denoms)
+                while work_set:
+                    node = work_set.pop()
+                    top_sorted.append(node)
+                    if ':' in node:  # outpoint
+                        prev_h = graph[val]['outpoints'][node]['prev_h']
+                        cur_edge = (node, prev_h)
+                        if cur_edge in edges_set:
+                            continue
+                        edges_set.add(cur_edge)
+                        other_edges = False
+                        for o in graph[val]['txs'][prev_h]['outputs']:
+                            if (o, prev_h) not in edges_set:
+                                other_edges = True
+                                break
+                        if not other_edges:
+                            work_set.add(prev_h)
+                    else:  # txid
+                        for o in graph[val]['txs'][node]['inputs']:
+                            cur_edge = (node, o)
+                            if cur_edge in edges_set:
+                                continue
+                            edges_set.add(cur_edge)
+                            work_set.add(o)
+                top_sorted.reverse()
                 graph[val]['max_r'] = max_r
                 graph[val]['tx_cnt'] = tx_cnt
                 graph[val]['new_denoms_txs'] = new_denoms_txs
                 graph[val]['denominate_txs'] = denominate_txs
                 graph[val]['denoms'] = denoms
                 graph[val]['spent_denoms'] = spent_denoms
+                graph[val]['top_sorted'] = top_sorted
         return graph
 
     @profiler
