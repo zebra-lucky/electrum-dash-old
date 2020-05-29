@@ -5312,7 +5312,7 @@ class PSManager(Logger):
                 # topological sort
                 top_sorted = []
                 edges_set = set()
-                work_set = set(denoms)
+                work_set = denoms[:]
                 while work_set:
                     node = work_set.pop()
                     top_sorted.append(node)
@@ -5328,14 +5328,16 @@ class PSManager(Logger):
                                 other_edges = True
                                 break
                         if not other_edges:
-                            work_set.add(prev_h)
+                            if prev_h not in work_set:
+                                work_set.append(prev_h)
                     else:  # txid
                         for o in graph[val]['txs'][node]['inputs']:
                             cur_edge = (node, o)
                             if cur_edge in edges_set:
                                 continue
                             edges_set.add(cur_edge)
-                            work_set.add(o)
+                            if o not in work_set:
+                                work_set.append(o)
                 top_sorted.reverse()
                 graph[val]['max_r'] = max_r
                 graph[val]['tx_cnt'] = tx_cnt
