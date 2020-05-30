@@ -5349,11 +5349,10 @@ class PSManager(Logger):
         return graph
 
     @staticmethod
-    def idxs_of_list1_vals_in_list2(l1, l2):
-        idxs_dict = {i1: i2 for (r1, i1), (r2, i2) in
-                     zip(sorted([(l1, i) for i, l1 in enumerate(l1)]),
-                         sorted([(l2, i) for i, l2 in enumerate(l2)]))}
-        return [l2_idx for l1_idx, l2_idx in sorted(idxs_dict.items())]
+    def idxs_of_list2_vals_in_list1(l1, l2):
+        il1 = sorted([(v1, i1) for i1, v1 in enumerate(l1)])
+        il2 = sorted([(v2, i2) for i2, v2 in enumerate(l2)])
+        return [x[0][1] for x in sorted(zip(il1, il2), key=lambda x: x[1][1])]
 
     def get_multiround_out_idxs(self, graph_data, denom_val):
         graph = graph_data[denom_val]
@@ -5366,9 +5365,46 @@ class PSManager(Logger):
             if tx['multiround']:
                 in_rounds_p = [r + 1 for r in tx['in_rounds']]
                 out_rounds = tx['out_rounds']
-                out_idxs[node] = self.idxs_of_list1_vals_in_list2(in_rounds_p,
+                out_idxs[node] = self.idxs_of_list2_vals_in_list1(in_rounds_p,
                                                                   out_rounds)
         return out_idxs
+
+    def calc_rounds_on_out_idxs(self, graph_data, oidxs, denom_val):
+        graph = graph_data[denom_val]
+        spent_denoms = graph.get('spent_denoms', [])
+        top_sorted = graph.get('top_sorted', [])
+        txs_out_r = {}
+        denoms_r = {}
+        spentd_r = {}
+        for node in top_sorted:
+            if ':' in node:
+                if node in denoms_r or node in spentd_r:
+                    d = graph['outpoints'][node]
+                    continue
+                d = graph['outpoints'][node]
+                if d['spent']:
+                    spentd_r[node] = d['r']
+                else:
+                    denoms_r[node] = d['r']
+            else:
+                tx = graph['txs'][node]
+                if tx['tx_type'] != PSTxTypes.DENOMINATE:
+                    continue
+                inputs = tx['inputs']
+                in_rounds = [spentd_r[d_outpoint] for d_outpoint in inputs]
+                if tx['multiround']:
+                    idxs = oidxs[node]
+                    out_rounds = [1 + in_rounds[i] for i in idxs]
+                else:
+                    out_rounds = [1 + r for r in in_rounds]
+                txs_out_r[node] = out_rounds
+
+                for oi, d_outpoint in enumerate(tx['outputs']):
+                    if d_outpoint in spent_denoms:
+                        spentd_r[d_outpoint] = out_rounds[oi]
+                    else:
+                        denoms_r[d_outpoint] = out_rounds[oi]
+        return denoms_r, spentd_r
 
     @profiler
     def sort_tx_rounds(self, graph_data):

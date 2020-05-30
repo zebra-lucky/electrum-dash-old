@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import time
 from collections import defaultdict
+from pprint import pprint
 
 from electrum_dash import dash_ps
 from electrum_dash.bitcoin import TYPE_ADDRESS
@@ -3282,19 +3283,24 @@ class MultiroundsWalletTestCase(TestDataWalletTestCase):
         graph_data = psman.make_denominate_tx_graph()
         assert stored_data == graph_data[1000010000]
 
-    def test_idxs_of_list1_vals_in_list2(self):
+    def test_idxs_of_list2_vals_in_list1(self):
         w = self.wallet
         psman = w.psman
 
         l1 = [13, 14, 10, 16]
         l2 = [13, 10, 14, 16]
         res = [0, 2, 1, 3]
-        assert psman.idxs_of_list1_vals_in_list2(l1, l2) == res
+        assert psman.idxs_of_list2_vals_in_list1(l1, l2) == res
 
         l1 = [3, 5, 2, 7, 4]
         l2 = [7, 3, 2, 5, 4]
-        res = [1, 3, 2, 0, 4]
-        assert psman.idxs_of_list1_vals_in_list2(l1, l2) == res
+        res = [3, 0, 2, 1, 4]
+        assert psman.idxs_of_list2_vals_in_list1(l1, l2) == res
+
+        l1 = [3, 2, 1]
+        l2 = [1, 3, 2]
+        res = [2, 0, 1]
+        assert psman.idxs_of_list2_vals_in_list1(l1, l2) == res
 
     def test_get_multiround_out_idxs(self):
         w = self.wallet
@@ -3318,6 +3324,21 @@ class MultiroundsWalletTestCase(TestDataWalletTestCase):
 
         assert res2[:3] == ([2, 0, 1], [2, 1, 0], [0, 3, 1, 2])
         assert res2[-3:] == ([1, 2, 0], [1, 4, 0, 2, 3], [1, 0])
+
+    def test_calc_rounds_on_out_idxs(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        graph_data = psman.make_denominate_tx_graph()
+        denom_val = PS_DENOMS_VALS[-1]
+        oidxs = psman.get_multiround_out_idxs(graph_data, denom_val)
+        denoms_r, spentd_r = psman.calc_rounds_on_out_idxs(graph_data,
+                                                           oidxs, denom_val)
+        for d_outpoint, r in sorted(denoms_r.items()):
+            assert graph_data[denom_val]['outpoints'][d_outpoint]['r'] == r
 
     def test_sort_tx_rounds(self):
         w = self.wallet
