@@ -5348,6 +5348,118 @@ class PSManager(Logger):
                 graph[val]['top_sorted'] = top_sorted
         return graph
 
+    @staticmethod
+    def idxs_of_list1_vals_in_list2(l1, l2):
+        idxs_dict = {i1: i2 for (r1, i1), (r2, i2) in
+                     zip(sorted([(l1, i) for i, l1 in enumerate(l1)]),
+                         sorted([(l2, i) for i, l2 in enumerate(l2)]))}
+        return [l2_idx for l1_idx, l2_idx in sorted(idxs_dict.items())]
+
+    def get_multiround_out_idxs(self, graph_data, denom_val):
+        graph = graph_data[denom_val]
+        top_sorted = graph.get('top_sorted', [])
+        out_idxs = {}
+        for node in top_sorted:
+            if ':' in node:
+                continue
+            tx = graph['txs'][node]
+            if tx['multiround']:
+                in_rounds_p = [r + 1 for r in tx['in_rounds']]
+                out_rounds = tx['out_rounds']
+                out_idxs[node] = self.idxs_of_list1_vals_in_list2(in_rounds_p,
+                                                                  out_rounds)
+        return out_idxs
+
+    @profiler
+    def sort_tx_rounds(self, graph_data):
+        for val in PS_DENOMS_VALS[-1:]:
+            sub_graph = graph_data[val]
+            top_sorted = sub_graph.get('top_sorted', [])
+            txs_out_r = {}
+            denoms_r = {}
+            spentd_r = {}
+            for node in top_sorted:
+                if ':' in node:  # outpoint
+                    d = sub_graph['outpoints'][node]
+                    if d['spent']:
+                        spentd_r[node] =  d['r']
+                    else:
+                        denoms_r[node] =  d['r']
+                else:
+                    tx = sub_graph['txs'][node]
+                    txs_out_r[node] = tx['out_rounds']
+
+            for i, node in enumerate(top_sorted):
+                if ':' in node:  # outpoint
+                    continue
+                tx = sub_graph['txs'][node]
+                if not tx['multiround']:
+                    continue
+
+                res_txs_out_r = copy.deepcopy(txs_out_r)
+                res_spentd_r = copy.deepcopy(spentd_r)
+                res_denoms_r = copy.deepcopy(denoms_r)
+
+                o_rounds = o_rounds_new = res_txs_out_r[node][:]
+                res_txs_out_r[node] = [1, 2, 2, 2]
+                o_rounds_new = res_txs_out_r[node]
+                print(f'********** {i}, {node}, {o_rounds} -> {o_rounds_new}')
+
+                outputs = sub_graph['txs'][node]['outputs']
+                for oi, d_outpoint in enumerate(outputs):
+                    if d_outpoint in res_spentd_r:
+                        res_spentd_r[d_outpoint] = o_rounds_new[oi]
+                    else:
+                        res_denoms_r[d_outpoint] = o_rounds_new[oi]
+
+                for s_node in top_sorted[i+1:]:
+                    if ':' in s_node:  # outpoint
+                        continue
+                    s_tx = sub_graph['txs'][s_node]
+                    inputs = s_tx['inputs']
+                    in_rounds = s_tx['in_rounds']
+                    new_in_rounds = [res_spentd_r[o] for o in inputs]
+
+                    if in_rounds != new_in_rounds:
+                        r_diffs = [x1 - x2 for x1, x2 in
+                                   zip(new_in_rounds, in_rounds)]
+                        out_rounds = s_tx['out_rounds']
+                        outputs = s_tx['outputs']
+
+                        def index_of_l2_in_l2(l1, l2):
+                            return {i1: i2 for (r1, i1), (r2, i2) in
+                                    zip(sorted([(l1, i)
+                                                for i, l1 in enumerate(l1)]),
+                                        sorted([(l2, i)
+                                                for i, l2 in enumerate(l2)]))}
+
+                        out_idxs = index_of_l2_in_l2([r+1 for r in in_rounds],
+                                                     out_rounds)
+                        for ri, r_diff in enumerate(r_diffs):
+                            if r_diff != 0:
+                                out_ri = out_idxs[ri]
+                                next_r = new_in_rounds[ri] + 1
+                                out_rounds[out_ri] = next_r
+                                #print('1'*10, s_node, r_diffs, out_rounds)
+                                next_d_outpoint = outputs[out_ri]
+                                #print('2'*10, next_d_outpoint, next_r)
+                                if next_d_outpoint in res_spentd_r:
+                                    res_spentd_r[next_d_outpoint] = next_r
+                                else:
+                                    res_denoms_r[next_d_outpoint] = next_r
+
+                break  # one iteration for test
+            l1 = sorted(denoms_r.values())
+            l2 = sorted(res_denoms_r.values())
+            print('1'*10, min(l1), max(l1), l1)
+            print('2'*10, min(l2), max(l2), l2)
+
+
+        #from pprint import pprint
+        #pprint(txs_out_r)
+        #pprint(denoms_r)
+        #pprint(spent_d_r)
+
     @profiler
     def parse_graph_for_nx(self, graph_data):
         import networkx as nx

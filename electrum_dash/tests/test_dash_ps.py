@@ -3280,10 +3280,55 @@ class MultiroundsWalletTestCase(TestDataWalletTestCase):
             stored_data = json.loads(stored_data)
 
         graph_data = psman.make_denominate_tx_graph()
-        from pprint import pprint
-        pprint(graph_data[1000010000])
-        assert 0
         assert stored_data == graph_data[1000010000]
+
+    def test_idxs_of_list1_vals_in_list2(self):
+        w = self.wallet
+        psman = w.psman
+
+        l1 = [13, 14, 10, 16]
+        l2 = [13, 10, 14, 16]
+        res = [0, 2, 1, 3]
+        assert psman.idxs_of_list1_vals_in_list2(l1, l2) == res
+
+        l1 = [3, 5, 2, 7, 4]
+        l2 = [7, 3, 2, 5, 4]
+        res = [1, 3, 2, 0, 4]
+        assert psman.idxs_of_list1_vals_in_list2(l1, l2) == res
+
+    def test_get_multiround_out_idxs(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        graph_data = psman.make_denominate_tx_graph()
+        res = psman.get_multiround_out_idxs(graph_data, PS_DENOMS_VALS[-1])
+        res1, res2 = list(zip(*sorted(res.items())))
+        assert res1[:3] == (
+            '0d8dc4309227adb3e62eede74e35b0faf30c67f4607efb0c669e589c17f5d1d9',
+            '19c9714fb3a22a958ef0a836e144457a88d1978e7ed264b63bf1967afbc55d30',
+            '226b845651c287d10a119297af876f7d21e582c4c22455223c9cfbd2d20d0e8e')
+
+        assert res1[-3:] == (
+            'f94695590dc901c870bfb889fd76d9bd02e82a20da04fb19c7435b6624d6f7c1',
+            'fd653ab5bf45a7f2cd5124803cd80140dfa29adc3d116d80315c3fbd3f20f351',
+            'fdfa7f86e4a7fdf566f587f6061b51bc2bcbebd2f7eccbf6ac5e837ffb1c3a48')
+
+        assert res2[:3] == ([2, 0, 1], [2, 1, 0], [0, 3, 1, 2])
+        assert res2[-3:] == ([1, 2, 0], [1, 4, 0, 2, 3], [1, 0])
+
+    def test_sort_tx_rounds(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        graph_data = psman.make_denominate_tx_graph()
+        psman.sort_tx_rounds(graph_data)
+        assert 0
 
     def test_get_graph_dimensions(self):
         w = self.wallet
