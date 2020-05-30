@@ -3334,11 +3334,37 @@ class MultiroundsWalletTestCase(TestDataWalletTestCase):
         asyncio.get_event_loop().run_until_complete(coro)
         graph_data = psman.make_denominate_tx_graph()
         denom_val = PS_DENOMS_VALS[-1]
+        # initial rounds on original indexes
         oidxs = psman.get_multiround_out_idxs(graph_data, denom_val)
         denoms_r, spentd_r = psman.calc_rounds_on_out_idxs(graph_data,
                                                            oidxs, denom_val)
-        for d_outpoint, r in sorted(denoms_r.items()):
-            assert graph_data[denom_val]['outpoints'][d_outpoint]['r'] == r
+        denoms_enum_list = list(enumerate(sorted(denoms_r.keys())))
+        res = [15, 11, 11, 21, 23, 14, 22, 14, 13]
+        for i, o in denoms_enum_list:
+            assert graph_data[denom_val]['outpoints'][o]['r'] == res[i]
+            assert denoms_r[o] == res[i]
+
+        # reverse some indexes
+        txid = ('fd653ab5bf45a7f2cd5124803cd80140'
+                'dfa29adc3d116d80315c3fbd3f20f351')
+        prev = oidxs[txid][:]
+        oidxs[txid] = prev[::-1]
+        denoms_r, spentd_r = psman.calc_rounds_on_out_idxs(graph_data,
+                                                           oidxs, denom_val)
+        res = [14, 11, 11, 18, 23, 15, 22, 17, 13]
+        for i, o in denoms_enum_list:
+            assert denoms_r[o] == res[i]
+
+        # reverse some indexes
+        txid = ('b9b24f98897af7f66aacf1735bc5b6a8'
+                '299798952407856003a47a8c8a090307')
+        prev = oidxs[txid][:]
+        oidxs[txid] = prev[::-1]
+        denoms_r, spentd_r = psman.calc_rounds_on_out_idxs(graph_data,
+                                                           oidxs, denom_val)
+        res = [16, 11, 11, 16, 23, 13, 24, 17, 13]
+        for i, o in denoms_enum_list:
+            assert denoms_r[o] == res[i]
 
     def test_sort_tx_rounds(self):
         w = self.wallet
