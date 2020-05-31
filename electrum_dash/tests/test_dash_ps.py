@@ -3386,7 +3386,7 @@ class MultiroundsWalletTestCase(TestDataWalletTestCase):
                 'e04713ba3242e684cac6ddaac1248c2d')
         res = psman.tx_in_rounds_idxs_permutations(graph_data, denom_val, txid)
         assert len(res) == 3
-        assert res == [[0, 1, 2, 3], [0, 2, 3, 1], [1, 2, 3, 0]
+        assert res == [[0, 1, 2, 3], [0, 2, 3, 1], [1, 2, 3, 0]]
 
     def test_sort_tx_rounds(self):
         w = self.wallet
