@@ -3366,6 +3366,28 @@ class MultiroundsWalletTestCase(TestDataWalletTestCase):
         for i, o in denoms_enum_list:
             assert denoms_r[o] == res[i]
 
+    def test_tx_in_rounds_idxs_permutations(self):
+        w = self.wallet
+        random.seed(a='test rng seed', version=2)
+        psman = w.psman
+        psman.config = self.config
+        coro = psman.find_untracked_ps_txs(log=False)
+        asyncio.get_event_loop().run_until_complete(coro)
+        graph_data = psman.make_denominate_tx_graph()
+        denom_val = PS_DENOMS_VALS[-1]
+        txid = ('fd653ab5bf45a7f2cd5124803cd80140'
+                'dfa29adc3d116d80315c3fbd3f20f351')
+        res = psman.tx_in_rounds_idxs_permutations(graph_data, denom_val, txid)
+        assert len(res) == 59
+        assert res[:3] == [[0, 1, 2, 3, 4], [0, 1, 2, 4, 3], [0, 1, 3, 2, 4]]
+        assert res[-3:] == [[4, 1, 3, 2, 0], [4, 2, 3, 0, 1], [4, 2, 3, 1, 0]]
+
+        txid = ('3beac5aaa947335f6ab1ced345bc5995'
+                'e04713ba3242e684cac6ddaac1248c2d')
+        res = psman.tx_in_rounds_idxs_permutations(graph_data, denom_val, txid)
+        assert len(res) == 3
+        assert res == [[0, 1, 2, 3], [0, 2, 3, 1], [1, 2, 3, 0]
+
     def test_sort_tx_rounds(self):
         w = self.wallet
         random.seed(a='test rng seed', version=2)

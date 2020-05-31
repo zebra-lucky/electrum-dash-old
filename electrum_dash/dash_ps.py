@@ -10,6 +10,7 @@ from bls_py import bls
 from enum import IntEnum
 from collections import defaultdict, deque, Counter
 from decimal import Decimal
+from itertools import permutations
 from math import floor, ceil
 from uuid import uuid4
 
@@ -5348,8 +5349,7 @@ class PSManager(Logger):
                 graph[val]['top_sorted'] = top_sorted
         return graph
 
-    @staticmethod
-    def idxs_of_list2_vals_in_list1(l1, l2):
+    def idxs_of_list2_vals_in_list1(self, l1, l2):
         il1 = sorted([(v1, i1) for i1, v1 in enumerate(l1)])
         il2 = sorted([(v2, i2) for i2, v2 in enumerate(l2)])
         return [x[0][1] for x in sorted(zip(il1, il2), key=lambda x: x[1][1])]
@@ -5405,6 +5405,18 @@ class PSManager(Logger):
                     else:
                         denoms_r[d_outpoint] = out_rounds[oi]
         return denoms_r, spentd_r
+
+    def tx_in_rounds_idxs_permutations(self, graph_data, denom_val, txid):
+        graph = graph_data[denom_val]
+        tx = graph['txs'][txid]
+        in_rounds = tx['in_rounds']
+        in_rounds_pm = (set(permutations(in_rounds, len(in_rounds))) -
+                        set([tuple(in_rounds)]))
+        out_rounds = tx['out_rounds']
+        res = []
+        for pm in in_rounds_pm:
+            res.append(self.idxs_of_list2_vals_in_list1(pm, out_rounds))
+        return sorted(res)
 
     @profiler
     def sort_tx_rounds(self, graph_data):
