@@ -225,9 +225,9 @@ class PSDialog(QDialog, MessageBoxMixin):
         self.info_update()
         self.info_data_buttons_update()
         self.add_log_tab()
-        if NETWORKX_IMPORTED:
-            self.add_graph_tab()
-            self.tabs.setCurrentIndex(3)
+        #if NETWORKX_IMPORTED:
+            #self.add_graph_tab()
+            #self.tabs.setCurrentIndex(3)
         self.mwin.ps_signal.connect(self.on_ps_signal)
         self.ps_signal_connected = True
         self.is_hiding = False
