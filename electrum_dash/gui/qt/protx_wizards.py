@@ -1032,6 +1032,8 @@ class CollateralWizardPage(QWizardPage):
             excluded = wallet.frozen_addresses
         coins = wallet.get_utxos(domain=None, excluded_addresses=excluded,
                                  mature_only=True, confirmed_only=True)
+        if not self.frozen_cb.isChecked():
+            coins = [c for c in coins if not wallet.is_frozen_coin(c)]
         coins = list(filter(lambda x: (x['value'] == (1000 * COIN)), coins))
 
         if len(coins) > 0:
