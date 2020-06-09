@@ -1688,9 +1688,11 @@ class ExportToFileWizardPage(QWizardPage):
         layout.addWidget(self.lb_aliases)
         layout.addWidget(self.lw_aliases)
         self.setLayout(layout)
+        self.aliases = []
 
     def initializePage(self):
         self.parent.setButtonText(QWizard.CommitButton, 'Save')
+        self.aliases = [i.text() for i in self.lw_aliases.selectedItems()]
 
     @pyqtSlot()
     def on_selection_changed(self):
