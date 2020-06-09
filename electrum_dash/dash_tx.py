@@ -122,23 +122,33 @@ class ProTxService (namedtuple('ProTxService', 'ip port')):
 class TxOutPoint(namedtuple('TxOutPoint', 'hash index')):
     '''Class representing tx input outpoint'''
     def __str__(self):
-        return '%s:%s' % (bh2u(self.hash[::-1]) if self.hash else '',
-                          self.index)
+        d = self._asdict()
+        return '%s:%s' % (d['hash'], d['index'])
+
+    @property
+    def is_null(self):
+        return self.hash == b'\x00'*32 and self.index == -1
+
+    @property
+    def hash_is_null(self):
+        return self.hash == b'\x00'*32
 
     def serialize(self):
         assert len(self.hash) == 32, \
             f'{len(self.hash)} not 32'
+        index = 0xffffffff if self.index == -1 else self.index
         return (
             self.hash +                         # hash
-            struct.pack('<I', self.index)       # index
+            struct.pack('<I', index)            # index
         )
 
     @classmethod
     def read_vds(cls, vds):
-        return TxOutPoint(
-            vds.read_bytes(32),                 # hash
-            vds.read_uint32()                   # index
-        )
+        o_hash = vds.read_bytes(32)             # hash
+        o_index = vds.read_uint32()             # index
+        if o_index == 0xffffffff:
+            o_index = -1
+        return TxOutPoint(o_hash, o_index)
 
     def _asdict(self):
         return {
