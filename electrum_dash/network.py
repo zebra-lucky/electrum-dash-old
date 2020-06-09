@@ -1064,9 +1064,15 @@ class Network(Logger):
             r"bad-qc-version",
             r"bad-qc-quorum-hash",
             r"bad-qc-type",
+            r"bad-qc-payload",
+            r"commitment-not-found",
+            r"excess-quorums",
+
 
             r"bad-protx-addr",
+            r"bad-protx-ipaddr",
             r"bad-protx-addr-port",
+            r"bad-protx-ipaddr-port",
             r"bad-protx-sig",
             r"bad-protx-inputs-hash",
             r"bad-protx-type",
@@ -1093,6 +1099,7 @@ class Network(Logger):
             r"bad-tx-type",
             r"bad-tx-type-check",
             r"bad-tx-type-proc",
+            r"failed-check-special-tx",
 
             r"bad-cbtx-type",
             r"bad-cbtx-invalid",
@@ -1100,6 +1107,8 @@ class Network(Logger):
             r"bad-cbtx-version",
             r"bad-cbtx-height",
             r"bad-cbtx-mnmerkleroot",
+            r"failed-calc-cb-mnmerkleroot",
+            r"failed-dmn-block",
 
             r"bad-txns-payload-oversize",
             r"bad-txns-type",
