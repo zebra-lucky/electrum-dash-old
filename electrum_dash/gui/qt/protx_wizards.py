@@ -905,8 +905,15 @@ class SaveDip3WizardPage(QWizardPage):
             except ProRegTxExc as e:
                 gui.show_error(e)
                 return True
-            gui.payto_e.setText(manager.wallet.get_unused_address())
-            gui.extra_payload.set_extra_data(tx_type, pro_tx)
+            gui.do_clear()
+            mn = self.new_mn
+            if mn.collateral.is_null:
+                gui.amount_e.setText('1000')
+            mn_addrs = [mn.owner_addr, mn.voting_addr, mn.payout_address]
+            for addr in manager.wallet.get_unused_addresses():
+                if addr not in mn_addrs:
+                    gui.payto_e.setText(addr)
+            gui.extra_payload.set_extra_data(tx_type, pro_tx, alias)
             gui.show_extra_payload()
             gui.tabs.setCurrentIndex(gui.tabs.indexOf(gui.send_tab))
             parent.pro_tx_prepared = tx_descr

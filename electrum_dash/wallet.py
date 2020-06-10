@@ -981,13 +981,15 @@ class Abstract_Wallet(AddressSynchronizer):
         # hardware wallets require extra info
         if any([(isinstance(k, Hardware_KeyStore) and k.can_sign(tx)) for k in self.get_keystores()]):
             self.add_hw_info(tx)
+        # update ProTxBase transactions when password is available
+        extra_payload = None
+        if tx.tx_type:
+            extra_payload = tx.extra_payload
+            extra_payload.update_before_sign(tx, self, password)
         # sign. start with ready keystores.
         for k in sorted(self.get_keystores(), key=lambda ks: ks.ready_to_sign(), reverse=True):
             try:
                 if k.can_sign(tx):
-                    if tx.tx_type:
-                        ex_p = tx.extra_payload
-                        ex_p.update_with_keystore_password(tx, self, k, password)
                     k.sign_transaction(tx, password)
             except UserCancelled:
                 continue
