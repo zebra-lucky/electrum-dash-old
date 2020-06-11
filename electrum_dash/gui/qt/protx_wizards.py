@@ -13,8 +13,9 @@ from PyQt5.QtWidgets import (QLineEdit, QComboBox, QListWidget, QDoubleSpinBox,
                              QGroupBox, QCheckBox, QPushButton, QGridLayout,
                              QFileDialog, QWizard)
 
+from electrum_dash import constants
 from electrum_dash import dash_tx
-from electrum_dash.bitcoin import COIN, is_b58_address
+from electrum_dash.bitcoin import COIN, is_b58_address, b58_address_to_hash160
 from electrum_dash.dash_tx import TxOutPoint, service_to_ip_port
 from electrum_dash.protx import ProTxMN, ProTxService, ProRegTxExc
 from electrum_dash.util import bfh, bh2u
@@ -1583,8 +1584,6 @@ class Dip3MasternodeWizard(QWizard):
             raise ValidationError('Payout address must differ from owner'
                                   'and voting addresses')
 
-        if not self.wallet.is_mine(o_addr):
-            raise ValidationError('Owner address not found in the wallet')
         keystore = self.wallet.keystore
         if not hasattr(keystore, 'sign_digest') and not ignore_hw_warn:
             raise HwWarnError('Warning: sign_digest not implemented in '
@@ -1598,6 +1597,12 @@ class Dip3MasternodeWizard(QWizard):
             raise ValidationError('Wrong voting address format')
         if not is_b58_address(p_addr):
             raise ValidationError('Wrong payout address format')
+
+        if b58_address_to_hash160(o_addr)[0] != constants.net.ADDRTYPE_P2PKH:
+            raise ValidationError('Owner address must be of P2PKH type')
+        if b58_address_to_hash160(v_addr)[0] != constants.net.ADDRTYPE_P2PKH:
+            raise ValidationError('Voting address must be of P2PKH type')
+
         return o_addr, v_addr, p_addr
 
 
