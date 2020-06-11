@@ -151,20 +151,28 @@ class ExtraPayloadWidget(QTextEdit):
         self.setReadOnly(True)
         self.tx_type = 0
         self.extra_payload = b''
+        self.mn_alias = None
 
     def clear(self):
         super(ExtraPayloadWidget, self).clear()
         self.tx_type = 0
         self.extra_payload = b''
+        self.mn_alias = None
         self.setText('')
 
     def get_extra_data(self):
         return self.tx_type, self.extra_payload
 
-    def set_extra_data(self, tx_type, extra_payload):
+    def set_extra_data(self, tx_type, extra_payload, mn_alias=None):
         self.tx_type, self.extra_payload = tx_type, extra_payload
+        self.mn_alias = mn_alias
         tx_type_name = SPEC_TX_NAMES.get(tx_type, str(tx_type))
-        self.setText('Tx Type: %s\n\n%s' % (tx_type_name, extra_payload))
+        if self.mn_alias:
+            self.setText('Tx Type: %s, MN alias: %s\n\n%s' % (tx_type_name,
+                                                              mn_alias,
+                                                              extra_payload))
+        else:
+            self.setText('Tx Type: %s\n\n%s' % (tx_type_name, extra_payload))
 
 
 class VTabBar(QTabBar):

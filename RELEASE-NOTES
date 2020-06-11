@@ -3,6 +3,9 @@
  * PrivateSend: allow start mixing before llmq/protx ready,
    stop mixing only if keep amount is available on ps balance
  * Enhance "Detect Tor proxy on wallet startup" option behaviour/UI
+ * DIP3 masternodes: support collateral in ProRegTx output (p2sh addresses
+   support), other fixes
+ * Remove legacy masternodes commands from commands.py
  * Add UI to handle Other PS coins
  * Other PS fixes
 
