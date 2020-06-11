@@ -851,10 +851,26 @@ class ElectrumWindow(App):
             if wallet == self.wallet:
                 q = psman.create_sm_denoms_data(confirm_txt=True)
 
-                def create_small_denoms():
-                    self.create_small_denoms(denoms_by_vals)
+                def create_small_denoms(confirmed):
+                    if confirmed:
+                        self.create_small_denoms(denoms_by_vals)
 
                 d = Question(q, create_small_denoms)
+                d.open()
+        elif event == 'ps-other-coins-arrived':
+            wallet, txid = args
+            if wallet == self.wallet:
+                q = '\n\n'.join([psman.OTHER_COINS_ARRIVED_MSG1.format(txid),
+                                 psman.OTHER_COINS_ARRIVED_MSG2,
+                                 psman.OTHER_COINS_ARRIVED_MSG3,
+                                 psman.OTHER_COINS_ARRIVED_MSG4,
+                                 psman.OTHER_COINS_ARRIVED_Q])
+
+                def show_coins_dialog(confirmed):
+                    if confirmed:
+                        self.coins_dialog(1)
+
+                d = Question(q, show_coins_dialog)
                 d.open()
 
     def create_small_denoms(self, denoms_by_vals):
@@ -931,6 +947,7 @@ class ElectrumWindow(App):
                                             ['ps-data-changes',
                                              'ps-reserved-changes',
                                              'ps-not-enough-sm-denoms',
+                                             'ps-other-coins-arrived',
                                              'ps-state-changes'])
         self.wallet_name = wallet.basename()
         self.update_wallet()
@@ -1253,9 +1270,9 @@ class ElectrumWindow(App):
         popup.update()
         popup.open()
 
-    def coins_dialog(self):
+    def coins_dialog(self, filter_val=0):
         from .uix.dialogs.coins_dialog import CoinsDialog
-        popup = CoinsDialog(self)
+        popup = CoinsDialog(self, filter_val=filter_val)
         popup.update()
         popup.open()
 

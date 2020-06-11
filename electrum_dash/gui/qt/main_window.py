@@ -277,6 +277,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                                             ['ps-log-changes',
                                              'ps-wfl-changes',
                                              'ps-not-enough-sm-denoms',
+                                             'ps-other-coins-arrived',
                                              'ps-keypairs-changes',
                                              'ps-reserved-changes',
                                              'ps-data-changes',
@@ -465,6 +466,22 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                 q = psman.create_sm_denoms_data(confirm_txt=True)
                 if self.question(q):
                     self.create_small_denoms(denoms_by_vals, self)
+        elif event == 'ps-other-coins-arrived':
+            wallet, txid = args
+            if wallet == self.wallet:
+                q = '\n\n'.join([psman.OTHER_COINS_ARRIVED_MSG1.format(txid),
+                                 psman.OTHER_COINS_ARRIVED_MSG2,
+                                 psman.OTHER_COINS_ARRIVED_MSG3,
+                                 psman.OTHER_COINS_ARRIVED_MSG4,
+                                 psman.OTHER_COINS_ARRIVED_Q])
+                if self.question(q):
+                    utxo_is_shown = self.config.get('show_utxo_tab', False)
+                    if not utxo_is_shown:
+                        self.toggle_tab(self.utxo_tab)
+                    utxo_idx = self.tabs.indexOf(self.utxo_tab)
+                    if self.tabs.currentIndex() != utxo_idx:
+                        self.tabs.setCurrentIndex(utxo_idx)
+                    self.utxo_list.toggle_ps(2)  # PS Other coins
 
     def update_dash_net_status_btn(self):
         net = self.network

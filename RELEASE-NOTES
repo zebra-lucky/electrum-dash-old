@@ -3,6 +3,8 @@
  * PrivateSend: allow start mixing before llmq/protx ready,
    stop mixing only if keep amount is available on ps balance
  * Enhance "Detect Tor proxy on wallet startup" option behaviour/UI
+ * Add UI to handle Other PS coins
+ * Other PS fixes
 
 
 # Release 3.3.8.5

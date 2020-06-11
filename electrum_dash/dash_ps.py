@@ -782,12 +782,25 @@ class PSManager(Logger):
                              ' prematurely additional pay collateral may be'
                              ' payd. Do you really want to close wallet?')
     NO_NETWORK_STOP_MSG = _('Network is not available')
+    OTHER_COINS_ARRIVED_MSG1 = _('Some unknown coins arrived on addresses'
+                                 ' reserved for PrivateSend use, txid: {}.')
+    OTHER_COINS_ARRIVED_MSG2 = _('WARNING: it is not recommended to spend'
+                                 ' these coins in regular transactions!')
+    OTHER_COINS_ARRIVED_MSG3 = _('You can use these coins in PrivateSend'
+                                 ' mixing process by manually selecting UTXO'
+                                 ' and creating new denoms or new collateral,'
+                                 ' depending on UTXO value.')
+    OTHER_COINS_ARRIVED_Q = _('Do you want to use other coins now?')
     if is_android():
         NO_DYNAMIC_FEE_MSG = _('{}\n\nYou can switch fee estimation method'
                                ' on send screen')
+        OTHER_COINS_ARRIVED_MSG4 = _('You can view and use these coins from'
+                                     ' Coins popup from PrivateSend options.')
     else:
         NO_DYNAMIC_FEE_MSG = _('{}\n\nYou can switch to static fee estimation'
                                ' on Fees Preferences tab')
+        OTHER_COINS_ARRIVED_MSG4 = _('You can view and use these coins from'
+                                     ' Coins tab.')
 
     def __init__(self, wallet):
         Logger.__init__(self)
@@ -4197,17 +4210,27 @@ class PSManager(Logger):
         self._add_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
         new_outpoints = []
+        new_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
         w.add_input_info(txin0)
         txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
             addr = o.address
-            if addr == txin0_addr:
-                continue
             val = o.value
-            if val in PS_VALS:
-                new_outpoint = f'{txid}:{i}'
+            new_outpoint = f'{txid}:{i}'
+            if addr == txin0_addr:
+                txin0_prev_h = txin0['prevout_hash']
+                txin0_prev_n = txin0['prevout_n']
+                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                if (w.db.get_ps_spent_denom(txin0_outpoint)
+                        or w.db.get_ps_spent_collateral(txin0_outpoint)
+                        or w.db.get_ps_spent_other(txin0_outpoint)):
+                    new_others_outpoints.append((new_outpoint, addr, val))
+            elif val in PS_VALS:
                 new_outpoints.append((new_outpoint, addr, val))
+            else:
+                raise AddPSDataError(f'Illegal value: {val}'
+                                     f' in new denoms tx')
         with self.denoms_lock, self.collateral_lock:
             for new_outpoint, addr, val in new_outpoints:
                 if val in CREATE_COLLATERAL_VALS:  # collaterral
@@ -4216,21 +4239,32 @@ class PSManager(Logger):
                 else:  # denom round 0
                     new_denom = (addr, val, 0)
                     self.add_ps_denom(new_outpoint, new_denom)
+        with self.others_lock:
+            for new_outpoint, addr, val in new_others_outpoints:
+                w.db.add_ps_other(new_outpoint, (addr, val))
 
     def _rm_new_denoms_ps_data(self, txid, tx):
         w = self.wallet
         self._rm_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
         rm_outpoints = []
+        rm_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
         w.add_input_info(txin0)
         txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            if o.address == txin0_addr:
-                continue
+            addr = o.address
             val = o.value
-            if val in PS_VALS:
-                rm_outpoint = f'{txid}:{i}'
+            rm_outpoint = f'{txid}:{i}'
+            if addr == txin0_addr:
+                txin0_prev_h = txin0['prevout_hash']
+                txin0_prev_n = txin0['prevout_n']
+                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                if (w.db.get_ps_spent_denom(txin0_outpoint)
+                        or w.db.get_ps_spent_collateral(txin0_outpoint)
+                        or w.db.get_ps_spent_other(txin0_outpoint)):
+                    rm_others_outpoints.append(new_outpoint)
+            elif val in PS_VALS:
                 rm_outpoints.append((rm_outpoint, val))
         with self.denoms_lock, self.collateral_lock:
             for rm_outpoint, val in rm_outpoints:
@@ -4238,6 +4272,9 @@ class PSManager(Logger):
                     w.db.pop_ps_collateral(rm_outpoint)
                 else:  # denom round 0
                     self.pop_ps_denom(rm_outpoint)
+        with self.others_lock:
+            for rm_outpoint in rm_others_outpoints:
+                w.db.pop_ps_other(rm_outpoint)
 
     @unpack_io_values
     def _check_new_collateral_tx_err(self, txid, io_values, full_check):
@@ -4295,40 +4332,64 @@ class PSManager(Logger):
         self._add_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
         new_outpoints = []
+        new_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
         w.add_input_info(txin0)
         txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
             addr = o.address
-            if addr == txin0_addr:
-                continue
             val = o.value
-            if val in CREATE_COLLATERAL_VALS:
-                new_outpoint = f'{txid}:{i}'
+            new_outpoint = f'{txid}:{i}'
+            if addr == txin0_addr:
+                txin0_prev_h = txin0['prevout_hash']
+                txin0_prev_n = txin0['prevout_n']
+                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                if (w.db.get_ps_spent_denom(txin0_outpoint)
+                        or w.db.get_ps_spent_collateral(txin0_outpoint)
+                        or w.db.get_ps_spent_other(txin0_outpoint)):
+                    new_others_outpoints.append((new_outpoint, addr, val))
+            elif val in CREATE_COLLATERAL_VALS:
                 new_outpoints.append((new_outpoint, addr, val))
+            else:
+                raise AddPSDataError(f'Illegal value: {val}'
+                                     f' in new collateral tx')
         with self.collateral_lock:
             for new_outpoint, addr, val in new_outpoints:
                 new_collateral = (addr, val)
                 w.db.add_ps_collateral(new_outpoint, new_collateral)
+        with self.others_lock:
+            for new_outpoint, addr, val in new_others_outpoints:
+                w.db.add_ps_other(new_outpoint, (addr, val))
 
     def _rm_new_collateral_ps_data(self, txid, tx):
         w = self.wallet
         self._rm_spent_ps_outpoints_ps_data(txid, tx)
         outputs = tx.outputs()
         rm_outpoints = []
+        rm_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
         w.add_input_info(txin0)
         txin0_addr = txin0['address']
         for i, o in enumerate(outputs):
-            if o.address == txin0_addr:
-                continue
+            addr = o.address
             val = o.value
-            if val in CREATE_COLLATERAL_VALS:
-                rm_outpoint = f'{txid}:{i}'
+            rm_outpoint = f'{txid}:{i}'
+            if addr == txin0_addr:
+                txin0_prev_h = txin0['prevout_hash']
+                txin0_prev_n = txin0['prevout_n']
+                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                if (w.db.get_ps_spent_denom(txin0_outpoint)
+                        or w.db.get_ps_spent_collateral(txin0_outpoint)
+                        or w.db.get_ps_spent_other(txin0_outpoint)):
+                    rm_others_outpoints.append(new_outpoint)
+            elif val in CREATE_COLLATERAL_VALS:
                 rm_outpoints.append(rm_outpoint)
         with self.collateral_lock:
             for rm_outpoint in rm_outpoints:
                 w.db.pop_ps_collateral(rm_outpoint)
+        with self.others_lock:
+            for rm_outpoint in rm_others_outpoints:
+                w.db.pop_ps_other(rm_outpoint)
 
     @unpack_io_values
     def _check_pay_collateral_tx_err(self, txid, io_values, full_check):
@@ -4786,6 +4847,8 @@ class PSManager(Logger):
             self._add_spend_ps_coins_ps_data(txid, tx)
             if self._keypairs_cache:
                 self._cleanup_ps_keypairs(txid, tx, tx_type)
+            # notify ui on ps other coins arrived
+            self.postpone_notification('ps-other-coins-arrived', w, txid)
         else:
             raise AddPSDataError(f'{txid} unknow type {tx_type}')
         w.db.pop_ps_tx_removed(txid)
