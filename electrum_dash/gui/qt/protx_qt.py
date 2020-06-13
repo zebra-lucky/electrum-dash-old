@@ -774,6 +774,7 @@ class Dip3TabWidget(QTabWidget):
         for addr in self.wallet.get_unused_addresses():
             if addr not in mn_addrs:
                 gui.payto_e.setText(addr)
+                break
         gui.extra_payload.set_extra_data(SPEC_PRO_REG_TX, pro_reg_tx, alias)
         gui.show_extra_payload()
         gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.send_tab))

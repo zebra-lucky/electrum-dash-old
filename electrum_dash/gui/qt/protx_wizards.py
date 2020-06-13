@@ -913,6 +913,7 @@ class SaveDip3WizardPage(QWizardPage):
             for addr in manager.wallet.get_unused_addresses():
                 if addr not in mn_addrs:
                     gui.payto_e.setText(addr)
+                    break
             gui.extra_payload.set_extra_data(tx_type, pro_tx, alias)
             gui.show_extra_payload()
             gui.tabs.setCurrentIndex(gui.tabs.indexOf(gui.send_tab))
