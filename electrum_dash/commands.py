@@ -38,7 +38,8 @@ from typing import Optional, TYPE_CHECKING
 from .import util, ecc
 from .util import bfh, bh2u, format_satoshis, json_decode, json_encode, is_hash256_str, is_hex_str, to_bytes
 from . import bitcoin
-from .bitcoin import is_address,  hash_160, COIN, TYPE_ADDRESS
+from .bitcoin import (is_address, hash_160, COIN, TYPE_ADDRESS, TYPE_SCRIPT,
+                      var_int)
 from .bip32 import BIP32Node
 from .i18n import _
 from .transaction import Transaction, multisig_script, TxOutput
@@ -284,6 +285,60 @@ class Commands:
         else:
             self.wallet.sign_transaction(tx, password)
         return tx.as_dict()
+
+    @command('')
+    def createrawtransaction(self, inputs, outputs, locktime=None):
+        tx = Transaction.from_io([], [])
+        if locktime is not None:
+            if locktime < 0 or locktime > 0xffffffff:
+                raise Exception('Invalid parameter, locktime out of range')
+            tx.locktime = locktime
+
+        if type(inputs) != list:
+            raise Exception('inputs parameter must be a JSON array')
+        for i, txin in enumerate(inputs):
+            prev_h = txin.get('txid', None)
+            if prev_h is None:
+                raise Exception(f'Missing parameter "txid" for {i} input')
+            if type(prev_h) != str or len(prev_h) != 64:
+                raise Exception(f'Wrong parameter "txid" for {i} input')
+
+            prev_n = txin.get('vout', None)
+            if prev_n is None:
+                raise Exception(f'Missing parameter "vout" for {i} input')
+            if type(prev_n) != int or prev_n < 0:
+                raise Exception(f'Wrong parameter "vout" for {i} input')
+
+            seq_num = 0xffffffff - 1 if locktime else 0xffffffff
+            seq_n = txin.get('sequence', None)
+            if seq_n is not None:
+                if seq_n < 0 or seq_n > 0xffffffff:
+                    raise Exception(f'Wrong parameter "sequence"'
+                                    f' for {i} input')
+                seq_num = seq_n
+
+            tx.add_inputs([{'prevout_hash': prev_h, 'prevout_n': prev_n,
+                            'sequence': seq_num, 'type': 'unknown',
+                            'scriptSig': '',
+                            'x_pubkeys': [], 'pubkeys': [], 'signatures': []}])
+
+        if type(outputs) != dict:
+            raise Exception('outputs parameter must be a JSON object')
+        for i, (k, v) in enumerate(outputs.items()):
+            if k == 'data':
+                try:
+                    dbytes = bfh(v)
+                    vari = var_int(len(dbytes))
+                except:
+                    raise Exception(f'Wrong hexstring for {i} output (data)')
+                tx.add_outputs([TxOutput(TYPE_SCRIPT, f'6a{vari}{v}', 0)])
+            else:
+                if not is_address(k):
+                    raise Exception(f'Invalid Dash address {k} for {i} output')
+                val = int(Decimal(v)*COIN)
+                tx.add_outputs([TxOutput(TYPE_ADDRESS, k, val)])
+
+        return tx.serialize_to_network()
 
     @command('')
     def deserialize(self, tx):
