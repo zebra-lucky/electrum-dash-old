@@ -335,10 +335,10 @@ class Commands:
             else:
                 if not is_address(k):
                     raise Exception(f'Invalid Dash address {k} for {i} output')
-                val = int(Decimal(v)*COIN)
+                val = int(Decimal(str(v))*COIN)
                 tx.add_outputs([TxOutput(TYPE_ADDRESS, k, val)])
 
-        return tx.serialize_to_network()
+        return tx.serialize()
 
     @command('wn')
     def fundrawtransaction(self, hexstring, cmd_opts=None):
@@ -361,39 +361,75 @@ class Commands:
         estimate_mode = cmd_opts.get('estimate_mode', 'UNSET')
         fundupto = cmd_opts.get('fundupto', None)
 
+        w = self.wallet
         tx = Transaction(hexstring)
+        for txin in tx.inputs():
+            prev_h = txin['prevout_hash']
+            prev_tx = w.get_input_tx(prev_h)
+            prev_n = txin['prevout_n']
+            o = prev_tx.outputs()[prev_n]
+            txin['value'] = o.value
         tx_size = len(hexstring) // 2
         fee_per_kb = self.config.fee_per_kb()
         tx_min_fee = tx_size * fee_per_kb / 1000
-        w = self.wallet
-        outputs_copy = []
+        outputs_old = {}
         if fundupto is not None:
-            if type(fundupto) != int or fundupto < 0:
+            if type(fundupto) not in [int, float] or fundupto < 0:
                 raise Exception(f'Wrong option "fundupto"')
+            fundupto_val = int(Decimal(str(fundupto))*COIN)
             in_vals, out_vals = w.get_tx_vals(tx)
             sum_in_vals = sum(in_vals)
             sum_out_vals = sum(out_vals)
             if sum_in_vals - sum_out_vals - tx_min_fee >= 0:
                 raise Exception(f'Transaction is enough funded')
 
-            outputs_copy = copy.deepcopy(tx.outputs())
             outputs_new = []
             outputs_new_total_val = 0
             for o in tx.outputs():
-                val = o.val
-                if outputs_new_total_val + val < fundupto:
+                val = o.value
+                if outputs_new_total_val + val <= fundupto_val:
+                    outputs_old[o] = o
                     outputs_new.append(o)
                     outputs_new_total_val += val
                 else:
-                    pass  # FIXME
-        coins = self.wallet.get_spendable_coins(None, self.config,
-                                                include_ps=True)
+                    new_val = fundupto_val - outputs_new_total_val
+                    outputs_new_total_val += new_val
+                    o_new = TxOutput(o.type, o.address, new_val)
+                    outputs_old[o_new] = o
+                    outputs_new.append(o_new)
+            tx._outputs = outputs_new
+        coins = w.get_spendable_coins(None, self.config, include_ps=True)
 
-        new_tx = self.wallet.make_unsigned_transaction(coins, tx.outputs(),
-                                                       self.config,
-                                                       inputs=tx.inputs())
+        new_tx = w.make_unsigned_transaction(coins, tx.outputs(), self.config,
+                                             inputs=tx.inputs())
+        in_vals, out_vals = w.get_tx_vals(new_tx)
+        sum_in_vals = sum(in_vals)
+        sum_out_vals = sum(out_vals)
+        funded_fee = sum_in_vals - sum_out_vals
+        changepos = []
+        if outputs_old:
+            outputs_new = []
+            for i, o in enumerate(new_tx.outputs()):
+                if o in outputs_old:
+                    old_o = outputs_old[o]
+                    outputs_new.append(old_o)
+                else:
+                    changepos.append(i)
+                    outputs_new.append(o)
+            new_tx._outputs = outputs_new
         new_tx.locktime = tx.locktime
-        return new_tx.serialize_to_network()
+        in_vals, out_vals = w.get_tx_vals(new_tx)
+        sum_in_vals = sum(in_vals)
+        sum_out_vals = sum(out_vals)
+        res_fee = sum_in_vals - sum_out_vals
+
+        changepos_len = len(changepos)
+        if changepos_len == 0:
+            changepos = -1
+        elif changepos_len == 1:
+            changepos = changepos[0]
+        return {'hex': new_tx.serialize(), 'changepos': changepos,
+                'fee': res_fee, 'funded_fee': funded_fee}
 
     @command('')
     def deserialize(self, tx):

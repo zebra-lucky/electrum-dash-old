@@ -5,11 +5,13 @@ import tempfile
 import shutil
 from unittest import mock
 from decimal import Decimal
+from pprint import pprint
 
 from electrum_dash.commands import Commands, eval_bool
 from electrum_dash import storage
 from electrum_dash.simple_config import SimpleConfig
 from electrum_dash.storage import WalletStorage
+from electrum_dash.transaction import Transaction
 from electrum_dash.wallet import restore_wallet_from_text, Wallet
 
 from . import TestCaseForTestnet
@@ -158,18 +160,6 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         shutil.rmtree(self.user_dir)
 
     def test_createrawtransaction(self):
-        HEX_TX_OUT1 = ('0200000001604079028e98106d5d88525fe42c950c2ef62d75cde8'
-                       '91e3d37ac81ed662ce0c0500000000ffffffff0300000000000000'
-                       '00116a0f0102030405060708090a0b0c0d0e0f40420f0000000000'
-                       '1976a9145f093709af6e9c15b080de359bdb7e78b1dd983088ac80'
-                       '841e00000000001976a91491282e4cd7d5e44867f93e8002393dac'
-                       '7c2a99db88ac00000000')
-        HEX_TX_OUT2 = ('0200000000030000000000000000116a0f0102030405060708090a'
-                       '0b0c0d0e0f40420f00000000001976a9145f093709af6e9c15b080'
-                       'de359bdb7e78b1dd983088ac80841e00000000001976a91491282e'
-                       '4cd7d5e44867f93e8002393dac7c2a99db88ac00000000')
-        HEX_TX_OUT3 = ('02000000000000000000')
-
         inputs = [{'txid': '0cce62d61ec87ad3e391e8cd752df62e'
                            '0c952ce45f52885d6d10988e02794060',
                    'vout': 5}]
@@ -177,21 +167,89 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
                    'yZYxxqJNR6fJ3fAT4Kyhye3A7G9kC19B9q': '0.02',
                    'data': '0102030405060708090a0b0c0d0e0f'}
         cmds = Commands(config=self.config, wallet=None, network=None)
-        assert cmds.createrawtransaction(inputs, outputs) == HEX_TX_OUT1
-        assert cmds.createrawtransaction([], outputs) == HEX_TX_OUT2
-        assert cmds.createrawtransaction([], {}) == HEX_TX_OUT3
+        res = cmds.createrawtransaction(inputs, outputs)
+        tx = Transaction(res)
+        assert len(tx.inputs()) == 1
+        assert len(tx.outputs()) == 3
+        in0 = tx.inputs()[0]
+        assert in0['prevout_hash'] == inputs[0]['txid']
+        assert in0['prevout_n'] == inputs[0]['vout']
+        assert in0['sequence'] == 0xffffffff
+        out0 = tx.outputs()[0]
+        out1 = tx.outputs()[1]
+        out2 = tx.outputs()[2]
+        assert out0 == (2, '6a0f0102030405060708090a0b0c0d0e0f', 0)
+        assert out1 == (0, 'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX', 1000000)
+        assert out2 == (0, 'yZYxxqJNR6fJ3fAT4Kyhye3A7G9kC19B9q', 2000000)
+        assert tx.version == 2
+        assert tx.tx_type == 0
+        assert tx.locktime == 0
+
+        res = cmds.createrawtransaction([], outputs)
+        tx = Transaction(res)
+        assert len(tx.inputs()) == 0
+        assert len(tx.outputs()) == 3
+        out0 = tx.outputs()[0]
+        out1 = tx.outputs()[1]
+        out2 = tx.outputs()[2]
+        assert out0 == (2, '6a0f0102030405060708090a0b0c0d0e0f', 0)
+        assert out1 == (0, 'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX', 1000000)
+        assert out2 == (0, 'yZYxxqJNR6fJ3fAT4Kyhye3A7G9kC19B9q', 2000000)
+        assert tx.version == 2
+        assert tx.tx_type == 0
+        assert tx.locktime == 0
+
+        res = cmds.createrawtransaction([], {})
+        tx = Transaction(res)
+        assert len(tx.inputs()) == 0
+        assert len(tx.outputs()) == 0
+        assert tx.version == 2
+        assert tx.tx_type == 0
+        assert tx.locktime == 0
 
     def test_fundrawtransaction(self):
-        HEX_TX_IN = ('0200000000030000000000000000116a0f0102030405060708090a'
-                     '0b0c0d0e0f40420f00000000001976a9145f093709af6e9c15b080'
-                     'de359bdb7e78b1dd983088ac80841e00000000001976a91491282e'
-                     '4cd7d5e44867f93e8002393dac7c2a99db88ac00000000')
-        HEX_TX_OUT1 = ('0200000001604079028e98106d5d88525fe42c950c2ef62d75cde8'
-                       '91e3d37ac81ed662ce0c0500000000ffffffff0300000000000000'
-                       '00116a0f0102030405060708090a0b0c0d0e0f40420f0000000000'
-                       '1976a9145f093709af6e9c15b080de359bdb7e78b1dd983088ac80'
-                       '841e00000000001976a91491282e4cd7d5e44867f93e8002393dac'
-                       '7c2a99db88ac00000000')
-        options = {}
-        cmds = Commands(config=self.config, wallet=self.wallet, network=None)
-        assert cmds.fundrawtransaction(HEX_TX_IN) == HEX_TX_OUT1
+        w = self.wallet
+        cmds = Commands(config=self.config, wallet=w, network=None)
+        outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.3}
+        res_tx_hex = cmds.createrawtransaction([], outputs)
+        res_tx = Transaction(res_tx_hex)
+        assert w.get_tx_vals(res_tx) == ([], [30000000])
+
+        # check fundupto 0
+        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0})
+        assert res['fee'] == -29999774   # not enough funded
+        assert res['funded_fee'] == 226  # diff in new inputs/outputs values
+        assert res['changepos'] == 1
+        res_tx_hex = res['hex']
+        res_tx = Transaction(res_tx_hex)
+        assert w.get_tx_vals(res_tx) == ([20000],
+                                         [30000000, 19774])
+
+        # check fundupto 0.1
+        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0.1})
+        assert res['fee'] == -20019366   # not enough funded
+        assert res['funded_fee'] == 408  # diff in new inputs/outputs values
+        assert res['changepos'] == 1
+        res_tx_hex = res['hex']
+        res_tx = Transaction(res_tx_hex)
+        assert w.get_tx_vals(res_tx) == ([10000100, 20000],
+                                         [19774, 19692, 30000000])
+        # check fundupto 0.2
+        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0.2})
+        assert res['fee'] == -10038876   # not enough funded
+        assert res['funded_fee'] == 590  # diff in new inputs/outputs values
+        assert res['changepos'] == 0
+        res_tx_hex = res['hex']
+        res_tx = Transaction(res_tx_hex)
+        assert w.get_tx_vals(res_tx) == ([10000100, 10000100, 20000],
+                                         [19610, 19692, 19774, 30000000])
+        # check fundupto 0.3
+        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0.3})
+        assert res['fee'] == -58304
+        assert res['funded_fee'] == 772
+        assert res['changepos'] == 0
+        res_tx_hex = res['hex']
+        res_tx = Transaction(res_tx_hex)
+        assert w.get_tx_vals(res_tx) == ([10000100, 10000100, 10000100, 20000],
+                                         [19528, 19610, 19692, 19774,
+                                          30000000])
