@@ -775,7 +775,7 @@ class Abstract_Wallet(AddressSynchronizer):
     def make_unsigned_transaction(self, coins, outputs, config, fixed_fee=None,
                                   change_addr=None, is_sweep=False,
                                   min_rounds=None, no_ps_data=False,
-                                  tx_type=0, extra_payload=b''):
+                                  inputs=None, tx_type=0, extra_payload=b''):
         if min_rounds is not None:
             if no_ps_data:
                 self.psman.check_min_rounds(coins, 0)
@@ -816,8 +816,10 @@ class Abstract_Wallet(AddressSynchronizer):
                                     change_addr))
             # Let the coin chooser select the coins to spend
             if min_rounds is None:
+                if inputs is None:
+                    inputs = []
                 coin_chooser = coinchooser.get_coin_chooser(config)
-                tx = coin_chooser.make_tx(coins, [], outputs[:],
+                tx = coin_chooser.make_tx(coins, inputs[:], outputs[:],
                                           change_addrs, fee_estimator,
                                           self.dust_threshold(),
                                           tx_type=tx_type,
@@ -829,12 +831,18 @@ class Abstract_Wallet(AddressSynchronizer):
                                           tx_type=tx_type,
                                           extra_payload=extra_payload)
             else:
+                if inputs is not None:
+                    raise Exception('inputs can not be set for PS transaction')
+
                 coin_chooser = coinchooser.get_coin_chooser_privatesend()
                 tx = coin_chooser.make_tx(coins, outputs[:], fee_estimator,
                                           min_rounds=min_rounds,
                                           tx_type=tx_type,
                                           extra_payload=extra_payload)
         else:
+            if inputs is not None:
+                raise Exception('inputs can not be set for transaction'
+                                ' with ! output value')
             # "spend max" branch
             # note: This *will* spend inputs with negative effective value (if there are any).
             #       Given as the user is spending "max", and so might be abandoning the wallet,
@@ -976,6 +984,19 @@ class Abstract_Wallet(AddressSynchronizer):
             if k.can_sign(tx):
                 return True
         return False
+
+    def get_tx_vals(self, tx):
+        in_vals = []
+        out_vals = []
+        for txin in tx.inputs():
+            prev_h = txin['prevout_hash']
+            prev_tx = self.get_input_tx(prev_h)
+            prev_n = txin['prevout_n']
+            o = prev_tx.outputs()[prev_n]
+            in_vals.append(o.value)
+        for o in tx.outputs():
+            out_vals.append(o.value)
+        return in_vals, out_vals
 
     def get_input_tx(self, tx_hash, ignore_timeout=False):
         # First look up an input transaction in the wallet where it

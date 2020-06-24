@@ -288,14 +288,16 @@ class Commands:
 
     @command('')
     def createrawtransaction(self, inputs, outputs, locktime=None):
+        if type(inputs) != list:
+            raise Exception('inputs parameter must be a JSON array')
+        if type(outputs) != dict:
+            raise Exception('outputs parameter must be a JSON object')
         tx = Transaction.from_io([], [])
         if locktime is not None:
             if locktime < 0 or locktime > 0xffffffff:
                 raise Exception('Invalid parameter, locktime out of range')
             tx.locktime = locktime
 
-        if type(inputs) != list:
-            raise Exception('inputs parameter must be a JSON array')
         for i, txin in enumerate(inputs):
             prev_h = txin.get('txid', None)
             if prev_h is None:
@@ -322,8 +324,6 @@ class Commands:
                             'scriptSig': '',
                             'x_pubkeys': [], 'pubkeys': [], 'signatures': []}])
 
-        if type(outputs) != dict:
-            raise Exception('outputs parameter must be a JSON object')
         for i, (k, v) in enumerate(outputs.items()):
             if k == 'data':
                 try:
@@ -339,6 +339,61 @@ class Commands:
                 tx.add_outputs([TxOutput(TYPE_ADDRESS, k, val)])
 
         return tx.serialize_to_network()
+
+    @command('wn')
+    def fundrawtransaction(self, hexstring, cmd_opts=None):
+        try:
+            txbytes = bfh(hexstring)
+            vari = var_int(len(txbytes))
+        except:
+            raise Exception(f'Wrong hexstring data')
+        if cmd_opts is None:
+            cmd_opts = {}
+        elif type(cmd_opts) != dict:
+            raise Exception('cmd_opts parameter must be a JSON object')
+        changeAddress = cmd_opts.get('changeAddress', None)
+        changePosition = cmd_opts.get('changePosition', None)
+        includeWatching = cmd_opts.get('includeWatching', False)
+        lockUnspents = cmd_opts.get('lockUnspents', False)
+        feeRate = cmd_opts.get('feeRate', None)
+        subtractFeeFromOutputs = cmd_opts.get('subtractFeeFromOutputs', None)
+        conf_target = cmd_opts.get('conf_target', None)
+        estimate_mode = cmd_opts.get('estimate_mode', 'UNSET')
+        fundupto = cmd_opts.get('fundupto', None)
+
+        tx = Transaction(hexstring)
+        tx_size = len(hexstring) // 2
+        fee_per_kb = self.config.fee_per_kb()
+        tx_min_fee = tx_size * fee_per_kb / 1000
+        w = self.wallet
+        outputs_copy = []
+        if fundupto is not None:
+            if type(fundupto) != int or fundupto < 0:
+                raise Exception(f'Wrong option "fundupto"')
+            in_vals, out_vals = w.get_tx_vals(tx)
+            sum_in_vals = sum(in_vals)
+            sum_out_vals = sum(out_vals)
+            if sum_in_vals - sum_out_vals - tx_min_fee >= 0:
+                raise Exception(f'Transaction is enough funded')
+
+            outputs_copy = copy.deepcopy(tx.outputs())
+            outputs_new = []
+            outputs_new_total_val = 0
+            for o in tx.outputs():
+                val = o.val
+                if outputs_new_total_val + val < fundupto:
+                    outputs_new.append(o)
+                    outputs_new_total_val += val
+                else:
+                    pass  # FIXME
+        coins = self.wallet.get_spendable_coins(None, self.config,
+                                                include_ps=True)
+
+        new_tx = self.wallet.make_unsigned_transaction(coins, tx.outputs(),
+                                                       self.config,
+                                                       inputs=tx.inputs())
+        new_tx.locktime = tx.locktime
+        return new_tx.serialize_to_network()
 
     @command('')
     def deserialize(self, tx):
@@ -906,6 +961,7 @@ command_options = {
     'fee_level':   (None, "Float between 0.0 and 1.0, representing fee slider position"),
     'from_height': (None, "Only show transactions that confirmed after given block height"),
     'to_height':   (None, "Only show transactions that confirmed before given block height"),
+    'cmd_opts':    (None, "command options as JSON object"),
 }
 
 
@@ -920,10 +976,12 @@ arg_types = {
     'from_height': int,
     'to_height': int,
     'tx': tx_from_str,
+    'hexstring': tx_from_str,
     'pubkeys': json_loads,
     'jsontx': json_loads,
     'inputs': json_loads,
     'outputs': json_loads,
+    'cmd_opts': json_loads,
     'fee': lambda x: str(Decimal(x)) if x is not None else None,
     'amount': lambda x: str(Decimal(x)) if x != '!' else '!',
     'locktime': int,

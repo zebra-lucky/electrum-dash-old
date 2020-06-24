@@ -176,7 +176,22 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.01,
                    'yZYxxqJNR6fJ3fAT4Kyhye3A7G9kC19B9q': '0.02',
                    'data': '0102030405060708090a0b0c0d0e0f'}
-        cmds = Commands(config=self.config, wallet=self.wallet, network=None)
+        cmds = Commands(config=self.config, wallet=None, network=None)
         assert cmds.createrawtransaction(inputs, outputs) == HEX_TX_OUT1
         assert cmds.createrawtransaction([], outputs) == HEX_TX_OUT2
         assert cmds.createrawtransaction([], {}) == HEX_TX_OUT3
+
+    def test_fundrawtransaction(self):
+        HEX_TX_IN = ('0200000000030000000000000000116a0f0102030405060708090a'
+                     '0b0c0d0e0f40420f00000000001976a9145f093709af6e9c15b080'
+                     'de359bdb7e78b1dd983088ac80841e00000000001976a91491282e'
+                     '4cd7d5e44867f93e8002393dac7c2a99db88ac00000000')
+        HEX_TX_OUT1 = ('0200000001604079028e98106d5d88525fe42c950c2ef62d75cde8'
+                       '91e3d37ac81ed662ce0c0500000000ffffffff0300000000000000'
+                       '00116a0f0102030405060708090a0b0c0d0e0f40420f0000000000'
+                       '1976a9145f093709af6e9c15b080de359bdb7e78b1dd983088ac80'
+                       '841e00000000001976a91491282e4cd7d5e44867f93e8002393dac'
+                       '7c2a99db88ac00000000')
+        options = {}
+        cmds = Commands(config=self.config, wallet=self.wallet, network=None)
+        assert cmds.fundrawtransaction(HEX_TX_IN) == HEX_TX_OUT1
