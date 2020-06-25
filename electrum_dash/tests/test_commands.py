@@ -7,11 +7,12 @@ from unittest import mock
 from decimal import Decimal
 from pprint import pprint
 
+from electrum_dash.bitcoin import TYPE_ADDRESS
 from electrum_dash.commands import Commands, eval_bool
 from electrum_dash import storage
 from electrum_dash.simple_config import SimpleConfig
 from electrum_dash.storage import WalletStorage
-from electrum_dash.transaction import Transaction
+from electrum_dash.transaction import Transaction, TxOutput
 from electrum_dash.wallet import restore_wallet_from_text, Wallet
 
 from . import TestCaseForTestnet
@@ -207,49 +208,146 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         assert tx.tx_type == 0
         assert tx.locktime == 0
 
+    def with_wallet2(func):
+        def setup_wallet2(self, *args, **kwargs):
+            tests_path = os.path.dirname(os.path.abspath(__file__))
+            w2_data_file = os.path.join(tests_path, 'data', 'w2.gz')
+            w2_path = os.path.join(self.user_dir, 'w2')
+            shutil.copyfile(w2_data_file, '%s.gz' % w2_path)
+            with gzip.open('%s.gz' % w2_path, 'rb') as rfh:
+                w2_data = rfh.read()
+                w2_data = w2_data.decode('utf-8')
+            with open(w2_path, 'w') as wfh:
+                wfh.write(w2_data)
+            storage2 = WalletStorage(w2_path)
+            self.w2 = Wallet(storage2)
+            return func(self, *args, **kwargs)
+        return setup_wallet2
+
+    def with_wallet2_funded(func):
+        def fund_wallet2(self, *args, **kwargs):
+            w = self.wallet
+            w2 = self.w2
+            coins = w.get_spendable_coins(None, self.config)
+            outputs = [TxOutput(TYPE_ADDRESS,
+                                'yN2ag4KuQvxQLNYTXs32yNpgdLibsn8Y5E',
+                                100000000)]
+            tx = w.make_unsigned_transaction(coins, outputs, self.config)
+            w.sign_transaction(tx, None)
+            txid = tx.txid()
+            w.add_transaction(txid, tx)
+            w2.add_transaction(txid, tx)
+            return func(self, *args, **kwargs)
+        return fund_wallet2
+
+    def with_get_input_tx_mocked(func):
+        def mock_get_input_tx(self, *args, **kwargs):
+            w = self.wallet
+            w2 = self.w2
+            def get_from_both_wallets(txid):
+                return (w.db.get_transaction(txid)
+                        or w2.db.get_transaction(txid))
+            w.get_input_tx = w2.get_input_tx = get_from_both_wallets
+            return func(self, *args, **kwargs)
+        return mock_get_input_tx
+
+    @with_wallet2
+    @with_wallet2_funded
+    @with_get_input_tx_mocked
     def test_fundrawtransaction(self):
         w = self.wallet
+        w2 = self.w2
         cmds = Commands(config=self.config, wallet=w, network=None)
+        w2_cmds = Commands(config=self.config, wallet=w2, network=None)
         outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.3}
         res_tx_hex = cmds.createrawtransaction([], outputs)
         res_tx = Transaction(res_tx_hex)
         assert w.get_tx_vals(res_tx) == ([], [30000000])
 
         # check fundupto 0
-        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0})
+        cmd_opts = {'fundupto': 0, 'outval': 0.3}
+        res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
         assert res['fee'] == -29999774   # not enough funded
         assert res['funded_fee'] == 226  # diff in new inputs/outputs values
-        assert res['changepos'] == 1
+        #assert res['changepos'] == 1
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
         assert w.get_tx_vals(res_tx) == ([20000],
                                          [30000000, 19774])
 
         # check fundupto 0.1
-        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0.1})
-        assert res['fee'] == -20019366   # not enough funded
+        cmd_opts.update({'fundupto': 0.1})
+        res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+        assert res['fee'] == -19999592   # not enough funded
         assert res['funded_fee'] == 408  # diff in new inputs/outputs values
-        assert res['changepos'] == 1
+        #assert res['changepos'] == 2
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([10000100, 20000],
-                                         [19774, 19692, 30000000])
+        assert w.get_tx_vals(res_tx) == ([30000000, 20000],
+                                         [19774, 30000000, 19999818])
         # check fundupto 0.2
-        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0.2})
-        assert res['fee'] == -10038876   # not enough funded
+        cmd_opts.update({'fundupto': 0.2})
+        res = w2_cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+        assert res['fee'] == -9999410    # not enough funded
         assert res['funded_fee'] == 590  # diff in new inputs/outputs values
-        assert res['changepos'] == 0
+        #assert res['changepos'] == 3
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([10000100, 10000100, 20000],
-                                         [19610, 19692, 19774, 30000000])
+        assert w.get_tx_vals(res_tx) == ([100000000, 30000000, 20000],
+                                         [19774, 19999818, 30000000, 89999818])
         # check fundupto 0.3
-        res = cmds.fundrawtransaction(res_tx_hex, {'fundupto': 0.3})
-        assert res['fee'] == -58304
+        cmd_opts.update({'fundupto': 0.3})
+        res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+        assert res['fee'] == 772
         assert res['funded_fee'] == 772
-        assert res['changepos'] == 0
+        #assert res['changepos'] == 4
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([10000100, 10000100, 10000100, 20000],
-                                         [19528, 19610, 19692, 19774,
-                                          30000000])
+        assert w.get_tx_vals(res_tx) == ([100000000, 30000000, 20000,
+                                          100001000],
+                                         [19774, 19999818, 30000000, 89999818,
+                                          90000818])
+
+    @with_wallet2
+    @with_wallet2_funded
+    @with_get_input_tx_mocked
+    def test_signtransaction_with_multiwallet_inputs(self):
+        w = self.wallet
+        w2 = self.w2
+        cmds = Commands(config=self.config, wallet=w, network=None)
+        w2_cmds = Commands(config=self.config, wallet=w2, network=None)
+        outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.2}
+
+        res_tx_hex = cmds.createrawtransaction([], outputs)
+        # check fundupto 0.1 from w
+        cmd_opts = {'fundupto': 0.1, 'outval': 0.2}
+        res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+        #assert res['fee'] == -9999626    # not enough funded
+        #assert res['funded_fee'] == 374 # diff in new inputs/outputs values
+        #assert res['changepos'] == 1
+        res_tx_hex = res['hex']
+        res_tx = Transaction(res_tx_hex)
+        #assert w.get_tx_vals(res_tx) == ([30000000],
+        #                                 [20000000, 19999774])
+        # check fundupto 0.2 from w2
+        cmd_opts.update({'fundupto': 0.2})
+        res = w2_cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+        #assert res['fee'] == 556
+        #assert res['funded_fee'] == 556  # diff in new inputs/outputs values
+        #assert res['changepos'] == 1
+        res_tx_hex = res['hex']
+        res_tx = Transaction(res_tx_hex)
+        #assert w.get_tx_vals(res_tx) == ([100000000, 10000100, 10000100],
+        #                                 [9999826, 20000000, 89999818])
+
+        print('1'*10)
+        pprint(res_tx.inputs())
+        pprint(res_tx.outputs())
+        res = cmds.signtransaction(res_tx_hex)
+        print('2'*10)
+        pprint(res)
+        res_tx_hex = res['hex']
+        res = w2_cmds.signtransaction(res_tx_hex)
+        print('3'*10)
+        pprint(res)
+        assert 0

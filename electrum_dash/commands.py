@@ -358,8 +358,14 @@ class Commands:
         feeRate = cmd_opts.get('feeRate', None)
         subtractFeeFromOutputs = cmd_opts.get('subtractFeeFromOutputs', None)
         conf_target = cmd_opts.get('conf_target', None)
-        estimate_mode = cmd_opts.get('estimate_mode', 'UNSET')
+        estimate_mode = cmd_opts.get('estimate_mode', None)
         fundupto = cmd_opts.get('fundupto', None)
+        outval = cmd_opts.get('outval', None)
+        if (changeAddress or changePosition or includeWatching
+                or lockUnspents or feeRate or subtractFeeFromOutputs
+                or conf_target or  estimate_mode):
+            raise Exception(f'cmd_opts other than fundupto/outval'
+                            f' is not implemented')
 
         w = self.wallet
         tx = Transaction(hexstring)
@@ -376,7 +382,13 @@ class Commands:
         if fundupto is not None:
             if type(fundupto) not in [int, float] or fundupto < 0:
                 raise Exception(f'Wrong option "fundupto"')
+            if outval is None:
+                raise Exception(f'cmd_opts "outval" required,'
+                                f' if using "fundupto" cmd_opts')
+            if type(outval) not in [int, float] or outval <= 0:
+                raise Exception(f'Wrong option "outval"')
             fundupto_val = int(Decimal(str(fundupto))*COIN)
+            outval_val = int(Decimal(str(outval))*COIN)
             in_vals, out_vals = w.get_tx_vals(tx)
             sum_in_vals = sum(in_vals)
             sum_out_vals = sum(out_vals)
@@ -384,19 +396,17 @@ class Commands:
                 raise Exception(f'Transaction is enough funded')
 
             outputs_new = []
-            outputs_new_total_val = 0
-            for o in tx.outputs():
+            outval_found = False
+            for i, o in enumerate(tx.outputs()):
                 val = o.value
-                if outputs_new_total_val + val <= fundupto_val:
-                    outputs_old[o] = o
-                    outputs_new.append(o)
-                    outputs_new_total_val += val
-                else:
-                    new_val = fundupto_val - outputs_new_total_val
-                    outputs_new_total_val += new_val
-                    o_new = TxOutput(o.type, o.address, new_val)
+                if not outval_found and val == outval_val:
+                    outval_found = True
+                    o_new = TxOutput(o.type, o.address, fundupto_val)
                     outputs_old[o_new] = o
                     outputs_new.append(o_new)
+                else:
+                    outputs_old[o] = o
+                    outputs_new.append(o)
             tx._outputs = outputs_new
         coins = w.get_spendable_coins(None, self.config, include_ps=True)
 
@@ -407,16 +417,15 @@ class Commands:
         sum_out_vals = sum(out_vals)
         funded_fee = sum_in_vals - sum_out_vals
         changepos = []
-        if outputs_old:
-            outputs_new = []
-            for i, o in enumerate(new_tx.outputs()):
-                if o in outputs_old:
-                    old_o = outputs_old[o]
-                    outputs_new.append(old_o)
-                else:
-                    changepos.append(i)
-                    outputs_new.append(o)
-            new_tx._outputs = outputs_new
+        outputs_new = []
+        for i, o in enumerate(new_tx.outputs()):
+            if o in outputs_old:
+                old_o = outputs_old[o]
+                outputs_new.append(old_o)
+            else:
+                changepos.append(i)
+                outputs_new.append(o)
+        new_tx._outputs = outputs_new
         new_tx.locktime = tx.locktime
         in_vals, out_vals = w.get_tx_vals(new_tx)
         sum_in_vals = sum(in_vals)
