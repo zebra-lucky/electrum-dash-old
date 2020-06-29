@@ -839,8 +839,6 @@ class ElectrumWindow(App):
             if wallet == self.wallet:
                 is_mixing = (psman.state in psman.mixing_running_states)
                 self.update_ps_btn(is_mixing)
-                if self.receive_screen:
-                    self.receive_screen.block_on_mixing(is_mixing)
                 if msg:
                     if msg_type and msg_type.startswith('inf'):
                         self.show_info(msg)

@@ -759,11 +759,6 @@ class PSManager(Logger):
                               ' transfer coins to PrivateSend address.')
     WATCHING_ONLY_MSG = _('This is a watching-only wallet.'
                           ' Mixing can not be run.')
-    RECV_BLOCKED_MSG = _('To prevent interfering with PrivateSend mixing'
-                         ' process, where addresses is actively reserved'
-                         ' for PrivateSend use, this GUI functionality is'
-                         ' temporarily blocked. To unblock it stop'
-                         ' PrivateSend mixing.')
     ALL_MIXED_MSG = _('PrivateSend mixing is done')
     CLEAR_PS_DATA_MSG = _('Are you sure to clear all wallet PrivateSend data?'
                           ' This is not recommended if there is'
