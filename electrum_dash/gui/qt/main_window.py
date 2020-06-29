@@ -1015,6 +1015,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if wallet != self.wallet:
             return
         self.history_model.refresh('update_tabs')
+        self.update_avalaible_amount()
         self.update_receive_address_styling()
         self.request_list.update()
         self.address_list.update()
