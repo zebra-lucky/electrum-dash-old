@@ -2788,7 +2788,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         res = psman._find_addrs_not_in_keypairs(ps_change + unk_addrs)
         assert res == {unk_addrs[0]}
 
-        res = psman._find_addrs_not_in_keypairs(ps_change + spendable)
+        res = psman._find_addrs_not_in_keypairs(ps_change + ps_spendable)
         assert res == set()
 
     def test_cache_keypairs(self):
@@ -3000,8 +3000,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = w.psman
         psman.config = self.config
 
-        null_vals = {100001: 0, 1000010: 0, 10000100: 0,
-                     100001000: 0, 1000010000: 0}
         assert psman.calc_denoms_by_values() == {}
 
         coro = psman.find_untracked_ps_txs(log=False)
