@@ -939,27 +939,35 @@ class PSManager(Logger):
         self.postpone_notification('ps-keypairs-changes', self.wallet)
 
     # enable and load ps_keystore
-    def enable_ps_keystore(self):
+    def copy_standard_bip32_keystore(self):
         w = self.wallet
-        if 'ps_keystore' in w.db.data:
-            return
-
-        if self.w_type == 'standard':
-            if self.w_ks_type == 'bip32':
-                main_ks_copy = copy.deepcopy(w.storage.get('keystore'))
-                if main_ks_copy.get('type') == 'bip32':
-                    main_ks_copy['type'] = 'ps_bip32'
-                    w.storage.put('ps_keystore', main_ks_copy)
-
-    def update_ps_keystore_password(self, old_pw, new_pw):
-        if self.ps_keystore and self.ps_keystore.may_have_password():
-            self.ps_keystore.update_password(old_pw, new_pw)
-            self.wallet.storage.put('ps_keystore', self.ps_keystore.dump())
+        main_ks_copy = copy.deepcopy(w.storage.get('keystore'))
+        main_ks_copy['type'] = 'ps_bip32'
+        if self.ps_keystore:
+            ps_ks_copy = copy.deepcopy(w.storage.get('ps_keystore'))
+            addr_deriv_offset = ps_ks_copy.get('addr_deriv_offset', None)
+            if addr_deriv_offset is not None:
+                main_ks_copy['addr_deriv_offset'] = addr_deriv_offset
+        w.storage.put('ps_keystore', main_ks_copy)
 
     def load_ps_keystore(self):
-        if 'ps_keystore' in self.wallet.db.data:
-            self.ps_keystore = load_keystore(self.wallet.storage,
-                                             'ps_keystore')
+        w = self.wallet
+        if 'ps_keystore' in w.db.data:
+            self.ps_keystore = load_keystore(w.storage, 'ps_keystore')
+
+    def enable_ps_keystore(self):
+        w = self.wallet
+        if self.w_type == 'standard':
+            if self.w_ks_type == 'bip32':
+                self.copy_standard_bip32_keystore()
+                self.load_ps_keystore()
+
+    def after_wallet_password_set(self, old_pw, new_pw):
+        if not self.ps_keystore:
+            return
+        if self.w_type == 'standard':
+            if self.w_ks_type == 'bip32':
+                self.enable_ps_keystore()
 
     # methods related to ps_keystore
     def pubkeys_to_address(self, pubkey):
@@ -1108,9 +1116,8 @@ class PSManager(Logger):
         if not self.enabled:
             return
         w = self.wallet
-        # load ps_keystore if it was created before
+        # enable ps_keystore and syncronize addresses
         self.enable_ps_keystore()
-        self.load_ps_keystore()
         if self.ps_keystore:
             self.synchronize()
         # check last_mix_stop_time if it was not saved on wallet crash

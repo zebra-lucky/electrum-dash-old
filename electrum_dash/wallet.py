@@ -1285,7 +1285,7 @@ class Abstract_Wallet(AddressSynchronizer):
         #       extra care would need to be taken when encrypting keystores.
         self._update_password_for_keystore(old_pw, new_pw)
         if self.psman.enabled and self.psman.ps_keystore:
-            self.psman.update_ps_keystore_password(old_pw, new_pw)
+            self.psman.after_wallet_password_set(old_pw, new_pw)
         encrypt_keystore = self.can_have_keystore_encryption()
         self.storage.set_keystore_encryption(bool(new_pw) and encrypt_keystore)
         self.storage.write()

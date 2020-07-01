@@ -401,6 +401,11 @@ class PS_BIP32_KeyStore(BIP32_KeyStore):
         # on addr_deriv_offset 1 receving derivation will be 2, change 3, etc
         self.addr_deriv_offset = d.get('addr_deriv_offset', 1)
 
+    def dump(self):
+        d = BIP32_KeyStore.dump(self)
+        d['addr_deriv_offset'] = self.addr_deriv_offset
+        return d
+
     def derive_pubkey(self, for_change, n):
         derivation = self.addr_deriv_offset*2 + int(for_change)
         return super().derive_pubkey(derivation, n)

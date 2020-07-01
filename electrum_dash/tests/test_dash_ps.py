@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import time
 from collections import defaultdict
+from pprint import pprint
 
 from electrum_dash import dash_ps, ecc
 from electrum_dash.bitcoin import TYPE_ADDRESS
@@ -3141,41 +3142,61 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.keep_amount = 6
         assert not psman.all_mixed
 
-    def add_ps_ks(func):
+    def enable_ps_ks(func):
         def setup_multi_ks(self, *args, **kwargs):
             w = self.wallet
             psman = w.psman
-            main_keystore_copy = copy.deepcopy(w.storage.get('keystore'))
-            main_keystore_copy['type'] = 'ps_bip32'
-            w.storage.put('ps_keystore', main_keystore_copy)
-            psman.load_ps_keystore()
+            psman.enable_ps_keystore()
             return func(self, *args, **kwargs)
         return setup_multi_ks
 
-    @add_ps_ks
-    def test_load_ps_keystore(self):
+    @enable_ps_ks
+    def test_enable_ps_keystore(self):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
 
         assert type(psman.ps_keystore) == keystore.PS_BIP32_KeyStore
         assert psman.ps_ks_txin_type == 'p2pkh'
-        assert psman.ps_keystore.dump() == {
-            'type': 'ps_bip32',
-            'pw_hash_version': 1,
-            'xpub': ('tpubDDJK3hYy2ke3bjJxvmMYCWRAaXXbXtNMf4hvYN7PpM3W8E'
-                     'qTYpdnNsrjmXL8mES8fN1xc5wXA6bCyGz5KVgWFF9VSWvRN5wh'
-                     'sjXVCwcwSkn'),
-            'xprv': ('tprv8gcGuHWitNxNiGHB37gwo6m41W1fNZBT5m79Fr56Q5F7Hk'
-                     'agvRpCCPEsbPK9xcZFtQe9pcvBrDsEmGfzsY2bsB34MqbwVHFd'
-                     'apts9YM233g')}
+        keystore_d = copy.deepcopy(w.keystore.dump())
+        keystore_d['type'] = 'ps_bip32'
+        keystore_d['addr_deriv_offset'] = 1
+        assert psman.ps_keystore.dump() == keystore_d
 
-    @add_ps_ks
+        keystore_d['addr_deriv_offset'] = 2
+        w.storage.put('ps_keystore', keystore_d)
+        psman.load_ps_keystore()
+
+        keystore_d = copy.deepcopy(w.keystore.dump())
+        keystore_d['type'] = 'ps_bip32'
+        keystore_d['addr_deriv_offset'] = 2
+        assert psman.ps_keystore.dump() == keystore_d
+
+    @enable_ps_ks
+    def test_ps_ks_after_wallet_password_set_standard_bip32(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+
+        keystore_d = copy.deepcopy(w.keystore.dump())
+        xprv = ('tprv8gcGuHWitNxNiGHB37gwo6m41W1fNZBT5m79Fr56Q5F7HkagvRpCCPEs'
+                'bPK9xcZFtQe9pcvBrDsEmGfzsY2bsB34MqbwVHFdapts9YM233g')
+        assert keystore_d['xprv'] == xprv
+        pprint(keystore_d)
+
+        w.update_password(None, 'test password')
+
+        keystore_d = copy.deepcopy(w.keystore.dump())
+        keystore_d['type'] = 'ps_bip32'
+        keystore_d['addr_deriv_offset'] = 1
+        assert psman.ps_keystore.dump() == keystore_d
+        assert keystore_d['xprv'] != xprv  # encrypted xprv
+
+    @enable_ps_ks
     def test_ps_ks_derive_pubkey(self):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
-        psman.load_ps_keystore()
 
         pubk = w.keystore.derive_pubkey(for_change=False, n=0)
         pubk_chg = w.keystore.derive_pubkey(for_change=True, n=0)
@@ -3201,7 +3222,7 @@ class PSWalletTestCase(TestCaseForTestnet):
             return func(self, *args, **kwargs)
         return generate_ps_addrs
 
-    @add_ps_ks
+    @enable_ps_ks
     @synchronize_ps_ks
     def test_ps_ks_addrs_sync(self):
         w = self.wallet
@@ -3212,7 +3233,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(ps_ks_addrs) == 20
         assert not set(addrs) & set(ps_ks_addrs)
 
-    @add_ps_ks
+    @enable_ps_ks
     @synchronize_ps_ks
     def test_sign_tx_with_ps_ks_input(self):
         w = self.wallet
@@ -3271,7 +3292,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         txid3 = tx.txid()
         assert len(txid3) == 64
 
-    @add_ps_ks
+    @enable_ps_ks
     @synchronize_ps_ks
     def test_sign_message_with_ps_keystore(self):
         w = self.wallet
