@@ -269,6 +269,9 @@ class Synchronizer(SynchronizerBase):
         while True:
             await asyncio.sleep(0.1)
             await run_in_thread(self.wallet.synchronize)
+            psman = self.wallet.psman
+            if psman.ps_keystore:
+                await run_in_thread(psman.synchronize)
             up_to_date = self.is_up_to_date()
             if (up_to_date != self.wallet.is_up_to_date()
                     or up_to_date and self._processed_some_notifications):
