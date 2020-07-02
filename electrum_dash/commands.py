@@ -287,18 +287,20 @@ class Commands:
         return tx.as_dict()
 
     @command('')
-    def createrawtransaction(self, inputs, outputs, locktime=None):
-        if type(inputs) != list:
-            raise Exception('inputs parameter must be a JSON array')
-        if type(outputs) != dict:
-            raise Exception('outputs parameter must be a JSON object')
+    def createrawtransaction(self, inputs_json, outputs_json, locktime=None):
+        """Create a tx spending inputs_json and creating outputs_json,
+           returns hex-encoded raw transaction"""
+        if type(inputs_json) != list:
+            raise Exception('inputs_json parameter must be a JSON array')
+        if type(outputs_json) != dict:
+            raise Exception('outputs_json parameter must be a JSON object')
         tx = Transaction.from_io([], [])
         if locktime is not None:
             if locktime < 0 or locktime > 0xffffffff:
                 raise Exception('Invalid parameter, locktime out of range')
             tx.locktime = locktime
 
-        for i, txin in enumerate(inputs):
+        for i, txin in enumerate(inputs_json):
             prev_h = txin.get('txid', None)
             if prev_h is None:
                 raise Exception(f'Missing parameter "txid" for {i} input')
@@ -324,7 +326,7 @@ class Commands:
                             'scriptSig': '',
                             'x_pubkeys': [], 'pubkeys': [], 'signatures': []}])
 
-        for i, (k, v) in enumerate(outputs.items()):
+        for i, (k, v) in enumerate(outputs_json.items()):
             if k == 'data':
                 try:
                     dbytes = bfh(v)
@@ -341,12 +343,15 @@ class Commands:
         return tx.serialize()
 
     @command('wn')
-    def fundrawtransaction(self, hexstring, cmd_opts=None):
+    def fundrawtransaction(self, tx, cmd_opts=None):
+        """Add inputs to a transaction until it has enough in value
+           to meet its out value"""
+        raw_tx = tx
         try:
-            txbytes = bfh(hexstring)
+            txbytes = bfh(raw_tx)
             vari = var_int(len(txbytes))
         except:
-            raise Exception(f'Wrong hexstring data')
+            raise Exception(f'Wrong tx data')
         if cmd_opts is None:
             cmd_opts = {}
         elif type(cmd_opts) != dict:
@@ -368,27 +373,27 @@ class Commands:
                             f' is not implemented')
 
         w = self.wallet
-        tx = Transaction(hexstring)
+        tx = Transaction(raw_tx)
         for txin in tx.inputs():
             prev_h = txin['prevout_hash']
             prev_tx = w.get_input_tx(prev_h)
             prev_n = txin['prevout_n']
             o = prev_tx.outputs()[prev_n]
             txin['value'] = o.value
-        tx_size = len(hexstring) // 2
+        tx_size = len(raw_tx) // 2
         fee_per_kb = self.config.fee_per_kb()
         tx_min_fee = tx_size * fee_per_kb / 1000
         outputs_old = {}
         if fundupto is not None:
-            if type(fundupto) not in [int, float] or fundupto < 0:
-                raise Exception(f'Wrong option "fundupto"')
             if outval is None:
                 raise Exception(f'cmd_opts "outval" required,'
                                 f' if using "fundupto" cmd_opts')
-            if type(outval) not in [int, float] or outval <= 0:
-                raise Exception(f'Wrong option "outval"')
             fundupto_val = int(Decimal(str(fundupto))*COIN)
             outval_val = int(Decimal(str(outval))*COIN)
+            if fundupto_val < 0:
+                raise Exception(f'Wrong option "fundupto"')
+            if outval_val <= 0:
+                raise Exception(f'Wrong option "outval"')
             in_vals, out_vals = w.get_tx_vals(tx)
             sum_in_vals = sum(in_vals)
             sum_out_vals = sum(out_vals)
@@ -966,6 +971,8 @@ param_descriptions = {
     'outputs': 'list of ["address", amount]',
     'redeem_script': 'redeem script (hexadecimal)',
     'cpfile': 'Checkpoints file',
+    'inputs_json': 'JSON array of [{"txid": "hex", "vout": index, ["sequence": number]}]',
+    'outputs_json': 'JSON object {"address": amount, ["data": "hex"]}',
 }
 
 command_options = {
@@ -1021,11 +1028,12 @@ arg_types = {
     'from_height': int,
     'to_height': int,
     'tx': tx_from_str,
-    'hexstring': tx_from_str,
     'pubkeys': json_loads,
     'jsontx': json_loads,
     'inputs': json_loads,
+    'inputs_json': json_loads,
     'outputs': json_loads,
+    'outputs_json': json_loads,
     'cmd_opts': json_loads,
     'fee': lambda x: str(Decimal(x)) if x is not None else None,
     'amount': lambda x: str(Decimal(x)) if x != '!' else '!',
