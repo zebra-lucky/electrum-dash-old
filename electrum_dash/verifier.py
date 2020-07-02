@@ -94,6 +94,58 @@ class SPV(NetworkJobOnDefaultServer):
             self.requested_merkle.add(tx_hash)
             await self.group.spawn(self._request_and_verify_single_proof, tx_hash, tx_height)
 
+    async def verify_unknown_tx(self, tx_hash, tx_height):
+        local_height = self.blockchain.height()
+        if tx_height <= 0 or tx_height > local_height:
+            msg = f'Tx {tx_hash} height is unknown: {tx_height}'
+            self.logger.info(msg)
+            raise Exception(msg)
+
+        if (tx_hash not in self.merkle_roots
+                and tx_hash not in self.requested_merkle):
+            header = self.blockchain.read_header(tx_height)
+            if header is None:
+                if tx_height < constants.net.max_checkpoint():
+                    coro = self.network.request_chunk(tx_height, None,
+                                                      can_return_early=True)
+                    await self.group.spawn(coro)
+            self.logger.info(f'requested merkle {tx_hash}')
+            self.requested_merkle.add(tx_hash)
+
+        try:
+            merkle = await self.network.get_merkle_for_transaction(tx_hash,
+                                                                   tx_height)
+        except UntrustedServerReturnedError as e:
+            if not isinstance(e.original_exception, aiorpcx.jsonrpc.RPCError):
+                raise
+            self.logger.info(f'tx {tx_hash} not at height {tx_height}')
+            self.requested_merkle.discard(tx_hash)
+            raise
+
+        # Verify the hash of the server-provided merkle branch to a
+        # transaction matches the merkle root of its block
+        merkle_block_height = merkle.get('block_height')
+        if tx_height != merkle_block_height:
+            self.logger.info(f'requested tx_height {tx_height} differs from'
+                             f' received tx_height {merkle_block_height} for'
+                             f' txid {tx_hash}')
+            tx_height = merkle_block_height
+        pos = merkle.get('pos')
+        merkle_branch = merkle.get('merkle')
+        # we need to wait if header sync/reorg is still ongoing, hence lock:
+        async with self.network.bhi_lock:
+            header = self.network.blockchain().read_header(tx_height)
+        try:
+            verify_tx_is_in_block(tx_hash, merkle_branch, pos,
+                                  header, tx_height)
+        except MerkleVerificationFailure as e:
+            self.logger.info(str(e))
+            raise
+        # we passed all the tests
+        self.merkle_roots[tx_hash] = header.get('merkle_root')
+        self.requested_merkle.discard(tx_hash)
+        self.logger.info(f"verified {tx_hash}")
+
     async def _request_and_verify_single_proof(self, tx_hash, tx_height):
         try:
             merkle = await self.network.get_merkle_for_transaction(tx_hash, tx_height)

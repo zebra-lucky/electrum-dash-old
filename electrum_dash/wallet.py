@@ -998,21 +998,59 @@ class Abstract_Wallet(AddressSynchronizer):
             out_vals.append(o.value)
         return in_vals, out_vals
 
-    def get_input_tx(self, tx_hash, ignore_timeout=False):
+    def get_input_tx(self, tx_hash, ignore_timeout=False,
+                     spv_verify=False, required_conf=3):
         # First look up an input transaction in the wallet where it
         # will likely be.  If co-signing a transaction it may not have
         # all the input txs, in which case we ask the network.
         tx = self.db.get_transaction(tx_hash)
         if not tx and self.network:
+            res = None
             try:
-                raw_tx = self.network.run_from_another_thread(
-                    self.network.get_transaction(tx_hash, timeout=10))
+                verbose = True if spv_verify else False
+                coro = self.network.get_transaction(tx_hash, timeout=10,
+                                                    verbose=verbose)
+                res = self.network.run_from_another_thread(coro)
             except RequestTimedOut as e:
                 self.logger.info(f'getting input txn from network timed out for {tx_hash}')
                 if not ignore_timeout:
                     raise e
-            else:
+            if res and not spv_verify:
+                tx = Transaction(res)
+            elif res:
+                if not self.verifier:
+                    msg = f'SPV verifier is not available'
+                    self.logger.info(msg)
+                    raise Exception(msg)
+                conf = res.get('confirmations', -1)
+                if conf < required_conf:
+                    msg = f'Tx {tx_hash} has not enough confirmations: {conf}'
+                    self.logger.info(msg)
+                    raise Exception(msg)
+                height = res.get('height', -1)
+                if height <= 0:
+                    msg = f'Tx {tx_hash} height is unknown: {height}'
+                    self.logger.info(msg)
+                    raise Exception(msg)
+                raw_tx = res.get('hex')
+                if not raw_tx:
+                    msg = f'Tx {tx_hash}: error getting raw tx data'
+                    self.logger.info(msg)
+                    raise Exception(msg)
                 tx = Transaction(raw_tx)
+                if tx.txid() != tx_hash:
+                    msg = f'Tx {tx_hash}: raw tx data txid differs'
+                    self.logger.info(msg)
+                    raise Exception(msg)
+                coro = self.verifier.verify_unknown_tx(tx_hash, height)
+                self.network.run_from_another_thread(coro)
+        elif spv_verify:
+            info = self.db.get_verified_tx(tx_hash)
+            conf = local_height - info.height if info else 0
+            if conf < required_conf:
+                msg = f'Tx {tx_hash} has not enough confirmations: {conf}'
+                self.logger.info(msg)
+                raise Exception(msg)
         return tx
 
     def add_hw_info(self, tx):
