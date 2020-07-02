@@ -1045,6 +1045,7 @@ class Abstract_Wallet(AddressSynchronizer):
                 coro = self.verifier.verify_unknown_tx(tx_hash, height)
                 self.network.run_from_another_thread(coro)
         elif spv_verify:
+            local_height = self.get_local_height()
             info = self.db.get_verified_tx(tx_hash)
             conf = local_height - info.height if info else 0
             if conf < required_conf:
