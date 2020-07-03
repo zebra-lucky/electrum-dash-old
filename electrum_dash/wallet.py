@@ -1015,7 +1015,7 @@ class Abstract_Wallet(AddressSynchronizer):
                 self.logger.info(f'getting input txn from network timed out for {tx_hash}')
                 if not ignore_timeout:
                     raise e
-            if res and not spv_verify:
+            if res and not verbose:
                 tx = Transaction(res)
             elif res:
                 if not self.verifier:
@@ -1044,7 +1044,7 @@ class Abstract_Wallet(AddressSynchronizer):
                     raise Exception(msg)
                 coro = self.verifier.verify_unknown_tx(tx_hash, height)
                 self.network.run_from_another_thread(coro)
-        elif spv_verify:
+        elif tx and spv_verify:
             local_height = self.get_local_height()
             info = self.db.get_verified_tx(tx_hash)
             conf = local_height - info.height if info else 0
