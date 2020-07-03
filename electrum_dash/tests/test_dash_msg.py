@@ -29,6 +29,7 @@ class TestDashMsg(TestCaseForTestnet):
         assert msg.relay == 1
         assert msg.mnauth_challenge == bfh('9404092b784754ae2757c614d3e76ae1'
                                            '80dc66305055ee6e6c62b409c1d57b30')
+        assert msg.fMasternode == 0
         assert bh2u(msg.serialize()) == VERSION_MSG
 
     def test_dsa_msg(self):
@@ -95,7 +96,7 @@ VERSION_MSG = ('47120100050000000000000053cd705d0000000000000000'
                '000000000000000000000000000000000000000000000000'
                '5538e08ae7a513af142f4461736820436f72653a302e3134'
                '2e302e332f9e940200019404092b784754ae2757c614d3e7'
-               '6ae180dc66305055ee6e6c62b409c1d57b30')
+               '6ae180dc66305055ee6e6c62b409c1d57b3000')
 
 
 DSA_MSG = ('020000000200000001df2149d4b1805f1842aace662956f8'

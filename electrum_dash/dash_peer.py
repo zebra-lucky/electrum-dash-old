@@ -378,7 +378,8 @@ class DashPeer(Logger):
         msg = DashVersionMsg(version, services, timestamp,
                              recv_services, recv_ip, recv_port,
                              trans_services, trans_ip, trans_port,
-                             nonce, user_agent, start_height, relay, None)
+                             nonce, user_agent, start_height, relay,
+                             None, None)
         await self.send_msg('version', msg.serialize())
 
     async def read_next_msg(self):
