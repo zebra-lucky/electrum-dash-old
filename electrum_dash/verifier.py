@@ -126,10 +126,10 @@ class SPV(NetworkJobOnDefaultServer):
         # transaction matches the merkle root of its block
         merkle_block_height = merkle.get('block_height')
         if tx_height != merkle_block_height:
-            self.logger.info(f'requested tx_height {tx_height} differs from'
-                             f' received tx_height {merkle_block_height} for'
-                             f' txid {tx_hash}')
-            tx_height = merkle_block_height
+            raise MerkleVerificationFailure(f'requested tx_height {tx_height}'
+                                            f' differs from received tx_height'
+                                            f' {merkle_block_height} for txid'
+                                            f' {tx_hash}')
         pos = merkle.get('pos')
         merkle_branch = merkle.get('merkle')
         # we need to wait if header sync/reorg is still ongoing, hence lock:
