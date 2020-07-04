@@ -154,7 +154,12 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         self.config = SimpleConfig({'electrum_path': self.user_dir})
         self.config.set_key('dynamic_fees', False, True)
         self.storage = WalletStorage(self.wallet_path)
-        self.wallet = Wallet(self.storage)
+        self.wallet = w = Wallet(self.storage)
+        # set frozen state for small coins
+        coins = w.get_spendable_coins(domain=None, config=self.config,
+                                      include_ps=True)
+        coins = [c for c in coins if c['value'] < 500000000]
+        w.set_frozen_state_of_coins(coins, True)
 
     def tearDown(self):
         super(TestTxCommandsTestnet, self).tearDown()
@@ -244,7 +249,7 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         def mock_get_input_tx(self, *args, **kwargs):
             w = self.wallet
             w2 = self.w2
-            def get_from_both_wallets(txid):
+            def get_from_both_wallets(txid, spv_verify=True, required_conf=3):
                 return (w.db.get_transaction(txid)
                         or w2.db.get_transaction(txid))
             w.get_input_tx = w2.get_input_tx = get_from_both_wallets
@@ -267,46 +272,47 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         # check fundupto 0
         cmd_opts = {'fundupto': 0, 'outval': 0.3}
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
-        assert res['fee'] == -29999774   # not enough funded
-        assert res['funded_fee'] == 226  # diff in new inputs/outputs values
-        #assert res['changepos'] == 1
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([20000],
-                                         [30000000, 19774])
+        assert res['fee'] == -29999774   # not enough funded
+        assert res['funded_fee'] == 226  # diff in new inputs/outputs values
+        assert res['changepos'] == 1
+        assert w.get_tx_vals(res_tx) == ([701806547], [30000000, 701806321])
 
         # check fundupto 0.1
         cmd_opts.update({'fundupto': 0.1})
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
-        assert res['fee'] == -19999592   # not enough funded
-        assert res['funded_fee'] == 408  # diff in new inputs/outputs values
-        #assert res['changepos'] == 2
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([30000000, 20000],
-                                         [19774, 30000000, 19999818])
+        assert res['fee'] == -19999592   # not enough funded
+        assert res['funded_fee'] == 408  # diff in new inputs/outputs values
+        assert res['changepos'] == 1
+        assert w.get_tx_vals(res_tx) == ([701806547, 701806547],
+                                         [30000000, 691806365, 701806321])
+
         # check fundupto 0.2
         cmd_opts.update({'fundupto': 0.2})
         res = w2_cmds.fundrawtransaction(res_tx_hex, cmd_opts)
-        assert res['fee'] == -9999410    # not enough funded
-        assert res['funded_fee'] == 590  # diff in new inputs/outputs values
-        #assert res['changepos'] == 3
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([100000000, 30000000, 20000],
-                                         [19774, 19999818, 30000000, 89999818])
+        assert res['fee'] == -9999410    # not enough funded
+        assert res['funded_fee'] == 590  # diff in new inputs/outputs values
+        assert res['changepos'] == 1
+        assert w.get_tx_vals(res_tx) == ([100000000, 701806547, 701806547],
+                                         [30000000, 89999818, 691806365,
+                                          701806321])
         # check fundupto 0.3
         cmd_opts.update({'fundupto': 0.3})
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
-        assert res['fee'] == 772
-        assert res['funded_fee'] == 772
-        #assert res['changepos'] == 4
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        assert w.get_tx_vals(res_tx) == ([100000000, 30000000, 20000,
-                                          100001000],
-                                         [19774, 19999818, 30000000, 89999818,
-                                          90000818])
+        assert res['fee'] == 772
+        assert res['funded_fee'] == 772
+        assert res['changepos'] == -1
+        assert w.get_tx_vals(res_tx) == ([100000000, 701806547, 701806547,
+                                          701806547],
+                                         [30000000, 89999818, 691806365,
+                                          691806365, 701806321])
 
     @with_wallet2
     @with_wallet2_funded

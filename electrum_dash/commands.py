@@ -371,19 +371,8 @@ class Commands:
                 or conf_target or  estimate_mode):
             raise Exception(f'cmd_opts other than fundupto/outval'
                             f' is not implemented')
-
-        w = self.wallet
-        tx = Transaction(raw_tx)
-        for txin in tx.inputs():
-            prev_h = txin['prevout_hash']
-            prev_tx = w.get_input_tx(prev_h)
-            prev_n = txin['prevout_n']
-            o = prev_tx.outputs()[prev_n]
-            txin['value'] = o.value
-        tx_size = len(raw_tx) // 2
-        fee_per_kb = self.config.fee_per_kb()
-        tx_min_fee = tx_size * fee_per_kb / 1000
-        outputs_old = {}
+        fundupto_val = None
+        outval_val = None
         if fundupto is not None:
             if outval is None:
                 raise Exception(f'cmd_opts "outval" required,'
@@ -391,59 +380,12 @@ class Commands:
             fundupto_val = int(Decimal(str(fundupto))*COIN)
             outval_val = int(Decimal(str(outval))*COIN)
             if fundupto_val < 0:
-                raise Exception(f'Wrong option "fundupto"')
+                raise Exception(f'Wrong option value "fundupto"')
             if outval_val <= 0:
-                raise Exception(f'Wrong option "outval"')
-            in_vals, out_vals = w.get_tx_vals(tx)
-            sum_in_vals = sum(in_vals)
-            sum_out_vals = sum(out_vals)
-            if sum_in_vals - sum_out_vals - tx_min_fee >= 0:
-                raise Exception(f'Transaction is enough funded')
+                raise Exception(f'Wrong option value "outval"')
 
-            outputs_new = []
-            outval_found = False
-            for i, o in enumerate(tx.outputs()):
-                val = o.value
-                if not outval_found and val == outval_val:
-                    outval_found = True
-                    o_new = TxOutput(o.type, o.address, fundupto_val)
-                    outputs_old[o_new] = o
-                    outputs_new.append(o_new)
-                else:
-                    outputs_old[o] = o
-                    outputs_new.append(o)
-            tx._outputs = outputs_new
-        coins = w.get_spendable_coins(None, self.config, include_ps=True)
-
-        new_tx = w.make_unsigned_transaction(coins, tx.outputs(), self.config,
-                                             inputs=tx.inputs())
-        in_vals, out_vals = w.get_tx_vals(new_tx)
-        sum_in_vals = sum(in_vals)
-        sum_out_vals = sum(out_vals)
-        funded_fee = sum_in_vals - sum_out_vals
-        changepos = []
-        outputs_new = []
-        for i, o in enumerate(new_tx.outputs()):
-            if o in outputs_old:
-                old_o = outputs_old[o]
-                outputs_new.append(old_o)
-            else:
-                changepos.append(i)
-                outputs_new.append(o)
-        new_tx._outputs = outputs_new
-        new_tx.locktime = tx.locktime
-        in_vals, out_vals = w.get_tx_vals(new_tx)
-        sum_in_vals = sum(in_vals)
-        sum_out_vals = sum(out_vals)
-        res_fee = sum_in_vals - sum_out_vals
-
-        changepos_len = len(changepos)
-        if changepos_len == 0:
-            changepos = -1
-        elif changepos_len == 1:
-            changepos = changepos[0]
-        return {'hex': new_tx.serialize(), 'changepos': changepos,
-                'fee': res_fee, 'funded_fee': funded_fee}
+        return self.wallet.fund_raw_transaction(raw_tx, fundupto_val,
+                                                outval_val, config=self.config)
 
     @command('')
     def deserialize(self, tx):

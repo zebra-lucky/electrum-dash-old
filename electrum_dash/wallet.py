@@ -985,18 +985,85 @@ class Abstract_Wallet(AddressSynchronizer):
                 return True
         return False
 
-    def get_tx_vals(self, tx):
+    def get_tx_vals(self, tx, spv_verify=True, required_conf=3):
         in_vals = []
         out_vals = []
         for txin in tx.inputs():
             prev_h = txin['prevout_hash']
-            prev_tx = self.get_input_tx(prev_h)
+            prev_tx = self.get_input_tx(prev_h, spv_verify=spv_verify,
+                                        required_conf=required_conf)
             prev_n = txin['prevout_n']
             o = prev_tx.outputs()[prev_n]
             in_vals.append(o.value)
         for o in tx.outputs():
             out_vals.append(o.value)
         return in_vals, out_vals
+
+    def fund_raw_transaction(self, raw_tx, fundupto_val, outval_val,
+                             config=None):
+        tx = Transaction(raw_tx)
+        for txin in tx.inputs():
+            prev_h = txin['prevout_hash']
+            prev_tx = self.get_input_tx(prev_h, spv_verify=True)
+            prev_n = txin['prevout_n']
+            o = prev_tx.outputs()[prev_n]
+            txin['value'] = o.value
+        tx_size = len(raw_tx) // 2
+        tx_estimated_size = tx.estimated_size()
+        fee_per_kb = config.fee_per_kb()
+        tx_min_fee = tx_size * fee_per_kb / 1000
+        outputs_old = {}
+        if fundupto_val is not None:
+            in_vals, out_vals = self.get_tx_vals(tx)
+            sum_in_vals = sum(in_vals)
+            sum_out_vals = sum(out_vals)
+            if sum_in_vals - sum_out_vals - tx_min_fee >= 0:
+                raise Exception(f'Transaction is enough funded')
+
+            outputs_new = []
+            outval_found = False
+            for i, o in enumerate(tx.outputs()):
+                val = o.value
+                if not outval_found and val == outval_val:
+                    outval_found = True
+                    o_new = TxOutput(o.type, o.address, fundupto_val)
+                    outputs_old[o_new] = o
+                    outputs_new.append(o_new)
+                else:
+                    outputs_old[o] = o
+                    outputs_new.append(o)
+            tx._outputs = outputs_new
+        coins = self.get_spendable_coins(None, config, include_ps=True)
+
+        new_tx = self.make_unsigned_transaction(coins,tx.outputs(), config,
+                                                inputs=tx.inputs())
+        in_vals, out_vals = self.get_tx_vals(new_tx)
+        sum_in_vals = sum(in_vals)
+        sum_out_vals = sum(out_vals)
+        funded_fee = sum_in_vals - sum_out_vals
+        changepos = []
+        outputs_new = []
+        for i, o in enumerate(new_tx.outputs()):
+            if o in outputs_old:
+                old_o = outputs_old[o]
+                outputs_new.append(old_o)
+            else:
+                changepos.append(i)
+                outputs_new.append(o)
+        new_tx._outputs = outputs_new
+        new_tx.locktime = tx.locktime
+        in_vals, out_vals = self.get_tx_vals(new_tx)
+        sum_in_vals = sum(in_vals)
+        sum_out_vals = sum(out_vals)
+        res_fee = sum_in_vals - sum_out_vals
+
+        changepos_len = len(changepos)
+        if changepos_len == 0:
+            changepos = -1
+        elif changepos_len == 1:
+            changepos = changepos[0]
+        return {'hex': new_tx.serialize(), 'changepos': changepos,
+                'fee': res_fee, 'funded_fee': funded_fee}
 
     def get_input_tx(self, tx_hash, ignore_timeout=False,
                      spv_verify=False, required_conf=3):
