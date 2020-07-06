@@ -346,7 +346,10 @@ class Commands:
     @command('w')
     def getpubkeys(self, address):
         """Return the public keys for a wallet address. """
-        return self.wallet.get_public_keys(address)
+        if self.wallet.psman.is_ps_ks(address):
+            return self.wallet.psman.get_public_keys(address)
+        else:
+            return self.wallet.get_public_keys(address)
 
     @command('w')
     def getbalance(self):
@@ -545,7 +548,9 @@ class Commands:
     def listaddresses(self, receiving=False, change=False, labels=False, frozen=False, unused=False, funded=False, balance=False):
         """List wallet addresses. Returns the list of all addresses in your wallet. Use optional arguments to filter the results."""
         out = []
-        for addr in self.wallet.get_addresses():
+        w = self.wallet
+        addrs = w.get_addresses() + w.psman.get_addresses()
+        for addr in addrs:
             if frozen and not self.wallet.is_frozen_address(addr):
                 continue
             if receiving and self.wallet.is_change(addr):

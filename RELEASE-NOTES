@@ -7,7 +7,8 @@
    support), other fixes
  * Remove legacy masternodes commands from commands.py
  * Add UI to handle Other PS coins
- * Other PS fixes
+ * Add separate ps_keystore for PrivateSend operation
+ * Other fixes
 
 
 # Release 3.3.8.5

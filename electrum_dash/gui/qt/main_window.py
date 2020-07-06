@@ -442,10 +442,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             wallet, msg, msg_type = args
             if wallet == self.wallet:
                 self.update_ps_status_btn(is_mixing)
-                if is_mixing:  # block/unblock receving tab GUI
-                    self.roverlap_w.show()
-                else:
-                    self.roverlap_w.hide()
                 if msg:
                     parent = self
                     d = find_ps_dialog(self)
@@ -1019,6 +1015,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if wallet != self.wallet:
             return
         self.history_model.refresh('update_tabs')
+        self.update_avalaible_amount()
         self.update_receive_address_styling()
         self.request_list.update()
         self.address_list.update()
@@ -1141,20 +1138,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         vbox.addWidget(self.request_list)
         vbox.setStretchFactor(self.request_list, 1000)
 
-        self.roverlap_w = QWidget(w)
-        self.roverlap_w.hide()
-        self.roverlap_w.setObjectName('roverlap_widget')
-        recv_blocked_msg = self.wallet.psman.RECV_BLOCKED_MSG
-        recv_blocked_msg_l = QLabel(recv_blocked_msg)
-        recv_blocked_msg_l.setWordWrap(True)
-        og = QGridLayout(self.roverlap_w)
-        og.addWidget(QWidget(), 0, 0)
-        og.addWidget(recv_blocked_msg_l, 1, 1)
-        og.addWidget(QWidget(), 2, 2)
-        og.setColumnStretch(0, 1)
-        og.setColumnStretch(2, 1)
-        og.setRowStretch(0, 1)
-        og.setRowStretch(2, 1)
         return w
 
 
@@ -2761,7 +2744,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if not self.wallet.is_mine(address):
             self.show_message(_('Address not in wallet.'))
             return
-        txin_type = self.wallet.get_txin_type(address)
+        if self.wallet.psman.is_ps_ks(address):
+            txin_type = self.wallet.psman.ps_ks_txin_type
+        else:
+            txin_type = self.wallet.get_txin_type(address)
         if txin_type not in ['p2pkh']:
             self.show_message(_('Cannot sign messages with this type of address:') + \
                               ' ' + txin_type + '\n\n' + self.msg_sign)
@@ -2876,7 +2862,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
         pubkey_e = QLineEdit()
         if address:
-            pubkey = self.wallet.get_public_key(address)
+            if self.wallet.psman.is_ps_ks(address):
+                pubkey = self.wallet.psman.get_public_key(address)
+            else:
+                pubkey = self.wallet.get_public_key(address)
             pubkey_e.setText(pubkey)
         layout.addWidget(QLabel(_('Public key')), 2, 0)
         layout.addWidget(pubkey_e, 2, 1)
@@ -3014,7 +3003,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         vbox.addLayout(Buttons(CancelButton(d), b))
 
         private_keys = {}
-        addresses = self.wallet.get_addresses()
+        w = self.wallet
+        addresses = w.get_addresses() + w.psman.get_addresses()
         done = False
         cancelled = False
         def privkeys_thread():
@@ -3652,10 +3642,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         run_hook('close_settings_dialog')
         if self.need_restart:
             self.show_warning(_('Please restart Dash Electrum to activate the new GUI settings'), title=_('Success'))
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self.roverlap_w.setGeometry(0, 0, self.width(), self.height())
 
     def closeEvent(self, event):
         # It seems in some rare cases this closeEvent() is called twice
