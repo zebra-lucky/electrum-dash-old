@@ -18,7 +18,7 @@ from electrum_dash import dash_tx
 from electrum_dash.bitcoin import COIN, is_b58_address, b58_address_to_hash160
 from electrum_dash.dash_tx import TxOutPoint, service_to_ip_port
 from electrum_dash.protx import ProTxMN, ProTxService, ProRegTxExc
-from electrum_dash.util import bfh, bh2u
+from electrum_dash.util import bfh, bh2u, FILE_OWNER_MODE
 from electrum_dash.i18n import _
 
 from .util import MONOSPACE_FONT, icon_path, read_QIcon, ButtonsLineEdit
@@ -1755,6 +1755,7 @@ class ExportToFileWizardPage(QWizardPage):
                     continue
                 store_data['mns'][alias] = mn.as_dict()
             fd.write(json.dumps(store_data, indent=4))
+        os.chmod(self.path, FILE_OWNER_MODE)
         self.parent.saved_aliases = self.aliases
         self.parent.saved_path = self.path
         return True
