@@ -1,4 +1,9 @@
-# Release 3.3.8.6 (not released yet)
+# Release 3.3.8.7 (not released yet)
+
+ * qt: fix exported files file mode
+
+
+# Release 3.3.8.6
 
  * PrivateSend: allow start mixing before llmq/protx ready,
    stop mixing only if keep amount is available on ps balance

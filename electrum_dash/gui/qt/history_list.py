@@ -45,7 +45,7 @@ from electrum_dash.address_synchronizer import TX_HEIGHT_LOCAL
 from electrum_dash.dash_tx import PSTxTypes, SPEC_TX_NAMES
 from electrum_dash.i18n import _
 from electrum_dash.util import (block_explorer_URL, profiler, TxMinedInfo,
-                                timestamp_to_datetime)
+                                timestamp_to_datetime, FILE_OWNER_MODE)
 from electrum_dash.logging import get_logger, Logger
 
 from .util import (read_QIcon, MONOSPACE_FONT, Buttons, CancelButton, OkButton,
@@ -1089,6 +1089,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             else:
                 from electrum_dash.util import json_encode
                 f.write(json_encode(txns))
+        os.chmod(file_name, FILE_OWNER_MODE)
 
     def hide_rows(self):
         for i, (tx_item, children) in enumerate(self.hm.tx_tree):

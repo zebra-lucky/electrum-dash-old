@@ -73,6 +73,9 @@ base_units_list = ['DASH', 'mDASH', 'uDASH', 'duffs']  # list(dict) does not gua
 DECIMAL_POINT_DEFAULT = 8  # DASH
 
 
+FILE_OWNER_MODE = stat.S_IREAD | stat.S_IWRITE
+
+
 class UnknownBaseUnit(Exception): pass
 
 
@@ -906,6 +909,7 @@ def export_meta(meta, fileName):
     try:
         with open(fileName, 'w+', encoding='utf-8') as f:
             json.dump(meta, f, indent=4, sort_keys=True)
+        os.chmod(fileName, FILE_OWNER_MODE)
     except (IOError, os.error) as e:
         _logger.exception('')
         raise FileExportFailed(e)
