@@ -726,7 +726,7 @@ def parse_URI(uri: str, on_pr: Callable = None, *, loop=None) -> dict:
         return {'address': uri}
 
     u = urllib.parse.urlparse(uri)
-    if u.scheme != 'dash':
+    if u.scheme not in ['dash', 'pay']:
         raise InvalidBitcoinURI("Not a Dash URI")
     address = u.path
 
@@ -742,6 +742,11 @@ def parse_URI(uri: str, on_pr: Callable = None, *, loop=None) -> dict:
             raise InvalidBitcoinURI(f'Duplicate Key: {repr(k)}')
 
     out = {k: v[0] for k, v in pq.items()}
+    if u.scheme == 'pay':
+        out_keys = list(out.keys())
+        len_out_keys = len(out_keys)
+        if address or len_out_keys != 1 or out_keys[0] != 'r':
+            raise InvalidBitcoinURI(f'pay: scheme allowed only with "r" query')
     if address:
         if not bitcoin.is_address(address):
             raise InvalidBitcoinURI(f"Invalid Dash address: {address}")

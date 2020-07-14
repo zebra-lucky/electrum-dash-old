@@ -362,7 +362,7 @@ class ElectrumWindow(App):
         if is_address(data):
             self.set_URI(data)
             return
-        if data.startswith('dash:'):
+        if data.startswith('dash:') or data.startswith('pay:'):
             self.set_URI(data)
             return
         # try to decode transaction
