@@ -35,6 +35,10 @@ from electrum_dash.wallet import Wallet
 from . import TestCaseForTestnet
 
 
+TEST_MNEMONIC = ('total small during tattoo congress faith'
+                 ' acoustic fashion zone fringe fit crisp')
+
+
 class NetworkBroadcastMock:
 
     def __init__(self, pass_cnt=None):
@@ -2701,7 +2705,7 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         # mock wallet.has_password
         prev_has_password = w.has_password
-        w.has_password = lambda: True
+        w.has_keystore_encryption = lambda: True
         assert psman.check_need_new_keypairs() == (True, KPStates.Empty)
         assert psman.keypairs_state == KPStates.NeedCache
 
@@ -3160,7 +3164,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert psman.ps_ks_txin_type == 'p2pkh'
         keystore_d = copy.deepcopy(w.keystore.dump())
         keystore_d['type'] = 'ps_bip32'
-        keystore_d['addr_deriv_offset'] = 1
         assert psman.ps_keystore.dump() == keystore_d
 
         keystore_d['addr_deriv_offset'] = 2
@@ -3182,13 +3185,11 @@ class PSWalletTestCase(TestCaseForTestnet):
         xprv = ('tprv8gcGuHWitNxNiGHB37gwo6m41W1fNZBT5m79Fr56Q5F7HkagvRpCCPEs'
                 'bPK9xcZFtQe9pcvBrDsEmGfzsY2bsB34MqbwVHFdapts9YM233g')
         assert keystore_d['xprv'] == xprv
-        pprint(keystore_d)
 
         w.update_password(None, 'test password')
 
         keystore_d = copy.deepcopy(w.keystore.dump())
         keystore_d['type'] = 'ps_bip32'
-        keystore_d['addr_deriv_offset'] = 1
         assert psman.ps_keystore.dump() == keystore_d
         assert keystore_d['xprv'] != xprv  # encrypted xprv
 
@@ -3302,3 +3303,299 @@ class PSWalletTestCase(TestCaseForTestnet):
         res = w.sign_message(ps_ks_addr, msg, None)
         verified = ecc.verify_message_with_address(ps_ks_addr, res, msg)
         assert verified
+
+    def test_create_ps_ks_from_seed_ext_password(self):
+        w = self.wallet
+        psman = w.psman
+        psman.w_ks_type = 'hardware'  # mock
+        psman.create_ps_ks_from_seed_ext_password(TEST_MNEMONIC, '222', None)
+        ps_ks_dump = psman.ps_keystore.dump()
+        assert list(ps_ks_dump.keys()) == ['type', 'pw_hash_version', 'seed',
+                                           'passphrase', 'xpub', 'xprv']
+        assert ps_ks_dump['type'] == 'ps_bip32'
+        assert ps_ks_dump['pw_hash_version'] == 1
+        assert ps_ks_dump['seed'] == TEST_MNEMONIC
+        assert ps_ks_dump['passphrase'] == '222'
+        assert ps_ks_dump['xpub'] == ('tpubD6NzVbkrYhZ4XbJGdLV1VF6RSPjMCxn9hM6'
+                                      'grY9bhAhPsnRxPEVjyUZbhbB6zMoWTqJEJkwsLv'
+                                      'jmpKkjgGork7iG88HH1J8gUGSe8JuzafV')
+        assert ps_ks_dump['xprv'] == ('tprv8ZgxMBicQKsPe8GUjgpR5qSJsNDR3dbF83V'
+                                      'ua27JGtu13JBBkqg9nywjXTKjdDVbo95m2vz1CG'
+                                      'eXR35wy621YuMw1bNevP9qe55f5k5vWqP')
+
+    def test_is_ps_ks_encrypted(self):
+        w = self.wallet
+        psman = w.psman
+        psman.w_ks_type = 'hardware'  # mock
+        psman.create_ps_ks_from_seed_ext_password(TEST_MNEMONIC, '222', '111')
+        assert psman.ps_keystore.dump()
+        assert psman.is_ps_ks_encrypted()
+        psman.update_ps_ks_password('111', '')
+        assert not psman.is_ps_ks_encrypted()
+
+    def test_need_password(self):
+        w = self.wallet
+        psman = w.psman
+        psman.w_ks_type = 'hardware'  # mock
+        psman.create_ps_ks_from_seed_ext_password(TEST_MNEMONIC, '222', '111')
+        assert psman.ps_keystore.dump()
+        assert psman.need_password()
+        psman.update_ps_ks_password('111', '')
+        assert not psman.need_password()
+
+    def test_update_ps_ks_password(self):
+        w = self.wallet
+        psman = w.psman
+        psman.w_ks_type = 'hardware'  # mock
+        psman.create_ps_ks_from_seed_ext_password(TEST_MNEMONIC, '222', '')
+        assert not psman.is_ps_ks_encrypted()
+        ps_ks_dump = psman.ps_keystore.dump()
+        assert ps_ks_dump['xprv'] == ('tprv8ZgxMBicQKsPe8GUjgpR5qSJsNDR3dbF83V'
+                                      'ua27JGtu13JBBkqg9nywjXTKjdDVbo95m2vz1CG'
+                                      'eXR35wy621YuMw1bNevP9qe55f5k5vWqP')
+        psman.update_ps_ks_password(None, '111')
+        assert psman.is_ps_ks_encrypted()
+        ps_ks_dump = psman.ps_keystore.dump()
+        assert ps_ks_dump['xprv'] != ('tprv8ZgxMBicQKsPe8GUjgpR5qSJsNDR3dbF83V'
+                                      'ua27JGtu13JBBkqg9nywjXTKjdDVbo95m2vz1CG'
+                                      'eXR35wy621YuMw1bNevP9qe55f5k5vWqP')
+        assert ps_ks_dump['seed'] != TEST_MNEMONIC
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_is_ps_ks_inputs_in_tx(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+        addrs = w.get_unused_addresses()
+        ps_ks_addrs = psman.get_unused_addresses()
+
+        # make tx from wallet keystore utxo to ps keystore address
+        inputs = sorted(w.get_spendable_coins(domain=None, config=self.config),
+                        key=lambda x: x['address'])[-1:]
+        w.add_input_info(inputs[0])
+        oaddr1 = ps_ks_addrs[0]
+        outputs = [TxOutput(TYPE_ADDRESS, oaddr1, 1000010)]
+        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
+
+        assert not psman.is_ps_ks_inputs_in_tx(tx)
+
+        tx.inputs()[0]['sequence'] = 0xffffffff
+        tx = psman.sign_transaction(tx, None)
+        txid1 = tx.txid()
+        w.add_transaction(txid1, tx)
+        w.add_unverified_tx(txid1, TX_HEIGHT_UNCONFIRMED)
+
+        # make tx from txid1 output to ps keystore address
+        inputs = w.get_spendable_coins(domain=None, config=self.config)
+        inputs = [i for i in inputs if i['is_ps_ks']]
+        psman.add_input_info(inputs[0])
+        oaddr2 = ps_ks_addrs[1]
+        outputs = [TxOutput(TYPE_ADDRESS, oaddr2, 1000010)]
+        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0]['sequence'] = 0xffffffff
+
+        assert psman.is_ps_ks_inputs_in_tx(tx)
+
+        tx = psman.sign_transaction(tx, None)
+        txid2 = tx.txid()
+        w.add_transaction(txid2, tx)
+        w.add_unverified_tx(txid2, TX_HEIGHT_UNCONFIRMED)
+
+        # make tx from txid2 output to wallet keystore address
+        inputs = w.get_spendable_coins(domain=None, config=self.config)
+        inputs = [i for i in inputs if i['is_ps_ks']]
+        psman.add_input_info(inputs[0])
+        oaddr3 = addrs[0]
+        outputs = [TxOutput(TYPE_ADDRESS, oaddr3, 1000010)]
+        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0]['sequence'] = 0xffffffff
+
+        assert psman.is_ps_ks_inputs_in_tx(tx)
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_prepare_funds_from_hw_wallet(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+        psman.keep_amount = 2
+        psman.mix_rounds = 2
+
+        # test with spendable amount > keep_amount
+        coins0 = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                             mature_only=True, include_ps=True)
+        coins = [c for c in coins0 if c['value'] < 50000000]
+        w.set_frozen_state_of_coins(coins, True)
+        coins = [c for c in coins0 if c['value'] > 800000000]
+        w.set_frozen_state_of_coins(coins, True)
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True, include_ps=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+
+        assert sum([c['value'] for c in coins]) == 350002000  # 3.5 Dash
+
+        tx = psman.prepare_funds_from_hw_wallet()
+        assert tx.txid()
+        inputs = tx.inputs()
+        outputs = tx.outputs()
+        assert len(inputs) == 3
+        assert len(outputs) == 2
+        change = outputs[0]
+        ps_ks_out = outputs[1]
+
+        for txin in inputs:
+            assert not psman.is_ps_ks(txin['address'])
+
+        assert change.value == 99734653
+        assert not psman.is_ps_ks(change.address)
+
+        assert ps_ks_out.value == 200266825
+        assert psman.is_ps_ks(ps_ks_out.address)
+
+        # test with spendable amount < keep_amount
+        coins = [c for c in coins0 if c['value'] >= 100000000]
+        w.set_frozen_state_of_coins(coins, True)
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True, include_ps=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+
+        assert sum([c['value'] for c in coins]) == 50000000  # 0.5 Dash
+
+        tx = psman.prepare_funds_from_hw_wallet()
+        assert tx.txid()
+        inputs = tx.inputs()
+        outputs = tx.outputs()
+        assert len(inputs) == 1
+        assert len(outputs) == 1
+        ps_ks_out = outputs[0]
+
+        assert ps_ks_out.value == 49999807
+        assert psman.is_ps_ks(ps_ks_out.address)
+        assert psman.get_tmp_reserved_address() == ps_ks_out.address
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_tmp_reserved_address(self):
+        w = self.wallet
+        psman = self.wallet.psman
+        addr = 'address'
+
+        assert psman.get_tmp_reserved_address() == ''
+        assert w.db.get_ps_data('tmp_reserved_address') is None
+
+        psman.set_tmp_reserved_address(addr)
+        assert psman.get_tmp_reserved_address() == addr
+        assert w.db.get_ps_data('tmp_reserved_address') == addr
+
+        psman.set_tmp_reserved_address('')
+        assert psman.get_tmp_reserved_address() == ''
+        assert w.db.get_ps_data('tmp_reserved_address') == ''
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_reserve_addresses_tmp(self):
+        w = self.wallet
+        psman = w.psman
+
+        with self.assertRaises(Exception):
+            psman.reserve_addresses(10, tmp=True)
+        with self.assertRaises(Exception):
+            psman.reserve_addresses(1, for_change=True, tmp=True)
+        with self.assertRaises(Exception):
+            psman.reserve_addresses(1, data='*', tmp=True)
+
+        ps_ks_unused_addr = psman.get_unused_addresses()[0]
+
+        res1 = psman.reserve_addresses(1, tmp=True)
+
+        assert psman.get_unused_addresses()[0] != ps_ks_unused_addr
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_calc_rounds_for_denominate_tx(self):
+        w = self.wallet
+        psman = w.psman
+        dval = 100001
+        fake_outpoint = '0'*64 + ':0'
+        ps_ks_addrs = psman.get_unused_addresses()
+        main_ks_addrs = w.get_unused_addresses()
+
+        new_outpoints = [
+            (fake_outpoint, ps_ks_addrs[0], dval),
+            (fake_outpoint, main_ks_addrs[0], dval),
+            (fake_outpoint, ps_ks_addrs[1], dval),
+            (fake_outpoint, main_ks_addrs[1], dval),
+            (fake_outpoint, ps_ks_addrs[2], dval),
+        ]
+        input_rounds = [5, 3, 1, 0, 5]
+        out_rounds = psman._calc_rounds_for_denominate_tx(new_outpoints,
+                                                          input_rounds)
+        assert out_rounds is not input_rounds
+        assert out_rounds == list(map(lambda x: x+1, input_rounds[:]))
+
+        psman.w_ks_type = 'hardware'  # mock
+        out_rounds = psman._calc_rounds_for_denominate_tx(new_outpoints,
+                                                          input_rounds)
+        assert out_rounds is not input_rounds
+        assert out_rounds == [4, 6, 2, 6, 1]
+        # another test
+        new_outpoints = [
+            (fake_outpoint, ps_ks_addrs[0], dval),
+            (fake_outpoint, ps_ks_addrs[1], dval),
+            (fake_outpoint, main_ks_addrs[0], dval),
+            (fake_outpoint, main_ks_addrs[1], dval),
+        ]
+        input_rounds = [2, 3, 3, 1]
+        out_rounds = psman._calc_rounds_for_denominate_tx(new_outpoints,
+                                                          input_rounds)
+        assert out_rounds is not input_rounds
+        assert out_rounds == [3, 2, 4, 4]
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_prepare_funds_from_ps_keystore(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+
+        with self.assertRaises(NotEnoughFunds):
+            psman.prepare_funds_from_ps_keystorere(None)
+
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True, include_ps=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        coins = coins[:1]
+        unused = psman.get_unused_addresses()
+        oaddr = unused[0]
+        outputs = [TxOutput(TYPE_ADDRESS, oaddr, '!')]
+        tx = w.make_unsigned_transaction(coins, outputs, self.config)
+        tx = w.sign_transaction(tx, None)
+        txid = tx.txid()
+        w.add_transaction(txid, tx)
+
+        tx2 = psman.prepare_funds_from_ps_keystorere(None)
+        assert tx2.is_complete()
+
+    @enable_ps_ks
+    @synchronize_ps_ks
+    def test_check_funds_on_ps_keystorere(self):
+        w = self.wallet
+        psman = w.psman
+        psman.config = self.config
+
+        assert not psman.check_funds_on_ps_keystorere()
+
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                            mature_only=True, include_ps=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        coins = coins[:1]
+        unused = psman.get_unused_addresses()
+        oaddr = unused[0]
+        outputs = [TxOutput(TYPE_ADDRESS, oaddr, '!')]
+        tx = w.make_unsigned_transaction(coins, outputs, self.config)
+        tx = w.sign_transaction(tx, None)
+        txid = tx.txid()
+        w.add_transaction(txid, tx)
+
+        assert psman.check_funds_on_ps_keystorere()

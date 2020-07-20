@@ -464,7 +464,7 @@ class Abstract_Wallet(AddressSynchronizer):
         )
 
     def get_spendable_coins(self, domain, config, *, nonlocal_only=False,
-                            include_ps=False, min_rounds=None):
+                            include_ps=False, min_rounds=None, main_ks=False):
         confirmed_only = config.get('confirmed_only', False)
         utxos = self.get_utxos(domain,
                                excluded_addresses=self.frozen_addresses,
@@ -474,6 +474,8 @@ class Abstract_Wallet(AddressSynchronizer):
                                include_ps=include_ps,
                                min_rounds=min_rounds)
         utxos = [utxo for utxo in utxos if not self.is_frozen_coin(utxo)]
+        if main_ks:
+            utxos = [utxo for utxo in utxos if not utxo['is_ps_ks']]
         if self.psman.enabled and include_ps and not self.psman.allow_others:
             utxos = [utxo for utxo in utxos
                      if utxo['ps_rounds'] != PSCoinRounds.OTHER]
@@ -1008,8 +1010,12 @@ class Abstract_Wallet(AddressSynchronizer):
         keystores = self.get_keystores()
         if self.psman.ps_keystore is not None:
             keystores.append(self.psman.ps_keystore)
-        for k in sorted(keystores, key=lambda ks: ks.ready_to_sign(),
-                        reverse=True):
+
+        def sort_keystores_key(ks):
+            ps_ks = self.psman.ps_keystore
+            return (ks.ready_to_sign(), ks is not ps_ks)
+
+        for k in sorted(keystores, key=sort_keystores_key, reverse=True):
             try:
                 if k.can_sign(tx):
                     k.sign_transaction(tx, password)
@@ -1034,9 +1040,12 @@ class Abstract_Wallet(AddressSynchronizer):
         # fixme: use slots from expired requests
         domain = self.get_receiving_addresses()
         ps_reserved = self.db.get_ps_reserved()
+        tmp_reserved_addr = self.psman.get_tmp_reserved_address()
+        tmp_reserved_addrs = [tmp_reserved_addr] if tmp_reserved_addr else []
         return [addr for addr in domain if not self.is_used(addr)
                 and addr not in self.receive_requests.keys()
-                and addr not in ps_reserved]
+                and addr not in ps_reserved
+                and addr not in tmp_reserved_addrs]
 
     @check_returned_address
     def get_unused_address(self):
