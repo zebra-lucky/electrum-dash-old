@@ -753,7 +753,10 @@ class Abstract_Wallet(AddressSynchronizer):
             assert is_address(addr), f"not valid Dash address: {addr}"
             # note that change addresses are not necessarily ismine
             # in which case this is a no-op
-            self.check_address(addr)
+            if self.psman.is_ps_ks(addr):
+                self.psman.check_address(addr)
+            else:
+                self.check_address(addr)
         max_change = self.max_change_outputs if self.multiple_change else 1
         return change_addrs[:max_change]
 
