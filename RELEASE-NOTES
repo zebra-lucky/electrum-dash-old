@@ -1,5 +1,6 @@
-# Release 3.3.8.7 (not released yet)
+# Release 3.3.8.7
 
+ * PrivateSend: support mixing on hardware wallets (using ps_keystore)
  * qt: fix exported files file mode
 
 
