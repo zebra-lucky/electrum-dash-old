@@ -368,7 +368,7 @@ class PSDenominateWorkflow:
     '''
     uuid: unique id for spending denoms reservation
     denom: workflow denom value
-    rounds: workflow inputs mix rounds
+    rounds: workflow inputs mix rounds (legacy field, not used)
     inputs: list of spending denoms outpoints
     outputs: list of reserved output addresses
     completed: time when dsc message received
@@ -4007,7 +4007,6 @@ class PSManager(Logger):
         icnt = 0
         txids = []
         inputs = []
-        denom_rounds = None
         while icnt < random.randint(1, PRIVATESEND_ENTRY_MAX_SIZE):
             if not outpoints:
                 break
@@ -4037,26 +4036,21 @@ class PSManager(Logger):
             elif denom[1] != denom_value:  # skip other denom values
                 continue
 
-            if denom_rounds is None:
-                denom_rounds = denom[2]
-
             inputs.append(outpoint)
             txids.append(txid)
             icnt += 1
 
         if not inputs:
             self.logger.debug(f'No suitable denoms to mix:'
-                              f' denom_value={denom_value},'
-                              f' denom_rounds={denom_rounds}')
-            return None, None, None
+                              f' denom_value={denom_value}')
+            return None, None
         else:
-            return inputs, denom_value, denom_rounds
+            return inputs, denom_value
 
     def _start_denominate_wfl(self, denom_value=None):
         if self.active_denominate_wfl_cnt >= self.max_sessions:
             return
-        selected_inputs, denom_value, denom_rounds = \
-            self._select_denoms_to_mix(denom_value)
+        selected_inputs, denom_value = self._select_denoms_to_mix(denom_value)
         if not selected_inputs:
             return
 
@@ -4079,15 +4073,13 @@ class PSManager(Logger):
 
             if icnt < 1:
                 self.logger.debug(f'No suitable denoms to mix after'
-                                  f' denoms_lock: denom_value={denom_value},'
-                                  f' denom_rounds={denom_rounds}')
+                                  f' denoms_lock: denom_value={denom_value}')
                 return
 
             uuid = str(uuid4())
             wfl = PSDenominateWorkflow(uuid=uuid)
             wfl.inputs = inputs
             wfl.denom = denom_value
-            wfl.rounds = denom_rounds
             self.set_denominate_wfl(wfl)
             for outpoint in inputs:
                 self.add_ps_spending_denom(outpoint, wfl.uuid)
@@ -4121,8 +4113,7 @@ class PSManager(Logger):
             self.set_denominate_wfl(saved)
 
         self.logger.info(f'Created denominate workflow: {wfl.lid}, with inputs'
-                         f' value {wfl.denom}, rounds'
-                         f' {wfl.rounds}, count {len(wfl.inputs)}')
+                         f' value {wfl.denom}, count {len(wfl.inputs)}')
         return wfl
 
     def _sign_inputs(self, tx, inputs):
