@@ -783,7 +783,7 @@ class PSManager(Logger):
                                 ' mixing for generating keypairs cache')
     WAIT_MIXING_STOP_MSG = _('Mixing is not stopped. If mixing sessions ends'
                              ' prematurely additional pay collateral may be'
-                             ' payd. Do you really want to close wallet?')
+                             ' paid. Do you really want to close wallet?')
     NO_NETWORK_STOP_MSG = _('Network is not available')
     OTHER_COINS_ARRIVED_MSG1 = _('Some unknown coins arrived on addresses'
                                  ' reserved for PrivateSend use, txid: {}.')
