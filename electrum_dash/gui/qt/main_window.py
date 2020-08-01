@@ -592,13 +592,19 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.export_menu.setEnabled(self.wallet.can_export())
 
     def warn_if_watching_only(self):
-        if self.wallet.is_watching_only():
+        watch_only_warn = self.config.get('watch_only_warn', True)
+        if self.wallet.is_watching_only() and watch_only_warn:
             msg = ' '.join([
                 _("This wallet is watching-only."),
                 _("This means you will not be able to spend Dash coins with it."),
                 _("Make sure you own the seed phrase or the private keys, before you request Dash coins to be sent to this wallet.")
             ])
-            self.show_warning(msg, title=_('Watch-only wallet'))
+            cb = QCheckBox(_("Don't show this again."))
+            def on_cb(x):
+                self.config.set_key('watch_only_warn', x != Qt.Checked,
+                                    save=True)
+            cb.stateChanged.connect(on_cb)
+            self.show_warning(msg, title=_('Watch-only wallet'), checkbox=cb)
 
     def warn_if_testnet(self):
         if not constants.net.TESTNET:
@@ -3420,6 +3426,13 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             self.config.set_key('check_updates', v == Qt.Checked, save=True)
         updatecheck_cb.stateChanged.connect(on_set_updatecheck)
         gui_widgets.append((updatecheck_cb, None))
+
+        watchonly_w_cb = QCheckBox(_('Show warning for watching only wallets'))
+        watchonly_w_cb.setChecked(self.config.get('watch_only_warn', True))
+        def on_set_watch_only_warn(v):
+            self.config.set_key('watch_only_warn', v == Qt.Checked, save=True)
+        watchonly_w_cb.stateChanged.connect(on_set_watch_only_warn)
+        gui_widgets.append((watchonly_w_cb, None))
 
         filelogging_cb = QCheckBox(_("Write logs to file"))
         filelogging_cb.setChecked(bool(self.config.get('log_to_file', False)))
