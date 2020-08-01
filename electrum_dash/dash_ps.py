@@ -3109,26 +3109,40 @@ class PSManager(Logger):
                                  f' fund tx {tx.txid()}')
             await asyncio.sleep(30)
 
-    def prepare_funds_from_ps_keystorere(self, password):
+    def prepare_funds_from_ps_keystore(self, password):
         w = self.wallet
-        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
-                            mature_only=True, include_ps=True)
-        coins = [c for c in coins if not w.is_frozen_coin(c)]
-        ps_ks_coins = [c for c in coins if c['is_ps_ks']]
-        if not ps_ks_coins:
+        coins_ps = w.get_utxos(None, mature_only=True,
+                               min_rounds=PSCoinRounds.MINUSINF)
+        ps_ks_coins_ps = [c for c in coins_ps if c['is_ps_ks']]
+        coins_regular = w.get_utxos(None, mature_only=True)
+        ps_ks_coins_regular = [c for c in coins_regular if c['is_ps_ks']]
+        if not ps_ks_coins_ps and not ps_ks_coins_regular:
             raise NotEnoughFunds('No funds found on PS Keystore')
         unused = w.get_unused_addresses()
         if not unused:
             raise NotEnoughFunds('No unused addresses to prepare transaction')
-        outputs = [TxOutput(TYPE_ADDRESS, unused[0], '!')]
-        tx = w.make_unsigned_transaction(ps_ks_coins, outputs, self.config)
-        tx = self.wallet.sign_transaction(tx, password)
-        if tx and tx.is_complete():
-            return tx
-        else:
-            raise Exception('Sign transaction failed')
+        res = []
+        outputs_ps = [TxOutput(TYPE_ADDRESS, unused[0], '!')]
+        outputs_regular = [TxOutput(TYPE_ADDRESS, unused[1], '!')]
+        if ps_ks_coins_ps:
+            tx = w.make_unsigned_transaction(ps_ks_coins_ps, outputs_ps,
+                                             self.config)
+            tx = self.wallet.sign_transaction(tx, password)
+            if tx and tx.is_complete():
+                res.append(tx)
+            else:
+                raise Exception('Sign transaction failed')
+        if ps_ks_coins_regular:
+            tx = w.make_unsigned_transaction(ps_ks_coins_regular,
+                                             outputs_regular, self.config)
+            tx = self.wallet.sign_transaction(tx, password)
+            if tx and tx.is_complete():
+                res.append(tx)
+            else:
+                raise Exception('Sign transaction failed')
+        return res
 
-    def check_funds_on_ps_keystorere(self):
+    def check_funds_on_ps_keystore(self):
         w = self.wallet
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
@@ -5640,6 +5654,63 @@ class PSManager(Logger):
             self.logger.info(f'No untracked PrivateSend'
                              f' transactions found')
         return found
+
+    def prob_denominate_tx_coin(self, c, check_inputs_vals=False):
+        w = self.wallet
+        val = c['value']
+        if val not in PS_DENOMS_VALS:
+            return
+
+        prev_txid = c['prevout_hash']
+        prev_tx = w.db.get_transaction(prev_txid)
+        if not prev_tx:
+            return
+
+        inputs = prev_tx.inputs()
+        outputs = prev_tx.outputs()
+        inputs_cnt = len(inputs)
+        outputs_cnt = len(outputs)
+        if inputs_cnt != outputs_cnt:
+            return
+
+        dval_outputs_cnt = 0
+        mine_outputs_cnt = 0
+        for o in outputs:
+            if o.value != val:
+                break
+            dval_outputs_cnt += 1
+            mine_outputs_cnt += 1 if w.is_mine(o.address) else 0
+        if dval_outputs_cnt != outputs_cnt:
+            return
+        if mine_outputs_cnt == outputs_cnt:
+            return
+
+        if not check_inputs_vals:
+            return True
+
+        dval_inputs_cnt = 0
+        for prev_txin in prev_tx.inputs():
+            is_denominate_input = False
+            try:
+                prev_txin_txid = prev_txin['prevout_hash']
+                prev_txin_tx = w.get_input_tx(prev_txin_txid)
+                if not prev_txin_tx:
+                    return
+                prev_txin_tx_outputs = prev_txin_tx.outputs()
+                prev_txin_tx_outputs_cnt = len(prev_txin_tx_outputs)
+                prev_txin_tx_dval_out_cnt = 0
+                for o in prev_txin_tx_outputs:
+                    if o.value == val:
+                        prev_txin_tx_dval_out_cnt +=1
+                if (prev_txin_tx_outputs_cnt == prev_txin_tx_dval_out_cnt):
+                    is_denominate_input = True
+            except:
+                continue
+            if is_denominate_input:
+                dval_inputs_cnt += 1
+        if dval_inputs_cnt != inputs_cnt:
+            return
+        return True
 
     def find_common_ancestor(self, utxo_a, utxo_b, search_depth=5):
         w = self.wallet

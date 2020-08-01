@@ -1643,11 +1643,14 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             _type, addr = self.get_payto_or_dummy()
             outputs = [TxOutput(_type, addr, amount)]
         is_sweep = bool(self.tx_external_keypairs)
+        psman = self.wallet.psman
+        no_ps_data = psman.is_hw_ks and not psman.enabled
         make_tx = lambda fee_est: \
             self.wallet.make_unsigned_transaction(
                 coins, outputs, self.config,
                 fixed_fee=fee_est, is_sweep=is_sweep,
                 min_rounds=min_rounds,
+                no_ps_data=no_ps_data,
                 tx_type=tx_type, extra_payload=extra_payload)
         try:
             tx = make_tx(fee_estimator)
@@ -1941,10 +1944,13 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             return
         try:
             is_sweep = bool(self.tx_external_keypairs)
+            psman = self.wallet.psman
+            no_ps_data = psman.is_hw_ks and not psman.enabled
             tx = self.wallet.make_unsigned_transaction(
                 coins, outputs, self.config, fixed_fee=fee_estimator,
                 is_sweep=is_sweep,
                 min_rounds=min_rounds,
+                no_ps_data=no_ps_data,
                 tx_type=tx_type, extra_payload=extra_payload)
         except (NotEnoughFunds, NoDynamicFeeEstimates) as e:
             self.show_message(str(e))
@@ -2082,8 +2088,12 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
     @protected_with_parent
     def send_funds_to_main_ks(self, parent, password):
         psman = self.wallet.psman
-        tx = psman.prepare_funds_from_ps_keystorere(password)
-        show_transaction(tx, self)
+        try:
+            tx_list = psman.prepare_funds_from_ps_keystore(password)
+            for tx in tx_list:
+                show_transaction(tx, self)
+        except Exception as e:
+            self.show_error(f'{str(e)}')
 
     def sign_tx_with_password(self, tx, callback, password):
         '''Sign the transaction in a separate thread.  When done, calls
@@ -2347,9 +2357,11 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             include_ps = (min_rounds is None)
             psman = self.wallet.psman
             main_ks = psman.ps_keystore and psman.is_hw_ks
+            no_ps_data = psman.is_hw_ks and not psman.enabled
             return self.wallet.get_spendable_coins(None, self.config,
                                                    include_ps=include_ps,
                                                    min_rounds=min_rounds,
+                                                   no_ps_data=no_ps_data,
                                                    main_ks=main_ks)
 
     def hide_extra_payload(self):
@@ -2366,6 +2378,11 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if is_ps:
             w = self.wallet
             psman = w.psman
+            if not psman.enabled and psman.is_hw_ks:
+                self.show_warning(_('It is not reccomended to send PrivateSend'
+                                    ' transaction without PS Keystore,'
+                                    ' as there is no means to verify'
+                                    ' input coins'))
             denoms_by_vals = psman.calc_denoms_by_values()
             if denoms_by_vals:
                 if not psman.check_enough_sm_denoms(denoms_by_vals):
@@ -2385,9 +2402,11 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         min_rounds = None if not is_ps else psman.mix_rounds
         include_ps = (min_rounds is None)
         main_ks = psman.ps_keystore and psman.is_hw_ks
+        no_ps_data = psman.is_hw_ks and not psman.enabled
         inputs = wallet.get_spendable_coins(None, self.config,
                                             include_ps=include_ps,
                                             min_rounds=min_rounds,
+                                            no_ps_data=no_ps_data,
                                             main_ks=main_ks)
         if inputs:
             addr = self.wallet.dummy_address()
@@ -2395,6 +2414,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             try:
                 tx = wallet.make_unsigned_transaction(inputs, outputs,
                                                       self.config,
+                                                      no_ps_data=no_ps_data,
                                                       min_rounds=min_rounds)
                 amount = tx.output_value()
                 extra_fee = run_hook('get_tx_extra_fee', wallet, tx)
@@ -3745,7 +3765,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if (psman.is_hw_ks
                 and psman.ps_keystore
                 and psman.show_warn_ps_ks
-                and psman.check_funds_on_ps_keystorere()):
+                and psman.check_funds_on_ps_keystore()):
             warn = _('There are funds left on PrivateSend keystore')
             q = _('Send all coins to hardware wallet')
             msg = f'{warn}\n\n{q}?'

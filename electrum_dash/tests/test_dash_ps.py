@@ -3560,31 +3560,43 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.config = self.config
 
         with self.assertRaises(NotEnoughFunds):
-            psman.prepare_funds_from_ps_keystorere(None)
+            psman.prepare_funds_from_ps_keystore(None)
 
+        unused = psman.get_unused_addresses()
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        coins = coins[:1]
-        unused = psman.get_unused_addresses()
-        oaddr = unused[0]
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr, '!')]
-        tx = w.make_unsigned_transaction(coins, outputs, self.config)
+
+        coins1 = coins[:1]
+        oaddr1 = unused[0]
+        outputs1 = [TxOutput(TYPE_ADDRESS, oaddr1, '!')]
+        tx = w.make_unsigned_transaction(coins1, outputs1, self.config)
         tx = w.sign_transaction(tx, None)
         txid = tx.txid()
         w.add_transaction(txid, tx)
 
-        tx2 = psman.prepare_funds_from_ps_keystorere(None)
-        assert tx2.is_complete()
+        coins2 = coins[1:2]
+        oaddr2 = unused[1]
+        outputs2 = [TxOutput(TYPE_ADDRESS, oaddr2, '!')]
+        tx2 = w.make_unsigned_transaction(coins2, outputs2, self.config)
+        tx2 = w.sign_transaction(tx2, None)
+        txid2 = tx.txid()
+        w.add_transaction(txid2, tx2)
+        psman.add_ps_denom(f'{txid2}:0', (oaddr2, 100001, 0))
+
+        tx_list = psman.prepare_funds_from_ps_keystore(None)
+        assert len(tx_list) == 2
+        for tx2 in tx_list:
+            assert tx2.is_complete()
 
     @enable_ps_ks
     @synchronize_ps_ks
-    def test_check_funds_on_ps_keystorere(self):
+    def test_check_funds_on_ps_keystore(self):
         w = self.wallet
         psman = w.psman
         psman.config = self.config
 
-        assert not psman.check_funds_on_ps_keystorere()
+        assert not psman.check_funds_on_ps_keystore()
 
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
@@ -3598,4 +3610,104 @@ class PSWalletTestCase(TestCaseForTestnet):
         txid = tx.txid()
         w.add_transaction(txid, tx)
 
-        assert psman.check_funds_on_ps_keystorere()
+        assert psman.check_funds_on_ps_keystore()
+
+    def test_prob_denominate_tx_coin(self):
+        w = self.wallet
+        psman = w.psman
+        coins = w.get_utxos(None, mature_only=True)
+        denom_coins = []
+        for c in coins:
+            if psman.prob_denominate_tx_coin(c):
+                denom_coins.append(c)
+        assert len(denom_coins) == 78
+        coro = psman.find_untracked_ps_txs(log=False)
+        found_txs = asyncio.get_event_loop().run_until_complete(coro)
+        for c in denom_coins:
+            utxos = w.get_utxos([c['address']])
+            assert len(utxos) == 1
+            assert utxos[0]['ps_rounds'] in [1, 2]
+
+    def test_make_unsigned_transaction_ps_coins_no_ps_data(self):
+        """PS tx with probable denom coins"""
+        w = self.wallet
+        psman = w.psman
+        config = self.config
+        addr_type = TYPE_ADDRESS
+        spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
+
+        # check different amounts and resulting fees
+        test_amounts = [0.00001000]
+        test_amounts += [0.00009640, 0.00005314, 0.00002269, 0.00005597,
+                         0.00008291, 0.00009520, 0.00004102, 0.00009167,
+                         0.00005735, 0.00001904, 0.00009245, 0.00002641,
+                         0.00009115, 0.00003185, 0.00004162, 0.00003386,
+                         0.00007656, 0.00006820, 0.00005044, 0.00006789]
+        test_amounts += [0.00010000]
+        test_amounts += [0.00839115, 0.00372971, 0.00654267, 0.00014316,
+                         0.00491488, 0.00522527, 0.00627107, 0.00189861,
+                         0.00092579, 0.00324560, 0.00032433, 0.00707310,
+                         0.00737818, 0.00022760, 0.00235986, 0.00365554,
+                         0.00975527, 0.00558680, 0.00506627, 0.00390911]
+        test_amounts += [0.01000000]
+        test_amounts += [0.74088413, 0.51044833, 0.81502578, 0.63804620,
+                         0.38508255, 0.38838208, 0.20597175, 0.61405212,
+                         0.23782970, 0.67059459, 0.29112021, 0.01425332,
+                         0.44445507, 0.47530820, 0.04363325, 0.86807901,
+                         0.82236638, 0.38637845, 0.04937359, 0.77029427]
+        test_amounts += [1.00000000]
+        test_amounts += [3.15592994, 1.51850574, 3.35457853, 1.20958635,
+                         3.14494582, 3.43228624, 2.14182061, 1.30301733,
+                         3.40340773, 1.21422826, 2.99683531, 1.3497565,
+                         1.56368795, 2.60851955, 3.62983949, 3.13599564,
+                         3.30433324, 2.67731925, 2.75157724, 1.48492533]
+
+        test_fees = [99001, 90361, 94687, 97732, 94404, 91710, 90481, 95899,
+                     90834, 94266, 98097, 90756, 97360, 90886, 96816, 95839,
+                     96615, 92345, 93181, 94957, 93212, 90001, 60894, 27033,
+                     45740, 85685, 8517, 77479, 72900, 10141, 7422, 75444,
+                     67568, 92698, 62190, 77241, 64017, 34450, 24483, 41326,
+                     93379, 9093, 100011, 12328, 55678, 98238, 96019, 92131,
+                     62181, 3031, 95403, 17268, 41212, 88271, 74683, 54938,
+                     69656, 36719, 92968, 64185, 62542, 62691, 71344, 1000,
+                     10162, 50945, 45502, 42575, 8563, 74809, 20081, 99571,
+                     62631, 78389, 19466, 25700, 32769, 50654, 19681, 3572,
+                     69981, 70753, 45028, 8952]
+        coins = w.get_spendable_coins(domain=None, config=config,
+                                      min_rounds=2, no_ps_data=True)
+        for i in range(len(test_amounts)):
+            amount_duffs = to_duffs(test_amounts[i])
+            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+                                             min_rounds=2, no_ps_data=True)
+            self._check_tx_io(tx, spend_to, amount_duffs,  # no change
+                              test_fees[i],
+                              min_rounds=0)
+        assert min(test_fees) == 1000
+        assert max(test_fees) == 100011
+
+    def test_make_unsigned_transaction_no_ps_data(self):
+        """Regular tx with probable denom coins, must spent denoms last"""
+        w = self.wallet
+        psman = w.psman
+        config = self.config
+        addr_type = TYPE_ADDRESS
+        spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
+
+        # check different amounts and resulting fees
+        coins = w.get_spendable_coins(domain=None, config=config,
+                                      include_ps=True, no_ps_data=True)
+        test_amounts = [3.0, 5.0, 7.0, 10.98, 11.0, 13.0, 14.8]
+        for i in range(len(test_amounts)):
+            amount_duffs = to_duffs(test_amounts[i])
+            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+                                             no_ps_data=True)
+            if amount_duffs < 1098000000:
+                for txin in tx.inputs():
+                    assert txin['value'] not in PS_DENOMS_VALS
+            else:
+                found = 0
+                for txin in tx.inputs():
+                    found += 1 if txin['value'] in PS_DENOMS_VALS else 0
+                assert found > 0

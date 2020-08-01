@@ -464,18 +464,28 @@ class Abstract_Wallet(AddressSynchronizer):
         )
 
     def get_spendable_coins(self, domain, config, *, nonlocal_only=False,
-                            include_ps=False, min_rounds=None, main_ks=False):
+                            include_ps=False, min_rounds=None,
+                            no_ps_data=False, main_ks=False):
         confirmed_only = config.get('confirmed_only', False)
+        get_min_rounds = None if no_ps_data else min_rounds
         utxos = self.get_utxos(domain,
                                excluded_addresses=self.frozen_addresses,
                                mature_only=True,
                                confirmed_only=confirmed_only,
                                nonlocal_only=nonlocal_only,
                                include_ps=include_ps,
-                               min_rounds=min_rounds)
+                               min_rounds=get_min_rounds)
         utxos = [utxo for utxo in utxos if not self.is_frozen_coin(utxo)]
         if main_ks:
             utxos = [utxo for utxo in utxos if not utxo['is_ps_ks']]
+        if no_ps_data:
+            for utxo in utxos:
+                if self.psman.prob_denominate_tx_coin(utxo):
+                    utxo['ps_rounds'] = 0
+            if not include_ps and min_rounds is None:
+                utxos = [utxo for utxo in utxos if utxo['ps_rounds'] is None]
+            elif min_rounds is not None:
+                utxos = [utxo for utxo in utxos if utxo['ps_rounds'] == 0]
         if self.psman.enabled and include_ps and not self.psman.allow_others:
             utxos = [utxo for utxo in utxos
                      if utxo['ps_rounds'] != PSCoinRounds.OTHER]
@@ -764,10 +774,13 @@ class Abstract_Wallet(AddressSynchronizer):
 
     def make_unsigned_transaction(self, coins, outputs, config, fixed_fee=None,
                                   change_addr=None, is_sweep=False,
-                                  min_rounds=None,
+                                  min_rounds=None, no_ps_data=False,
                                   tx_type=0, extra_payload=b''):
         if min_rounds is not None:
-            self.psman.check_min_rounds(coins, min_rounds)
+            if no_ps_data:
+                self.psman.check_min_rounds(coins, 0)
+            else:
+                self.psman.check_min_rounds(coins, min_rounds)
 
         # check outputs
         i_max = None
@@ -807,6 +820,12 @@ class Abstract_Wallet(AddressSynchronizer):
                 tx = coin_chooser.make_tx(coins, [], outputs[:],
                                           change_addrs, fee_estimator,
                                           self.dust_threshold(),
+                                          tx_type=tx_type,
+                                          extra_payload=extra_payload)
+            elif no_ps_data:
+                coin_chooser = coinchooser.get_coin_chooser_privatesend()
+                tx = coin_chooser.make_tx(coins, outputs[:], fee_estimator,
+                                          min_rounds=0,
                                           tx_type=tx_type,
                                           extra_payload=extra_payload)
             else:
