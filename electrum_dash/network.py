@@ -1223,12 +1223,16 @@ class Network(Logger):
             self.logger.info('ignore excess protx diff request')
             return
         try:
+            res = None
             err = None
             s = self.interface.session
             res = await s.send_request('protx.diff', params, timeout=timeout)
+        except asyncio.TimeoutError:
+            err = f'request_protx_diff(), params={params}: timeout'
+        except asyncio.CancelledError:
+            err = f'request_protx_diff(), params={params}: cancelled'
         except Exception as e:
             err = f'request_protx_diff(), params={params}: {repr(e)}'
-            res = None
         self.trigger_callback('protx-diff', {'error': err,
                                              'result': res,
                                              'params': params})
