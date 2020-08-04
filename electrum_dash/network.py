@@ -659,6 +659,12 @@ class Network(Logger):
                 await self.switch_lagging_interface()
         await self.dash_net.set_parameters()
 
+    @log_exceptions
+    async def restart(self):
+        async with self.restart_lock:
+            await self._stop()
+            await self._start()
+
     def _set_oneserver(self, oneserver: bool):
         self.num_server = NUM_TARGET_CONNECTED_SERVERS if not oneserver else 0
         self.oneserver = bool(oneserver)
@@ -1520,6 +1526,27 @@ class Network(Logger):
             except socket.error:
                 continue
         return "%s:%s:%s::" % detected if detected else None
+
+    def proxy_is_tor(self, proxy):
+        if proxy is None:
+            return False
+        if hasattr(socket, "_socketobject"):
+            s = socket._socketobject(socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        proxy_host = proxy.get('host', None)
+        proxy_port = int(proxy.get('port', -1))
+        if proxy_host is None or proxy_port < 0:
+            return False
+        try:
+            s.settimeout(0.1)
+            s.connect((proxy_host, proxy_port))
+            s.send(b"GET\n")
+            if b"Tor is not an HTTP Proxy" in s.recv(1024):
+                return True
+        except socket.error:
+            return False
+        return False
 
     # methods used in scripts
     async def get_peers(self):
