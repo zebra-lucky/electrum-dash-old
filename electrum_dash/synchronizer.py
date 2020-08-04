@@ -261,7 +261,8 @@ class Synchronizer(SynchronizerBase):
         else:
             unsubscribed_addrs = set()
         for addr in (self.wallet.get_addresses() +
-                     self.wallet.psman.get_addresses()):
+                     self.wallet.psman.get_addresses() +
+                     self.wallet.db.get_multisig_imported_addrs()):
             if addr in unsubscribed_addrs:
                 continue
             await self._add_address(addr)

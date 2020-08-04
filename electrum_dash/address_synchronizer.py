@@ -204,10 +204,12 @@ class AddressSynchronizer(Logger):
             dash_net.unregister_callback(self.on_dash_islock)
             self.db.put('stored_height', self.get_local_height())
 
-    def add_address(self, address, ps_ks=False):
+    def add_address(self, address, ps_ks=False, multisig_imported=False):
         if not self.db.get_addr_history(address):
             if ps_ks:
                 self.db.ps_ks_hist[address] = []
+            elif multisig_imported:
+                self.db.multisig_imp_addr_hist[address] = []
             else:
                 self.db.history[address] = []
             self.set_up_to_date(False)

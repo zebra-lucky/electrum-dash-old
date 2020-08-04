@@ -340,7 +340,6 @@ class Commands:
                     raise Exception(f'Invalid Dash address {k} for {i} output')
                 val = int(Decimal(str(v))*COIN)
                 tx.add_outputs([TxOutput(TYPE_ADDRESS, k, val)])
-
         return tx.serialize()
 
     @command('wn')

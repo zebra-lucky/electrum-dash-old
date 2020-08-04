@@ -1159,7 +1159,11 @@ class PSManager(Logger):
         w = self.wallet
         address = w.get_txin_address(txin)
         if w.is_mine(address):
-            if self.is_ps_ks(address):
+            if w.is_multisig_imported_addr(address):
+                txin['address'] = address
+                txin['type'] = 'p2sh'
+                w.add_ms_imported_input_sig_info(txin, address)
+            elif self.is_ps_ks(address):
                 txin['address'] = address
                 txin['type'] = self.ps_ks_txin_type
                 self.add_input_sig_info(txin, address)

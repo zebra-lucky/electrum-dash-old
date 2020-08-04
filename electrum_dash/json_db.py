@@ -620,16 +620,22 @@ class JsonDB(Logger):
 
     @locked
     def get_history(self):
-        return list(self.history.keys()) + list(self.ps_ks_hist.keys())
+        return (list(self.history.keys()) +
+                list(self.ps_ks_hist.keys()) +
+                list(self.multisig_imp_addr_hist.keys()))
 
     def is_addr_in_history(self, addr):
         # does not mean history is non-empty!
-        return addr in self.history or addr in self.ps_ks_hist
+        return (addr in self.history
+                or addr in self.ps_ks_hist
+                or addr in self.multisig_imp_addr_hist)
 
     @locked
     def get_addr_history(self, addr):
         if self.get_address_index(addr, ps_ks=True):
             return self.ps_ks_hist.get(addr, [])
+        elif self.has_multisig_imported_addr(addr):
+            return self.multisig_imp_addr_hist.get(addr, [])
         elif self.get_address_index(addr):
             return self.history.get(addr, [])
         else:
@@ -639,6 +645,8 @@ class JsonDB(Logger):
     def set_addr_history(self, addr, hist):
         if self.get_address_index(addr, ps_ks=True):
             self.ps_ks_hist[addr] = hist
+        elif self.has_multisig_imported_addr(addr):
+            self.multisig_imp_addr_hist[addr] = hist
         else:
             self.history[addr] = hist
 
@@ -646,6 +654,8 @@ class JsonDB(Logger):
     def remove_addr_history(self, addr):
         if self.get_address_index(addr, ps_ks=True):
             self.ps_ks_hist.pop(addr, None)
+        elif self.has_multisig_imported_addr(addr):
+            self.multisig_imp_addr_hist.pop(addr, None)
         else:
             self.history.pop(addr, None)
 
@@ -1157,6 +1167,7 @@ class JsonDB(Logger):
         self.spent_outpoints = self.get_data_ref('spent_outpoints')
         self.history = self.get_data_ref('addr_history')  # address -> list of (txid, height)
         self.ps_ks_hist = self.get_data_ref('ps_ks_addr_hist')  # address -> list of (txid, height)
+        self.multisig_imp_addr_hist = self.get_data_ref('multisig_imp_addr_hist')  # address -> list of (txid, height)
         self.verified_tx = self.get_data_ref('verified_tx3')  # txid -> (height, timestamp, txpos, header_hash)
         self.islocks = self.get_data_ref('islocks')  # txid -> (height, timestamp)
         self.ps_txs = self.get_data_ref('ps_txs')  # txid -> (tx_type, completed)
@@ -1201,6 +1212,7 @@ class JsonDB(Logger):
         self.transactions.clear()
         self.history.clear()
         self.ps_ks_hist.clear()
+        self.multisig_imp_addr_hist.clear()
         self.verified_tx.clear()
         self.tx_fees.clear()
         self.clear_ps_data()
