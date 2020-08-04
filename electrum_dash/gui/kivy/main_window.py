@@ -124,6 +124,15 @@ class ElectrumWindow(App):
         self.tor_auto_on_bp = not self.electrum_config.get('tor_auto_on', True)
         self.electrum_config.set_key('tor_auto_on', self.tor_auto_on_bp, True)
 
+    fiat_bypass_tor_bp = BooleanProperty()
+    def toggle_fiat_bypass_tor(self, x):
+        self.fiat_bypass_tor_bp = \
+            not self.electrum_config.get('fiat_bypass_tor', False)
+        self.electrum_config.set_key('fiat_bypass_tor',
+                                     self.fiat_bypass_tor_bp, True)
+        coro = self.network.restart()
+        self.network.run_from_another_thread(coro)
+
     proxy_str = StringProperty('')
     def update_proxy_str(self, proxy: dict):
         mode = proxy.get('mode')

@@ -295,8 +295,7 @@ class NetworkChoiceLayout(object):
         self.tor_auto_on_cb.setChecked(self.config.get('tor_auto_on', True))
         self.tor_auto_on_cb.clicked.connect(self.use_tor_auto_on)
 
-        self.fiat_bypass_tor_cb = QCheckBox(_('Bypass Tor proxy for Fiat'
-                                              ' rates loading'))
+        self.fiat_bypass_tor_cb = QCheckBox(self.network.FIAT_BYPASS_TOR_MSG)
         fiat_bypass_tor = self.config.get('fiat_bypass_tor', False)
         self.fiat_bypass_tor_cb.setChecked(fiat_bypass_tor)
         self.fiat_bypass_tor_cb.clicked.connect(self.fiat_bypass_tor)
