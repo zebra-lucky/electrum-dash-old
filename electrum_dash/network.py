@@ -241,6 +241,7 @@ class Network(Logger):
     TOR_WARN_MSG_KIVY = f'{TOR_WARN_MSG} {TOR_DOCS_URI_KIVY}'
     TOR_WARN_MSG_TXT = f'{TOR_WARN_MSG}\n{TOR_DOCS_URI}'
     TOR_AUTO_ON_MSG = _('Detect Tor proxy on wallet startup')
+    FIAT_BYPASS_TOR_MSG = _('Bypass Tor proxy for Fiat rates loading')
 
     def __init__(self, config: SimpleConfig=None):
         global INSTANCE
