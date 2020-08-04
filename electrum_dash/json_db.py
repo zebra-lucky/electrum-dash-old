@@ -1096,6 +1096,26 @@ class JsonDB(Logger):
     def get_imported_address(self, addr):
         return self.imported_addresses.get(addr)
 
+    @modifier
+    def add_multisig_imported_addr(self, addr, d):
+        self.multisig_imported_addrs[addr] = d
+
+    @modifier
+    def rm_multisig_imported_addr(self, addr):
+        self.multisig_imported_addrs.pop(addr)
+
+    @locked
+    def has_multisig_imported_addr(self, addr):
+        return addr in self.multisig_imported_addrs
+
+    @locked
+    def get_multisig_imported_addrs(self):
+        return list(sorted(self.multisig_imported_addrs.keys()))
+
+    @locked
+    def get_multisig_imported_addr(self, addr):
+        return self.multisig_imported_addrs.get(addr)
+
     def load_addresses(self, wallet_type):
         """ called from Abstract_Wallet.__init__ """
         if wallet_type == 'imported':
@@ -1112,6 +1132,8 @@ class JsonDB(Logger):
                 self._addr_to_addr_index[addr] = (False, i)
             for i, addr in enumerate(self.change_addresses):
                 self._addr_to_addr_index[addr] = (True, i)
+        self.multisig_imported_addrs = \
+            self.get_data_ref('multisig_imported_addrs')
 
         # load ps_keystore addresses
         self.get_data_ref('ps_ks_addrs')

@@ -1992,6 +1992,52 @@ class Simple_Deterministic_Wallet(Simple_Wallet, Deterministic_Wallet):
     def derive_pubkeys(self, c, i):
         return self.keystore.derive_pubkey(c, i)
 
+    def import_multisig_addr(self, addr, redeem_script, num, pubkeys):
+        if not bitcoin.is_address(addr):
+            raise BitcoinException(_('invalid address'))
+        if self.db.has_multisig_imported_addr(addr):
+            raise BitcoinException(_('address already in wallet'))
+        my_addrs = []
+        for pubk in pubkeys:
+            my_addr = bitcoin.pubkey_to_address(self.txin_type, pubk)
+            if self.is_mine(my_addr):
+                my_addrs.append(my_addr)
+        if not my_addr:
+            raise Exception('for provided pubkeys wallet addresses not found')
+        addr_data = (redeem_script, num, my_addrs)
+        self.db.add_multisig_imported_addr(addr, addr_data)
+        self.add_address(addr)
+        self.storage.write()
+
+    def rm_multisig_addr(self, addr):
+        if not self.db.has_multisig_imported_addr(addr):
+            return
+        transactions_to_remove = set()  # only referred to by this addr
+        transactions_new = set()  # txs that are not only referred to by addr
+        with self.lock:
+            for hist_addr in self.db.get_history():
+                details = self.db.get_addr_history(hist_addr)
+                if addr == hist_addr:
+                    for tx_hash, height in details:
+                        transactions_to_remove.add(tx_hash)
+                else:
+                    for tx_hash, height in details:
+                        transactions_new.add(tx_hash)
+            transactions_to_remove -= transactions_new
+            self.db.remove_addr_history(addr)
+            for tx_hash in transactions_to_remove:
+                self.remove_transaction(tx_hash)
+                self.db.remove_tx_fee(tx_hash)
+                self.db.remove_verified_tx(tx_hash)
+                self.unverified_tx.pop(tx_hash, None)
+                self.db.remove_transaction(tx_hash)
+
+        self.set_label(addr, None)
+        self.remove_payment_request(addr, {})
+        self.set_frozen_state_of_addresses([addr], False)
+        self.db.rm_multisig_imported_addr(addr)
+        self.storage.write()
+
 
 
 

@@ -411,6 +411,26 @@ class Commands:
         return {'address':address, 'redeemScript':redeem_script}
 
     @command('w')
+    def addmultisigaddress(self, num, pubkeys, sort_pubkeys=False):
+        """Create multisig address and add it to wallet"""
+        assert isinstance(pubkeys, list), (type(num), type(pubkeys))
+        w = self.wallet
+        if w.wallet_type != 'standard':
+            raise Exception('wallet type must be standard')
+        keystore = w.db.get('keystore')
+        if not keystore or keystore.get('type') != 'bip32':
+            raise Exception('wallet keystore must be bip32 type')
+        for pubk in pubkeys:
+            if not pubk or not is_hex_str(pubk):
+                raise Exception('someone of pubkeys is not hex stirng')
+        if sort_pubkeys:
+            pubkeys.sort()
+        redeem_script = multisig_script(pubkeys, num)
+        address = bitcoin.hash160_to_p2sh(hash_160(bfh(redeem_script)))
+        w.import_multisig_addr(address, redeem_script, num, pubkeys)
+        return {'address':address, 'redeemScript':redeem_script}
+
+    @command('w')
     def freeze(self, address):
         """Freeze address. Freeze the funds at one of your wallet\'s addresses"""
         return self.wallet.set_frozen_state_of_addresses([address], True)
@@ -956,6 +976,7 @@ command_options = {
     'from_height': (None, "Only show transactions that confirmed after given block height"),
     'to_height':   (None, "Only show transactions that confirmed before given block height"),
     'cmd_opts':    (None, "command options as JSON object"),
+    'sort_pubkeys':(None, "Sort provided pubkeys before operation"),
 }
 
 

@@ -213,6 +213,38 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         assert tx.tx_type == 0
         assert tx.locktime == 0
 
+    def test_addmultisigaddress(self):
+        w = self.wallet
+        cmds = Commands(config=self.config, wallet=w, network=None)
+        myaddr = w.get_unused_addresses()[0]
+        mypubk = w.get_public_key(myaddr)
+        pubkeys = ['026ca55022fea6b2fe812786760c1ced'
+                   'ea68fef642f0cbbf690388e8c1ae20e7a9',
+                   '03adc6c1b3ead1e7c1ea601984900329'
+                   '230ad282fb1b356a4c8e7b416c6e15d8e9', mypubk]
+        res1 = cmds.addmultisigaddress(2, pubkeys)
+        msaddr1 = '8xcxHMnsmW9zQHmi8cb6MgyvNsp1E1bAeS'
+        redeem_s1 = ('5221026ca55022fea6b2fe812786760c1cedea68fef642f0cbbf690'
+                     '388e8c1ae20e7a92103adc6c1b3ead1e7c1ea601984900329230ad2'
+                     '82fb1b356a4c8e7b416c6e15d8e92102a60991d30026048b796161d'
+                     'd0437cd20e12e7f99b9665ca81bc9594904b2fe2f53ae')
+        assert res1 == {'address': msaddr1, 'redeemScript': redeem_s1}
+
+        res2 = cmds.addmultisigaddress(2, pubkeys, True)
+        msaddr2 = '8ffQd3r3qT9PQ2knf5nV5KbQihKvNMYrFQ'
+        redeem_s2 = ('5221026ca55022fea6b2fe812786760c1cedea68fef642f0cbbf690'
+                     '388e8c1ae20e7a92102a60991d30026048b796161dd0437cd20e12e'
+                     '7f99b9665ca81bc9594904b2fe2f2103adc6c1b3ead1e7c1ea60198'
+                     '4900329230ad282fb1b356a4c8e7b416c6e15d8e953ae')
+        assert res2 == {'address': msaddr2, 'redeemScript': redeem_s2}
+
+        assert w.db.get_multisig_imported_addrs() == sorted([msaddr1, msaddr2])
+
+        data1 = w.db.get_multisig_imported_addr(msaddr1)
+        data2 = w.db.get_multisig_imported_addr(msaddr2)
+        assert data1 == (redeem_s1, 2, [myaddr])
+        assert data2 == (redeem_s2, 2, [myaddr])
+
     def with_wallet2(func):
         def setup_wallet2(self, *args, **kwargs):
             tests_path = os.path.dirname(os.path.abspath(__file__))
