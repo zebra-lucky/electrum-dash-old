@@ -966,6 +966,7 @@ class Abstract_Wallet(AddressSynchronizer):
         raise NotImplementedError()  # implemented by subclasses
 
     def add_input_info(self, txin):
+        raise NotImplementedError()  # implemented by psman.add_input_info
         address = self.get_txin_address(txin)
         if self.is_mine(address):
             txin['address'] = address

@@ -626,6 +626,7 @@ class Transaction:
         self.raw = None
 
     def add_inputs_info(self, wallet):
+        raise NotImplementedError()  # implemented by psman.add_tx_inputs_info
         if self.is_complete():
             return
         for txin in self.inputs():

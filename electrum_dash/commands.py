@@ -286,7 +286,7 @@ class Commands:
             self.wallet.sign_transaction(tx, password)
         return tx.as_dict()
 
-    @command('')
+    @command('w')
     def createrawtransaction(self, inputs_json, outputs_json, locktime=None):
         """Create a tx spending inputs_json and creating outputs_json,
            returns hex-encoded raw transaction"""
@@ -325,7 +325,8 @@ class Commands:
                             'sequence': seq_num, 'type': 'unknown',
                             'scriptSig': '',
                             'x_pubkeys': [], 'pubkeys': [], 'signatures': []}])
-
+            for txin in tx.inputs():
+                self.wallet.psman.add_input_info(txin)
         for i, (k, v) in enumerate(outputs_json.items()):
             if k == 'data':
                 try:

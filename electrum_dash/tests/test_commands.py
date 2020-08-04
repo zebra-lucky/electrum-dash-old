@@ -166,13 +166,13 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         shutil.rmtree(self.user_dir)
 
     def test_createrawtransaction(self):
-        inputs = [{'txid': '0cce62d61ec87ad3e391e8cd752df62e'
-                           '0c952ce45f52885d6d10988e02794060',
+        inputs = [{'txid': '18c45043a0a24b1a2dc621733b08c220'
+                           'd696e0a63b786f4f08206a778cebba8e',
                    'vout': 5}]
         outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.01,
                    'yZYxxqJNR6fJ3fAT4Kyhye3A7G9kC19B9q': '0.02',
                    'data': '0102030405060708090a0b0c0d0e0f'}
-        cmds = Commands(config=self.config, wallet=None, network=None)
+        cmds = Commands(config=self.config, wallet=self.wallet, network=None)
         res = cmds.createrawtransaction(inputs, outputs)
         tx = Transaction(res)
         assert len(tx.inputs()) == 1
@@ -181,6 +181,23 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         assert in0['prevout_hash'] == inputs[0]['txid']
         assert in0['prevout_n'] == inputs[0]['vout']
         assert in0['sequence'] == 0xffffffff
+        assert in0['type'] == 'p2pkh'
+        assert in0['address'] == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+        assert in0['num_sig'] == 1
+        assert in0['scriptSig'] == ('01ff4c53ff043587cf03ad611a5780000000b8a1'
+                                    'b914a2fb35d00a57e9a7773ab382f4cde4001e99'
+                                    '8066ba63fc6e0e87cf2302eae8092d829c2290df'
+                                    '88271e45b5aec540a5951155cec8929359bacb04'
+                                    'acacbb01000000')
+        assert in0['x_pubkeys'] == ['ff043587cf03ad611a5780000000b8a1b914a2fb'
+                                    '35d00a57e9a7773ab382f4cde4001e998066ba63'
+                                    'fc6e0e87cf2302eae8092d829c2290df88271e45'
+                                    'b5aec540a5951155cec8929359bacb04acacbb01'
+                                    '000000']
+        assert in0['pubkeys'] == ['03e8f307174144ef506fe6e5173da6a8'
+                                  '7d0864c0d435cda8029ede0df060a5026d']
+        assert in0['signatures'] == [None]
+
         out0 = tx.outputs()[0]
         out1 = tx.outputs()[1]
         out2 = tx.outputs()[2]
