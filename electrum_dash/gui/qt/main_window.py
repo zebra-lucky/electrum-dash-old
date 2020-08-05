@@ -431,6 +431,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
     def on_ps_signal(self, event, args):
         psman = self.wallet.psman
         is_mixing = (psman.state in psman.mixing_running_states)
+        is_waiting = psman.is_waiting if is_mixing else False
         if event == 'ps-data-changes':
             wallet = args[0]
             if wallet == self.wallet:
@@ -439,10 +440,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             wallet = args[0]
             if wallet == self.wallet:
                 self.need_update.set()
-        elif event == 'ps-state-changes':
-            wallet, msg, msg_type = args
+        elif event in ['ps-state-changes', 'ps-wfl-changes']:
+            wallet, msg, msg_type = (*args, None, None)[:3]
             if wallet == self.wallet:
-                self.update_ps_status_btn(is_mixing)
+                self.update_ps_status_btn(is_mixing, is_waiting)
                 if msg:
                     parent = self
                     d = find_ps_dialog(self)
@@ -485,11 +486,18 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         icon = (net.dash_net.status_icon() if net else 'dash_net_off.png')
         self.dash_net_button.setIcon(read_QIcon(icon))
 
-    def update_ps_status_btn(self, is_mixing):
-        icon = 'privatesend_active.png' if is_mixing else 'privatesend.png'
+    def update_ps_status_btn(self, is_mixing, is_waiting):
+        if not is_mixing:
+            icon = 'privatesend.png'
+            status = _('Is Idle')
+        elif not is_waiting:
+            icon = 'privatesend_active.png'
+            status = _('Is Mixing')
+        else:
+            icon = 'privatesend_waiting.png'
+            status = _('Is Waiting')
         self.ps_button.setIcon(read_QIcon(icon))
         ps = _('PrivateSend')
-        status = _('Is Mixing') if is_mixing else _('Is Idle')
         tooltip = f'{ps} {status}'
         self.ps_button.setToolTip(tooltip)
 
@@ -2610,7 +2618,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.ps_button = StatusBarButton(read_QIcon('privatesend.png'),
                                          '',
                                          lambda: show_ps_dialog_or_wizard(self))
-        self.update_ps_status_btn(False)
+        self.update_ps_status_btn(False, False)
         sb.addPermanentWidget(self.ps_button)
 
         run_hook('create_status_bar', sb)
@@ -3758,7 +3766,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.address_list.am.get_data_thread.stop()
         self.utxo_list.cm.get_data_thread.stop()
         psman = self.wallet.psman
-        if psman.state in psman.mixing_running_states:
+        if psman.state in psman.mixing_running_states and not psman.is_waiting:
             if not self.question(psman.WAIT_MIXING_STOP_MSG):
                 event.ignore()
                 return

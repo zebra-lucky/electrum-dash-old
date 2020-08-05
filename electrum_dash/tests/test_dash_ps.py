@@ -760,6 +760,30 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.mix_rounds = 5
         assert psman.mixing_progress() == 31
 
+    def test_is_waiting(self):
+        psman = self.wallet.psman
+        assert not psman.is_waiting
+        psman.state = PSStates.Mixing
+        assert psman.is_waiting
+
+        wfl = PSTxWorkflow(uuid='uuid')
+        psman.set_new_denoms_wfl(wfl)
+        assert not psman.is_waiting
+        psman.clear_new_denoms_wfl()
+        assert psman.is_waiting
+
+        wfl = PSTxWorkflow(uuid='uuid')
+        psman.set_new_collateral_wfl(wfl)
+        assert not psman.is_waiting
+        psman.clear_new_collateral_wfl()
+        assert psman.is_waiting
+
+        wfl = PSDenominateWorkflow(uuid='uuid')
+        psman.set_denominate_wfl(wfl)
+        assert not psman.is_waiting
+        psman.clear_denominate_wfl('uuid')
+        assert psman.is_waiting
+
     def test_get_change_addresses_for_new_transaction(self):
         w = self.wallet
         psman = w.psman

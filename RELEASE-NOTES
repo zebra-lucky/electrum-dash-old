@@ -1,6 +1,7 @@
 # Release 3.3.8.7
 
  * PrivateSend: support mixing on hardware wallets (using ps_keystore)
+ * PrivateSend: indicate waiting state (all mixed, wait for more funds)
  * qt: fix exported files file mode
  * qt: allow hide warning for watch-only wallet
  * add "pay:" scheme to support anypayinc.com
