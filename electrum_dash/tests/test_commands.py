@@ -259,8 +259,8 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
 
         data1 = w.db.get_multisig_imported_addr(msaddr1)
         data2 = w.db.get_multisig_imported_addr(msaddr2)
-        assert data1 == (redeem_s1, 2, 3, [myaddr])
-        assert data2 == (redeem_s2, 2, 3, [myaddr])
+        assert data1 == (redeem_s1, 2, pubkeys, myaddr)
+        assert data2 == (redeem_s2, 2, sorted(pubkeys), myaddr)
 
     def with_wallet2(func):
         def setup_wallet2(self, *args, **kwargs):

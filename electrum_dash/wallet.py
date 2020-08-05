@@ -357,25 +357,30 @@ class Abstract_Wallet(AddressSynchronizer):
                     self.psman.get_address_index(address),
                     self.is_multisig_imported_addr(address)])
 
-    def add_ms_imported_input_sig_info(self, txin, addr):
+    def add_multisig_imported_input_sig_info(self, txin, addr):
         #derivation = self.get_address_index(address)
         #x_pubkey = self.keystore.get_xpubkey(*derivation)
         #txin['x_pubkeys'] = [x_pubkey]
         #txin['signatures'] = [None]
         #txin['num_sig'] = 1
 
-        redeem_script, m, n, my_addrs = \
+        redeem_script, m, pubkeys, my_addr = \
             self.db.get_multisig_imported_addr(addr)
-        my_addr = my_addrs[0]
         # x_pubkeys are not sorted here because it would be too slow
         # they are sorted in transaction.get_sorted_pubkeys
         # pubkeys is set to None to signal that x_pubkeys are unsorted
-        if self.psman.is_ps_ks(my_addr):
-            derivation = self.psman.get_address_index(my_addr)
-        else:
-            derivation = self.get_address_index(my_addr)
-        x_pubkeys_expected = [k.get_xpubkey(*derivation)
-                              for k in self.get_keystores()]
+        x_pubkeys_expected = []
+        for pubk in pubkeys:
+            my_addr = bitcoin.pubkey_to_address(self.txin_type, pubk)
+            if self.is_mine(my_addr):
+                if self.psman.is_ps_ks(my_addr):
+                    derivation = self.psman.get_address_index(my_addr)
+                else:
+                    derivation = self.get_address_index(my_addr)
+                x_pubkeys_expected += [k.get_xpubkey(*derivation)
+                                       for k in self.get_keystores()]
+            else:
+                x_pubkeys_expected += [pubk]
         x_pubkeys_actual = txin.get('x_pubkeys')
         # if 'x_pubkeys' is already set correctly (ignoring order, as above), leave it.
         # otherwise we might delete signatures
@@ -385,7 +390,7 @@ class Abstract_Wallet(AddressSynchronizer):
         txin['x_pubkeys'] = x_pubkeys_expected
         txin['pubkeys'] = None
         # we need n place holders
-        txin['signatures'] = [None] * n
+        txin['signatures'] = [None] * len(x_pubkeys_expected)
         txin['num_sig'] = m
 
     def is_change(self, address):
@@ -2043,8 +2048,7 @@ class Simple_Deterministic_Wallet(Simple_Wallet, Deterministic_Wallet):
         if len(my_addrs) > 1:
             raise Exception('for provided pubkeys multiple'
                             ' wallet addresses found')
-        n = len(pubkeys)
-        addr_data = (redeem_script, m, n, my_addrs[0])
+        addr_data = (redeem_script, m, pubkeys, my_addrs[0])
         self.db.add_multisig_imported_addr(addr, addr_data)
         self.add_address(addr, multisig_imported=True)
         self.storage.write()
