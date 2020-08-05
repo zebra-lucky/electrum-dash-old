@@ -936,6 +936,17 @@ class PSManager(Logger):
     def state(self):
         return self._state
 
+    @property
+    def is_waiting(self):
+        is_mixing = (self.state in self.mixing_running_states)
+        active_wfls_cnt = 0
+        active_wfls_cnt += len(self.denominate_wfl_list)
+        if self.new_denoms_wfl:
+            active_wfls_cnt += 1
+        if self.new_collateral_wfl:
+            active_wfls_cnt += 1
+        return is_mixing and active_wfls_cnt == 0
+
     @state.setter
     def state(self, state):
         self._state = state
