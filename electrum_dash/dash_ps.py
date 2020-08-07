@@ -2899,35 +2899,39 @@ class PSManager(Logger):
         in_cnt = len(coins)
         approx_val = need_val - old_denoms_val
         outputs_amounts = self.find_denoms_approx(approx_val)
-        if coins_val >= self._calc_total_need_val(in_cnt, outputs_amounts,
-                                                  fee_per_kb):
+        total_need_val, outputs_amounts = \
+            self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
+        if coins_val >= total_need_val:
             return outputs_amounts
 
+        # not enough funds to mix keep amount, approx amount that can be mixed
         approx_val = coins_val
         while True:
             if approx_val < CREATE_COLLATERAL_VAL:
                 return []
             outputs_amounts = self.find_denoms_approx(approx_val)
-            if coins_val >= self._calc_total_need_val(in_cnt, outputs_amounts,
-                                                      fee_per_kb):
+            total_need_val, outputs_amounts = \
+                self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
+            if coins_val >= total_need_val:
                 return outputs_amounts
             else:
                 approx_val -= MIN_DENOM_VAL
 
     def _calc_total_need_val(self, txin_cnt, outputs_amounts, fee_per_kb):
-        new_denoms_val = sum([sum(a) for a in outputs_amounts])
-        new_denoms_cnt = sum([len(a) for a in outputs_amounts])
+        res_outputs_amounts = copy.deepcopy(outputs_amounts)
+        new_denoms_val = sum([sum(a) for a in res_outputs_amounts])
+        new_denoms_cnt = sum([len(a) for a in res_outputs_amounts])
 
         # calc future new collaterals count and value
         new_collateral_cnt = self.calc_need_sign_cnt(new_denoms_cnt)[2]
-        if not self.ps_collateral_cnt and outputs_amounts:
+        if not self.ps_collateral_cnt and res_outputs_amounts:
             new_collateral_cnt -= 1
-            outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
+            res_outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
         new_collaterals_val = CREATE_COLLATERAL_VAL * new_collateral_cnt
 
         # calc new denoms fee
         new_denoms_fee = 0
-        for i, amounts in enumerate(outputs_amounts):
+        for i, amounts in enumerate(res_outputs_amounts):
             if i == 0:  # use all coins as inputs, add change output
                 new_denoms_fee += calc_tx_fee(txin_cnt, len(amounts) + 1,
                                               fee_per_kb, max_size=True)
@@ -2940,8 +2944,9 @@ class PSManager(Logger):
         new_collaterals_fee = new_collateral_cnt * new_collateral_fee
 
         # have coins enough to create new denoms and future new collaterals
-        return (new_denoms_val + new_denoms_fee +
-                new_collaterals_val + new_collaterals_fee)
+        total_need_val = (new_denoms_val + new_denoms_fee +
+                          new_collaterals_val + new_collaterals_fee)
+        return total_need_val, res_outputs_amounts
 
     def _calc_denoms_amounts_fee(self, coins_cnt, denoms_amounts, fee_per_kb):
         txs_fee = 0
@@ -3088,9 +3093,9 @@ class PSManager(Logger):
             ps_ks_coins_val = sum([c['value'] for c in coins if c['is_ps_ks']])
 
             outputs_amounts = self.calc_need_denoms_amounts()
-            total_need_val = self._calc_total_need_val(len(coins),
-                                                       outputs_amounts,
-                                                       fee_per_kb)
+            in_cnt = len(coins)
+            total_need_val, outputs_amounts = \
+                self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
             transfer_tx_fee = calc_tx_fee(len(main_ks_coins), 1,
                                           fee_per_kb, max_size=True)
             if coins_val < total_need_val + transfer_tx_fee:  # transfer all
