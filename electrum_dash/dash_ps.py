@@ -2721,6 +2721,7 @@ class PSManager(Logger):
                 await asyncio.sleep(1)
 
     async def _maintain_collateral_amount(self):
+        w = self.wallet
         kp_wait_state = KPStates.Ready if self.need_password() else None
 
         while not self.main_taskgroup.closed():
@@ -2731,6 +2732,12 @@ class PSManager(Logger):
             elif (not self._not_enough_funds
                     and not self.ps_collateral_cnt
                     and not self.calc_need_denoms_amounts(use_cache=True)):
+                coins = w.get_utxos(None,
+                                    excluded_addresses=w.frozen_addresses)
+                coins = [c for c in coins if not w.is_frozen_coin(c)]
+                if not coins:
+                    await asyncio.sleep(5)
+                    continue
                 if not self.check_llmq_ready():
                     self.logger.info(_('New collateral workflow: {}')
                                      .format(self.LLMQ_DATA_NOT_READY))
@@ -2745,6 +2752,7 @@ class PSManager(Logger):
             await asyncio.sleep(0.25)
 
     async def _maintain_denoms(self):
+        w = self.wallet
         kp_wait_state = KPStates.Ready if self.need_password() else None
 
         while not self.main_taskgroup.closed():
@@ -2754,6 +2762,12 @@ class PSManager(Logger):
                     await self.cleanup_new_denoms_wfl()
             elif (not self._not_enough_funds
                     and self.calc_need_denoms_amounts(use_cache=True)):
+                coins = w.get_utxos(None,
+                                    excluded_addresses=w.frozen_addresses)
+                coins = [c for c in coins if not w.is_frozen_coin(c)]
+                if not coins:
+                    await asyncio.sleep(5)
+                    continue
                 if not self.check_llmq_ready():
                     self.logger.info(_('New denoms workflow: {}')
                                      .format(self.LLMQ_DATA_NOT_READY))
