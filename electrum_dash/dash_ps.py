@@ -2951,8 +2951,8 @@ class PSManager(Logger):
                             mature_only=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
         coins_val = sum([c['value'] for c in coins])
-        if coins_val < MIN_DENOM_VAL:  # no coins to create denoms
-            return []
+        if coins_val < MIN_DENOM_VAL and not on_keep_amount:
+            return []  # no coins to create denoms
 
         in_cnt = len(coins)
         approx_val = need_val - old_denoms_val

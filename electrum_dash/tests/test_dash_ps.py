@@ -1845,9 +1845,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         two_dash_amnts_val = 200142001
 
         res = psman.calc_need_denoms_amounts()
-        assert sum([sum(amnts)for amnts in res])== two_dash_amnts_val
+        assert sum([sum(amnts)for amnts in res]) == two_dash_amnts_val
         res = psman.calc_need_denoms_amounts(on_keep_amount=True)
-        assert sum([sum(amnts)for amnts in res])== two_dash_amnts_val
+        assert sum([sum(amnts)for amnts in res]) == two_dash_amnts_val
 
         # test with spendable amount < keep_amount
         coins0 = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
@@ -1862,9 +1862,18 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert sum([c['value'] for c in coins]) == 50000000  # 0.5 Dash
 
         res = psman.calc_need_denoms_amounts()
-        assert sum([sum(amnts)for amnts in res])== 49840498
+        assert sum([sum(amnts)for amnts in res]) == 49840498
         res = psman.calc_need_denoms_amounts(on_keep_amount=True)
-        assert sum([sum(amnts)for amnts in res])== two_dash_amnts_val
+        assert sum([sum(amnts)for amnts in res]) == two_dash_amnts_val
+
+        # test with zero spendable amount
+        w.set_frozen_state_of_coins(coins, True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+
+        res = psman.calc_need_denoms_amounts()
+        assert sum([sum(amnts)for amnts in res]) == 0
+        res = psman.calc_need_denoms_amounts(on_keep_amount=True)
+        assert sum([sum(amnts)for amnts in res]) == two_dash_amnts_val
 
     def test_calc_tx_size(self):
         # average sizes
