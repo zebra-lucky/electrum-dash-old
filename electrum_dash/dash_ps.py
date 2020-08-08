@@ -184,11 +184,15 @@ class PSStates(IntEnum):
 
 
 # Keypairs cache types
+KP_INCOMING = 'incoming'            # future incoming funds on main keystore
 KP_SPENDABLE = 'spendable'          # regular utxos
 KP_PS_SPENDABLE = 'ps_spendable'    # ps_denoms/ps_collateral utxos
 KP_PS_COINS = 'ps_coins'            # output addressess for denominate tx
 KP_PS_CHANGE = 'ps_change'          # output addressess for pay collateral tx
-KP_ALL_TYPES = [KP_SPENDABLE, KP_PS_SPENDABLE, KP_PS_COINS, KP_PS_CHANGE]
+KP_ALL_TYPES = [KP_INCOMING, KP_SPENDABLE,
+                KP_PS_SPENDABLE, KP_PS_COINS, KP_PS_CHANGE]
+KP_MAX_INCOMING_TXS = 5             # max count of txs to split on denoms
+                                    # need to calc keypairs count to cache
 
 
 # Keypairs cache states
@@ -1985,9 +1989,25 @@ class PSManager(Logger):
         return need_sign_cnt, need_sign_change_cnt, new_collateral_cnt
 
     def calc_need_new_keypairs_cnt(self):
-        new_denoms_amounts = self.calc_need_denoms_amounts()
-        new_denoms_cnt = sum([len(a) for a in new_denoms_amounts])
-        return self.calc_need_sign_cnt(new_denoms_cnt)[0:2]
+        new_denoms_amounts_real = self.calc_need_denoms_amounts()
+        new_denoms_cnt_real = sum([len(a) for a in new_denoms_amounts_real])
+        new_denoms_val_real = sum([sum(a) for a in new_denoms_amounts_real])
+
+        new_denoms_amounts = self.calc_need_denoms_amounts(on_keep_amount=True)
+        new_denoms_val = sum([sum(a) for a in new_denoms_amounts])
+        if new_denoms_val > new_denoms_val_real:
+            part_val = ceil(new_denoms_val / KP_MAX_INCOMING_TXS)
+            part_amounts = self.find_denoms_approx(part_val)
+            part_amounts_cnt = sum([len(a) for a in part_amounts])
+            need_sign_cnt, need_sign_change_cnt = \
+                self.calc_need_sign_cnt(part_amounts_cnt)[0:2]
+            need_sign_cnt *= KP_MAX_INCOMING_TXS
+            need_sign_change_cnt *= KP_MAX_INCOMING_TXS
+            return need_sign_cnt, need_sign_change_cnt, True
+        else:
+            need_sign_cnt, need_sign_change_cnt = \
+                self.calc_need_sign_cnt(new_denoms_cnt_real)[0:2]
+            return need_sign_cnt, need_sign_change_cnt, False
 
     def check_need_new_keypairs(self):
         w = self.wallet
@@ -2017,7 +2037,13 @@ class PSManager(Logger):
                 if c['address'] not in self._keypairs_cache[KP_SPENDABLE]:
                     return True, prev_kp_state
 
-            sign_cnt, sign_change_cnt = self.calc_need_new_keypairs_cnt()
+            sign_cnt, sign_change_cnt, small_mix_funds = \
+                self.calc_need_new_keypairs_cnt()
+
+            # check cache for incoming addresses on small mix funds
+            if small_mix_funds and len(self._keypairs_cache[KP_INCOMING]) < 10:
+                return True, prev_kp_state
+
             # check spendable ps coins keys (already saved denoms/collateral)
             for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
                 ps_rounds = c['ps_rounds']
@@ -2056,7 +2082,12 @@ class PSManager(Logger):
         if not self._cache_kp_ps_spendable(password):
             return
 
-        kp_left, kp_chg_left = self.calc_need_new_keypairs_cnt()
+        kp_left, kp_chg_left, small_mix_funds = \
+            self.calc_need_new_keypairs_cnt()
+
+        if small_mix_funds:
+            self._cache_kp_incoming(password)
+
         kp_left, kp_chg_left = self._cache_kp_ps_reserved(password,
                                                           kp_left, kp_chg_left)
         if kp_left is None:
@@ -2082,6 +2113,32 @@ class PSManager(Logger):
         with self.keypairs_state_lock:
             self.keypairs_state = KPStates.Ready
         self.logger.info('Keyparis Cache Done')
+
+    def _cache_kp_incoming(self, password):
+        w = self.wallet
+        first_recv_index = self.first_unused_index(for_change=False,
+                                                   force_main_ks=True)
+        ps_incoming_cache = self._keypairs_cache[KP_INCOMING]
+        cached = 0
+        ri = first_recv_index
+        while cached < KP_MAX_INCOMING_TXS:
+            if self.state != PSStates.Mixing:
+                self._cleanup_unfinished_keypairs_cache()
+                return
+            sequence = [0, ri]
+            x_pubkey = w.keystore.get_xpubkey(*sequence)
+            _, addr = xpubkey_to_address(x_pubkey)
+            ri += 1
+            if w.is_used(addr):
+                continue
+            if addr in ps_incoming_cache:
+                continue
+            sec = w.keystore.get_private_key(sequence, password)
+            ps_incoming_cache[addr] = (x_pubkey, sec)
+            cached += 1
+        self.logger.info(f'Cached {cached} keys'
+                         f' of {KP_INCOMING} type')
+        self.postpone_notification('ps-keypairs-changes', self.wallet)
 
     def _cache_kp_spendable(self, password):
         '''Cache spendable regular coins keys'''
@@ -2807,9 +2864,9 @@ class PSManager(Logger):
                 result.append(addr)
         return result
 
-    def first_unused_index(self, for_change=False):
+    def first_unused_index(self, for_change=False, force_main_ks=False):
         w = self.wallet
-        ps_ks = self.ps_keystore is not None
+        ps_ks = self.ps_keystore and not force_main_ks
         with w.lock:
             if for_change:
                 unused = (self.get_unused_addresses(for_change) if ps_ks
@@ -2869,7 +2926,8 @@ class PSManager(Logger):
             self.logger.debug(f'Remove {addr} from synchronizer')
             w.synchronizer.remove_addr(addr)
 
-    def calc_need_denoms_amounts(self, coins=None, use_cache=False):
+    def calc_need_denoms_amounts(self, coins=None, use_cache=False,
+                                 on_keep_amount=False):
         w = self.wallet
         fee_per_kb = self.config.fee_per_kb()
         if fee_per_kb is None:
@@ -2901,7 +2959,7 @@ class PSManager(Logger):
         outputs_amounts = self.find_denoms_approx(approx_val)
         total_need_val, outputs_amounts = \
             self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
-        if coins_val >= total_need_val:
+        if on_keep_amount or coins_val >= total_need_val:
             return outputs_amounts
 
         # not enough funds to mix keep amount, approx amount that can be mixed
