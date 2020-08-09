@@ -51,7 +51,7 @@ from .bitcoin import (COIN, TYPE_ADDRESS, is_address, address_to_script,
 from .crypto import sha256d
 from . import keystore
 from .dash_tx import SPEC_TX_NAMES, PSCoinRounds
-from .keystore import load_keystore, Hardware_KeyStore
+from .keystore import load_keystore, Hardware_KeyStore, xpubkey_to_pubkey
 from .util import multisig_type
 from .storage import STO_EV_PLAINTEXT, STO_EV_USER_PW, STO_EV_XPUB_PW, WalletStorage
 from . import transaction, bitcoin, coinchooser, paymentrequest, ecc, bip32
@@ -370,6 +370,7 @@ class Abstract_Wallet(AddressSynchronizer):
         # they are sorted in transaction.get_sorted_pubkeys
         # pubkeys is set to None to signal that x_pubkeys are unsorted
         x_pubkeys_expected = []
+        pubkeys_expected = []
         for pubk in pubkeys:
             my_addr = bitcoin.pubkey_to_address(self.txin_type, pubk)
             if self.is_mine(my_addr):
@@ -379,9 +380,13 @@ class Abstract_Wallet(AddressSynchronizer):
                     derivation = self.get_address_index(my_addr)
                 x_pubkeys_expected += [k.get_xpubkey(*derivation)
                                        for k in self.get_keystores()]
+                pubkeys_expected += [xpubkey_to_pubkey(x_pubkey)
+                                     for x_pubkey in x_pubkeys_expected]
             else:
                 x_pubkeys_expected += [pubk]
+                pubkeys_expected += [pubk]
         x_pubkeys_actual = txin.get('x_pubkeys')
+        pubkeys_actual = txin.get('pubkeys')
         # if 'x_pubkeys' is already set correctly (ignoring order, as above), leave it.
         # otherwise we might delete signatures
         if (x_pubkeys_actual
@@ -389,6 +394,9 @@ class Abstract_Wallet(AddressSynchronizer):
             return
         txin['x_pubkeys'] = x_pubkeys_expected
         txin['pubkeys'] = None
+        if (pubkeys_actual
+                and set(pubkeys_actual) == set(pubkeys_expected)):
+            return
         # we need n place holders
         txin['signatures'] = [None] * len(x_pubkeys_expected)
         txin['num_sig'] = m
