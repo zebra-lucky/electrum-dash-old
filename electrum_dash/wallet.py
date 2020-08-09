@@ -358,12 +358,6 @@ class Abstract_Wallet(AddressSynchronizer):
                     self.is_multisig_imported_addr(address)])
 
     def add_multisig_imported_input_sig_info(self, txin, addr):
-        #derivation = self.get_address_index(address)
-        #x_pubkey = self.keystore.get_xpubkey(*derivation)
-        #txin['x_pubkeys'] = [x_pubkey]
-        #txin['signatures'] = [None]
-        #txin['num_sig'] = 1
-
         redeem_script, m, pubkeys, my_addr = \
             self.db.get_multisig_imported_addr(addr)
         # x_pubkeys are not sorted here because it would be too slow
@@ -371,6 +365,7 @@ class Abstract_Wallet(AddressSynchronizer):
         # pubkeys is set to None to signal that x_pubkeys are unsorted
         x_pubkeys_expected = []
         pubkeys_expected = []
+        txin['multisig_imported'] = True
         for pubk in pubkeys:
             my_addr = bitcoin.pubkey_to_address(self.txin_type, pubk)
             if self.is_mine(my_addr):
