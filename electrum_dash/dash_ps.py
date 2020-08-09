@@ -2596,6 +2596,7 @@ class PSManager(Logger):
                             and self.is_hw_ks):
                         await group.spawn(self._prepare_funds_from_hw_wallet())
                     await group.spawn(self._make_keypairs_cache(password))
+                    await group.spawn(self._check_not_enough_funds())
                     await group.spawn(self._check_all_mixed())
                     await group.spawn(self._maintain_pay_collateral_tx())
                     await group.spawn(self._maintain_collateral_amount())
@@ -2684,6 +2685,13 @@ class PSManager(Logger):
             if self.all_mixed:
                 await self.stop_mixing_from_async_thread(self.ALL_MIXED_MSG,
                                                          'inf')
+
+    async def _check_not_enough_funds(self):
+        while not self.main_taskgroup.closed():
+            if self._not_enough_funds:
+                await asyncio.sleep(30)
+                self._not_enough_funds = False
+            await asyncio.sleep(5)
 
     async def _maintain_pay_collateral_tx(self):
         kp_wait_state = KPStates.Ready if self.need_password() else None
