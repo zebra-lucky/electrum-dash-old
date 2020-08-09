@@ -214,11 +214,13 @@ class AddressModel(QAbstractItemModel, Logger):
 
         if show_ps_ks in [0, 2]:
             if show_change == 1:
-                all_addrs = w.get_receiving_addresses()
+                all_addrs = (w.get_receiving_addresses() +
+                             w.db.get_multisig_imported_addrs())
             elif show_change == 2:
                 all_addrs = w.get_change_addresses()
             else:
-                all_addrs = w.get_addresses()
+                all_addrs = (w.get_addresses() +
+                             w.db.get_multisig_imported_addrs())
         else:
             all_addrs = []
         all_addrs += ps_ks_addrs
@@ -252,7 +254,10 @@ class AddressModel(QAbstractItemModel, Logger):
             if is_ps_ks:
                 is_beyond_limit = w.psman.is_beyond_limit(addr)
             else:
-                is_beyond_limit = w.is_beyond_limit(addr)
+                if w.is_multisig_imported_addr(addr):
+                    is_beyond_limit = False
+                else:
+                    is_beyond_limit = w.is_beyond_limit(addr)
             addr_items.append({
                 'ix': i,
                 'addr_type': 1 if w.is_change(addr) else 0,

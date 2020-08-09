@@ -425,7 +425,8 @@ class HistoryModel(QAbstractItemModel, Logger):
     def get_domain(self):
         '''Overridden in address_dialog.py'''
         return (self.parent.wallet.get_addresses() +
-                self.parent.wallet.psman.get_addresses())
+                self.parent.wallet.psman.get_addresses() +
+                self.parent.wallet.db.get_multisig_imported_addrs())
 
     @profiler
     def process_history(self, r, group_ps):

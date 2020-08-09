@@ -490,6 +490,7 @@ class AddressSynchronizer(Logger):
         if domain is None:
             domain = self.get_addresses()
             domain += self.psman.get_addresses()
+            domain += self.db.get_multisig_imported_addrs()
         domain = set(domain)
         # 1. Get the history of each address in the domain, maintain the
         #    delta of a tx as the sum of its deltas on domain addresses
@@ -933,15 +934,17 @@ class AddressSynchronizer(Logger):
                   consider_islocks=False, include_ps=False, min_rounds=None):
         coins = []
         ps_ks_domain = self.psman.get_addresses()
+        ms_imp_domain = self.db.get_multisig_imported_addrs()
         if domain is None:
             if include_ps:
-                domain = self.get_addresses() + ps_ks_domain
+                domain = self.get_addresses() + ps_ks_domain + ms_imp_domain
             else:
                 ps_addrs = self.db.get_ps_addresses(min_rounds=min_rounds)
                 if min_rounds is not None:
                     domain = ps_addrs
                 else:
-                    domain = self.get_addresses() + ps_ks_domain
+                    domain = (self.get_addresses() + ps_ks_domain +
+                              ms_imp_domain)
                     domain = set(domain) - ps_addrs
         domain = set(domain)
         if excluded_addresses:
@@ -951,8 +954,13 @@ class AddressSynchronizer(Logger):
             for x in utxos.values():
                 if x['address'] in ps_ks_domain:
                     x.update({'is_ps_ks': True})
+                    x.update({'is_ms_imp': False})
+                elif x['address'] in ps_ks_domain:
+                    x.update({'is_ps_ks': False})
+                    x.update({'is_ms_imp': True})
                 else:
                     x.update({'is_ps_ks': False})
+                    x.update({'is_ms_imp': False})
                 if min_rounds is not None:
                     ps_rounds = x['ps_rounds']
                     if ps_rounds is None or ps_rounds < min_rounds:
@@ -983,7 +991,8 @@ class AddressSynchronizer(Logger):
                 ps_denoms = self.db.get_ps_denoms(min_rounds=min_rounds)
         if domain is None:
             if include_ps:
-                domain = self.get_addresses() + self.psman.get_addresses()
+                domain = (self.get_addresses() + self.psman.get_addresses() +
+                          self.db.get_multisig_imported_addrs())
             else:
                 if min_rounds is not None:
                     domain = [ps_denom[0] for ps_denom in ps_denoms.values()]

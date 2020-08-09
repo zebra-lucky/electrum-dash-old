@@ -397,6 +397,8 @@ class Abstract_Wallet(AddressSynchronizer):
         txin['num_sig'] = m
 
     def is_change(self, address):
+        if self.is_multisig_imported_addr(address):
+            return False
         idx = self.get_address_index(address)
         if idx:
             return idx[0]
