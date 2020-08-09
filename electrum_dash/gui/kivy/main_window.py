@@ -847,7 +847,8 @@ class ElectrumWindow(App):
             wallet = args[0]
             if wallet == self.wallet:
                 self._trigger_update_wallet()
-        elif event in ['ps-state-changes', 'ps-wfl-changes']:
+        elif event in ['ps-state-changes', 'ps-wfl-changes',
+                       'ps-keypairs-changes']:
             wallet, msg, msg_type = (*args, None, None)[:3]
             if wallet == self.wallet:
                 self.update_ps_btn(is_mixing, is_waiting)
@@ -956,6 +957,7 @@ class ElectrumWindow(App):
                                              'ps-not-enough-sm-denoms',
                                              'ps-other-coins-arrived',
                                              'ps-wfl-changes',
+                                             'ps-keypairs-changes',
                                              'ps-state-changes'])
         self.wallet_name = wallet.basename()
         self.update_wallet()

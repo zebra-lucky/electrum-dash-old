@@ -784,6 +784,13 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.clear_denominate_wfl('uuid')
         assert psman.is_waiting
 
+        psman.keypairs_state = KPStates.Empty
+        assert psman.is_waiting
+        psman.keypairs_state = KPStates.NeedCache
+        assert not psman.is_waiting
+        psman.keypairs_state = KPStates.Caching
+        assert not psman.is_waiting
+
     def test_get_change_addresses_for_new_transaction(self):
         w = self.wallet
         psman = w.psman

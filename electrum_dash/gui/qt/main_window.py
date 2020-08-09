@@ -440,7 +440,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             wallet = args[0]
             if wallet == self.wallet:
                 self.need_update.set()
-        elif event in ['ps-state-changes', 'ps-wfl-changes']:
+        elif event in ['ps-state-changes', 'ps-wfl-changes',
+                       'ps-keypairs-changes']:
             wallet, msg, msg_type = (*args, None, None)[:3]
             if wallet == self.wallet:
                 self.update_ps_status_btn(is_mixing, is_waiting)

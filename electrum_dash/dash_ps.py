@@ -942,14 +942,18 @@ class PSManager(Logger):
 
     @property
     def is_waiting(self):
-        is_mixing = (self.state in self.mixing_running_states)
+        if self.state not in self.mixing_running_states:
+            return False
+        if self.keypairs_state in [KPStates.NeedCache, KPStates.Caching]:
+            return False
+
         active_wfls_cnt = 0
         active_wfls_cnt += len(self.denominate_wfl_list)
         if self.new_denoms_wfl:
             active_wfls_cnt += 1
         if self.new_collateral_wfl:
             active_wfls_cnt += 1
-        return is_mixing and active_wfls_cnt == 0
+        return (active_wfls_cnt == 0)
 
     @state.setter
     def state(self, state):
