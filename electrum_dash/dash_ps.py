@@ -184,11 +184,15 @@ class PSStates(IntEnum):
 
 
 # Keypairs cache types
+KP_INCOMING = 'incoming'            # future incoming funds on main keystore
 KP_SPENDABLE = 'spendable'          # regular utxos
 KP_PS_SPENDABLE = 'ps_spendable'    # ps_denoms/ps_collateral utxos
 KP_PS_COINS = 'ps_coins'            # output addressess for denominate tx
 KP_PS_CHANGE = 'ps_change'          # output addressess for pay collateral tx
-KP_ALL_TYPES = [KP_SPENDABLE, KP_PS_SPENDABLE, KP_PS_COINS, KP_PS_CHANGE]
+KP_ALL_TYPES = [KP_INCOMING, KP_SPENDABLE,
+                KP_PS_SPENDABLE, KP_PS_COINS, KP_PS_CHANGE]
+KP_MAX_INCOMING_TXS = 5             # max count of txs to split on denoms
+                                    # need to calc keypairs count to cache
 
 
 # Keypairs cache states
@@ -938,14 +942,18 @@ class PSManager(Logger):
 
     @property
     def is_waiting(self):
-        is_mixing = (self.state in self.mixing_running_states)
+        if self.state not in self.mixing_running_states:
+            return False
+        if self.keypairs_state in [KPStates.NeedCache, KPStates.Caching]:
+            return False
+
         active_wfls_cnt = 0
         active_wfls_cnt += len(self.denominate_wfl_list)
         if self.new_denoms_wfl:
             active_wfls_cnt += 1
         if self.new_collateral_wfl:
             active_wfls_cnt += 1
-        return is_mixing and active_wfls_cnt == 0
+        return (active_wfls_cnt == 0)
 
     @state.setter
     def state(self, state):
@@ -1985,9 +1993,25 @@ class PSManager(Logger):
         return need_sign_cnt, need_sign_change_cnt, new_collateral_cnt
 
     def calc_need_new_keypairs_cnt(self):
-        new_denoms_amounts = self.calc_need_denoms_amounts()
-        new_denoms_cnt = sum([len(a) for a in new_denoms_amounts])
-        return self.calc_need_sign_cnt(new_denoms_cnt)[0:2]
+        new_denoms_amounts_real = self.calc_need_denoms_amounts()
+        new_denoms_cnt_real = sum([len(a) for a in new_denoms_amounts_real])
+        new_denoms_val_real = sum([sum(a) for a in new_denoms_amounts_real])
+
+        new_denoms_amounts = self.calc_need_denoms_amounts(on_keep_amount=True)
+        new_denoms_val = sum([sum(a) for a in new_denoms_amounts])
+        if new_denoms_val > new_denoms_val_real:
+            part_val = ceil(new_denoms_val / KP_MAX_INCOMING_TXS)
+            part_amounts = self.find_denoms_approx(part_val)
+            part_amounts_cnt = sum([len(a) for a in part_amounts])
+            need_sign_cnt, need_sign_change_cnt = \
+                self.calc_need_sign_cnt(part_amounts_cnt)[0:2]
+            need_sign_cnt *= KP_MAX_INCOMING_TXS
+            need_sign_change_cnt *= KP_MAX_INCOMING_TXS
+            return need_sign_cnt, need_sign_change_cnt, True
+        else:
+            need_sign_cnt, need_sign_change_cnt = \
+                self.calc_need_sign_cnt(new_denoms_cnt_real)[0:2]
+            return need_sign_cnt, need_sign_change_cnt, False
 
     def check_need_new_keypairs(self):
         w = self.wallet
@@ -2017,7 +2041,13 @@ class PSManager(Logger):
                 if c['address'] not in self._keypairs_cache[KP_SPENDABLE]:
                     return True, prev_kp_state
 
-            sign_cnt, sign_change_cnt = self.calc_need_new_keypairs_cnt()
+            sign_cnt, sign_change_cnt, small_mix_funds = \
+                self.calc_need_new_keypairs_cnt()
+
+            # check cache for incoming addresses on small mix funds
+            if small_mix_funds and len(self._keypairs_cache[KP_INCOMING]) < 10:
+                return True, prev_kp_state
+
             # check spendable ps coins keys (already saved denoms/collateral)
             for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
                 ps_rounds = c['ps_rounds']
@@ -2056,7 +2086,12 @@ class PSManager(Logger):
         if not self._cache_kp_ps_spendable(password):
             return
 
-        kp_left, kp_chg_left = self.calc_need_new_keypairs_cnt()
+        kp_left, kp_chg_left, small_mix_funds = \
+            self.calc_need_new_keypairs_cnt()
+
+        if small_mix_funds:
+            self._cache_kp_incoming(password)
+
         kp_left, kp_chg_left = self._cache_kp_ps_reserved(password,
                                                           kp_left, kp_chg_left)
         if kp_left is None:
@@ -2082,6 +2117,32 @@ class PSManager(Logger):
         with self.keypairs_state_lock:
             self.keypairs_state = KPStates.Ready
         self.logger.info('Keyparis Cache Done')
+
+    def _cache_kp_incoming(self, password):
+        w = self.wallet
+        first_recv_index = self.first_unused_index(for_change=False,
+                                                   force_main_ks=True)
+        ps_incoming_cache = self._keypairs_cache[KP_INCOMING]
+        cached = 0
+        ri = first_recv_index
+        while cached < KP_MAX_INCOMING_TXS:
+            if self.state != PSStates.Mixing:
+                self._cleanup_unfinished_keypairs_cache()
+                return
+            sequence = [0, ri]
+            x_pubkey = w.keystore.get_xpubkey(*sequence)
+            _, addr = xpubkey_to_address(x_pubkey)
+            ri += 1
+            if w.is_used(addr):
+                continue
+            if addr in ps_incoming_cache:
+                continue
+            sec = w.keystore.get_private_key(sequence, password)
+            ps_incoming_cache[addr] = (x_pubkey, sec)
+            cached += 1
+        self.logger.info(f'Cached {cached} keys'
+                         f' of {KP_INCOMING} type')
+        self.postpone_notification('ps-keypairs-changes', self.wallet)
 
     def _cache_kp_spendable(self, password):
         '''Cache spendable regular coins keys'''
@@ -2539,6 +2600,7 @@ class PSManager(Logger):
                             and self.is_hw_ks):
                         await group.spawn(self._prepare_funds_from_hw_wallet())
                     await group.spawn(self._make_keypairs_cache(password))
+                    await group.spawn(self._check_not_enough_funds())
                     await group.spawn(self._check_all_mixed())
                     await group.spawn(self._maintain_pay_collateral_tx())
                     await group.spawn(self._maintain_collateral_amount())
@@ -2628,6 +2690,13 @@ class PSManager(Logger):
                 await self.stop_mixing_from_async_thread(self.ALL_MIXED_MSG,
                                                          'inf')
 
+    async def _check_not_enough_funds(self):
+        while not self.main_taskgroup.closed():
+            if self._not_enough_funds:
+                await asyncio.sleep(30)
+                self._not_enough_funds = False
+            await asyncio.sleep(5)
+
     async def _maintain_pay_collateral_tx(self):
         kp_wait_state = KPStates.Ready if self.need_password() else None
 
@@ -2664,6 +2733,7 @@ class PSManager(Logger):
                 await asyncio.sleep(1)
 
     async def _maintain_collateral_amount(self):
+        w = self.wallet
         kp_wait_state = KPStates.Ready if self.need_password() else None
 
         while not self.main_taskgroup.closed():
@@ -2674,6 +2744,12 @@ class PSManager(Logger):
             elif (not self._not_enough_funds
                     and not self.ps_collateral_cnt
                     and not self.calc_need_denoms_amounts(use_cache=True)):
+                coins = w.get_utxos(None,
+                                    excluded_addresses=w.frozen_addresses)
+                coins = [c for c in coins if not w.is_frozen_coin(c)]
+                if not coins:
+                    await asyncio.sleep(5)
+                    continue
                 if not self.check_llmq_ready():
                     self.logger.info(_('New collateral workflow: {}')
                                      .format(self.LLMQ_DATA_NOT_READY))
@@ -2688,6 +2764,7 @@ class PSManager(Logger):
             await asyncio.sleep(0.25)
 
     async def _maintain_denoms(self):
+        w = self.wallet
         kp_wait_state = KPStates.Ready if self.need_password() else None
 
         while not self.main_taskgroup.closed():
@@ -2697,6 +2774,12 @@ class PSManager(Logger):
                     await self.cleanup_new_denoms_wfl()
             elif (not self._not_enough_funds
                     and self.calc_need_denoms_amounts(use_cache=True)):
+                coins = w.get_utxos(None,
+                                    excluded_addresses=w.frozen_addresses)
+                coins = [c for c in coins if not w.is_frozen_coin(c)]
+                if not coins:
+                    await asyncio.sleep(5)
+                    continue
                 if not self.check_llmq_ready():
                     self.logger.info(_('New denoms workflow: {}')
                                      .format(self.LLMQ_DATA_NOT_READY))
@@ -2807,9 +2890,9 @@ class PSManager(Logger):
                 result.append(addr)
         return result
 
-    def first_unused_index(self, for_change=False):
+    def first_unused_index(self, for_change=False, force_main_ks=False):
         w = self.wallet
-        ps_ks = self.ps_keystore is not None
+        ps_ks = self.ps_keystore and not force_main_ks
         with w.lock:
             if for_change:
                 unused = (self.get_unused_addresses(for_change) if ps_ks
@@ -2869,7 +2952,8 @@ class PSManager(Logger):
             self.logger.debug(f'Remove {addr} from synchronizer')
             w.synchronizer.remove_addr(addr)
 
-    def calc_need_denoms_amounts(self, coins=None, use_cache=False):
+    def calc_need_denoms_amounts(self, coins=None, use_cache=False,
+                                 on_keep_amount=False):
         w = self.wallet
         fee_per_kb = self.config.fee_per_kb()
         if fee_per_kb is None:
@@ -2893,41 +2977,45 @@ class PSManager(Logger):
                             mature_only=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
         coins_val = sum([c['value'] for c in coins])
-        if coins_val < MIN_DENOM_VAL:  # no coins to create denoms
-            return []
+        if coins_val < MIN_DENOM_VAL and not on_keep_amount:
+            return []  # no coins to create denoms
 
         in_cnt = len(coins)
         approx_val = need_val - old_denoms_val
         outputs_amounts = self.find_denoms_approx(approx_val)
-        if coins_val >= self._calc_total_need_val(in_cnt, outputs_amounts,
-                                                  fee_per_kb):
+        total_need_val, outputs_amounts = \
+            self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
+        if on_keep_amount or coins_val >= total_need_val:
             return outputs_amounts
 
+        # not enough funds to mix keep amount, approx amount that can be mixed
         approx_val = coins_val
         while True:
             if approx_val < CREATE_COLLATERAL_VAL:
                 return []
             outputs_amounts = self.find_denoms_approx(approx_val)
-            if coins_val >= self._calc_total_need_val(in_cnt, outputs_amounts,
-                                                      fee_per_kb):
+            total_need_val, outputs_amounts = \
+                self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
+            if coins_val >= total_need_val:
                 return outputs_amounts
             else:
                 approx_val -= MIN_DENOM_VAL
 
     def _calc_total_need_val(self, txin_cnt, outputs_amounts, fee_per_kb):
-        new_denoms_val = sum([sum(a) for a in outputs_amounts])
-        new_denoms_cnt = sum([len(a) for a in outputs_amounts])
+        res_outputs_amounts = copy.deepcopy(outputs_amounts)
+        new_denoms_val = sum([sum(a) for a in res_outputs_amounts])
+        new_denoms_cnt = sum([len(a) for a in res_outputs_amounts])
 
         # calc future new collaterals count and value
         new_collateral_cnt = self.calc_need_sign_cnt(new_denoms_cnt)[2]
-        if not self.ps_collateral_cnt and outputs_amounts:
+        if not self.ps_collateral_cnt and res_outputs_amounts:
             new_collateral_cnt -= 1
-            outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
+            res_outputs_amounts[0].insert(0, CREATE_COLLATERAL_VAL)
         new_collaterals_val = CREATE_COLLATERAL_VAL * new_collateral_cnt
 
         # calc new denoms fee
         new_denoms_fee = 0
-        for i, amounts in enumerate(outputs_amounts):
+        for i, amounts in enumerate(res_outputs_amounts):
             if i == 0:  # use all coins as inputs, add change output
                 new_denoms_fee += calc_tx_fee(txin_cnt, len(amounts) + 1,
                                               fee_per_kb, max_size=True)
@@ -2940,8 +3028,9 @@ class PSManager(Logger):
         new_collaterals_fee = new_collateral_cnt * new_collateral_fee
 
         # have coins enough to create new denoms and future new collaterals
-        return (new_denoms_val + new_denoms_fee +
-                new_collaterals_val + new_collaterals_fee)
+        total_need_val = (new_denoms_val + new_denoms_fee +
+                          new_collaterals_val + new_collaterals_fee)
+        return total_need_val, res_outputs_amounts
 
     def _calc_denoms_amounts_fee(self, coins_cnt, denoms_amounts, fee_per_kb):
         txs_fee = 0
@@ -3088,9 +3177,9 @@ class PSManager(Logger):
             ps_ks_coins_val = sum([c['value'] for c in coins if c['is_ps_ks']])
 
             outputs_amounts = self.calc_need_denoms_amounts()
-            total_need_val = self._calc_total_need_val(len(coins),
-                                                       outputs_amounts,
-                                                       fee_per_kb)
+            in_cnt = len(coins)
+            total_need_val, outputs_amounts = \
+                self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
             transfer_tx_fee = calc_tx_fee(len(main_ks_coins), 1,
                                           fee_per_kb, max_size=True)
             if coins_val < total_need_val + transfer_tx_fee:  # transfer all
