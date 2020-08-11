@@ -1957,7 +1957,7 @@ class PSManager(Logger):
                                                     password)
                 except Exception as e:
                     self.logger.info(f'_make_keypairs_cache: {str(e)}')
-                    self.keypairs_state = KPStates.Empty
+                    self._cleanup_unfinished_keypairs_cache()
                 return
             await asyncio.sleep(1)
 
