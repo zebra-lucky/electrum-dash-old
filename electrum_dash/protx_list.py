@@ -179,7 +179,7 @@ class MNList(Logger):
     def protx_info_completeness(self):
         protx_mns_cnt = len(self.protx_mns)
         protx_info_cnt = len(self.protx_info)
-        return min(1.0, protx_info_cnt/protx_mns_cnt)
+        return min(1.0, protx_info_cnt/protx_mns_cnt if protx_mns_cnt else 0.0)
 
     @property
     def llmq_loading(self):
