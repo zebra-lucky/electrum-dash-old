@@ -1952,7 +1952,12 @@ class PSManager(Logger):
             return
         while True:
             if self.keypairs_state == KPStates.NeedCache:
-                await self.loop.run_in_executor(None, _make_cache, password)
+                try:
+                    await self.loop.run_in_executor(None, _make_cache,
+                                                    password)
+                except Exception as e:
+                    self.logger.info(f'_make_keypairs_cache: {str(e)}')
+                    self.keypairs_state = KPStates.Empty
                 return
             await asyncio.sleep(1)
 
