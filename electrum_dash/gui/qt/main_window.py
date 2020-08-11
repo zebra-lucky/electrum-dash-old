@@ -3763,9 +3763,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
     def closeEvent(self, event):
         # It seems in some rare cases this closeEvent() is called twice
-        self.history_list.hm.get_data_thread.stop()
-        self.address_list.am.get_data_thread.stop()
-        self.utxo_list.cm.get_data_thread.stop()
         psman = self.wallet.psman
         if psman.state in psman.mixing_running_states and not psman.is_waiting:
             if not self.question(psman.WAIT_MIXING_STOP_MSG):
@@ -3787,6 +3784,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                 self.send_funds_to_main_ks(mwin=self, parent=self)
                 event.ignore()
                 return
+        self.history_list.hm.get_data_thread.stop()
+        self.address_list.am.get_data_thread.stop()
+        self.utxo_list.cm.get_data_thread.stop()
         if not self.cleaned_up:
             self.cleaned_up = True
             self.clean_up()
