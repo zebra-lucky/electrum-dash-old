@@ -2045,8 +2045,10 @@ class PSManager(Logger):
                 self.calc_need_new_keypairs_cnt()
 
             # check cache for incoming addresses on small mix funds
-            if small_mix_funds and len(self._keypairs_cache[KP_INCOMING]) < 10:
-                return True, prev_kp_state
+            if not self.is_hw_ks and small_mix_funds:
+                cache_incoming = self._keypairs_cache[KP_INCOMING]
+                if len(cache_incoming) < KP_MAX_INCOMING_TXS:
+                    return True, prev_kp_state
 
             # check spendable ps coins keys (already saved denoms/collateral)
             for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
@@ -2089,7 +2091,7 @@ class PSManager(Logger):
         kp_left, kp_chg_left, small_mix_funds = \
             self.calc_need_new_keypairs_cnt()
 
-        if small_mix_funds:
+        if not self.is_hw_ks and small_mix_funds:
             self._cache_kp_incoming(password)
 
         kp_left, kp_chg_left = self._cache_kp_ps_reserved(password,
