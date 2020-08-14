@@ -3246,7 +3246,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         # make tx from wallet keystore utxo to ps keystore address
         inputs = sorted(w.get_spendable_coins(domain=None, config=self.config),
                         key=lambda x: x['address'])[-1:]
-        w.add_input_info(inputs[0])
+        psman.add_input_info(inputs[0])
         # one input: from yjGqNe2m4zFZ6RKVxo1VkN6qGUzQbbrGkK val is 1000010
         assert inputs[0]['value'] == 1000010
         assert inputs[0]['address'] == 'yjGqNe2m4zFZ6RKVxo1VkN6qGUzQbbrGkK'
@@ -3373,7 +3373,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         # make tx from wallet keystore utxo to ps keystore address
         inputs = sorted(w.get_spendable_coins(domain=None, config=self.config),
                         key=lambda x: x['address'])[-1:]
-        w.add_input_info(inputs[0])
+        psman.add_input_info(inputs[0])
         oaddr1 = ps_ks_addrs[0]
         outputs = [TxOutput(TYPE_ADDRESS, oaddr1, 1000010)]
         tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)

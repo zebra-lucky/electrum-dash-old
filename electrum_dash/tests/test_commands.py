@@ -13,6 +13,7 @@ from electrum_dash import storage
 from electrum_dash.simple_config import SimpleConfig
 from electrum_dash.storage import WalletStorage
 from electrum_dash.transaction import Transaction, TxOutput
+from electrum_dash.util import NotEnoughFunds
 from electrum_dash.wallet import restore_wallet_from_text, Wallet
 
 from . import TestCaseForTestnet
@@ -158,7 +159,7 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         # set frozen state for small coins
         coins = w.get_spendable_coins(domain=None, config=self.config,
                                       include_ps=True)
-        coins = [c for c in coins if c['value'] < 500000000]
+        coins = [c for c in coins if c['value'] < 100000000]  # < 1 Dash
         w.set_frozen_state_of_coins(coins, True)
 
     def tearDown(self):
@@ -282,15 +283,21 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         def fund_wallet2(self, *args, **kwargs):
             w = self.wallet
             w2 = self.w2
-            coins = w.get_spendable_coins(None, self.config)
+            coins = w.get_utxos(None)
+            coins = [c for c in coins if c['value'] == 100000000]
             outputs = [TxOutput(TYPE_ADDRESS,
                                 'yN2ag4KuQvxQLNYTXs32yNpgdLibsn8Y5E',
-                                100000000)]
+                                60000000)]
             tx = w.make_unsigned_transaction(coins, outputs, self.config)
             w.sign_transaction(tx, None)
             txid = tx.txid()
             w.add_transaction(txid, tx)
             w2.add_transaction(txid, tx)
+            # set frozen state for small coins on wallet
+            coins = w.get_spendable_coins(domain=None, config=self.config,
+                                          include_ps=True)
+            coins = [c for c in coins if c['value'] < 100000000]  # < 1 Dash
+            w.set_frozen_state_of_coins(coins, True)
             return func(self, *args, **kwargs)
         return fund_wallet2
 
@@ -305,12 +312,30 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
             return func(self, *args, **kwargs)
         return mock_get_input_tx
 
+    def _check_no_repeat_in_txin_outpoints(self, tx):
+        txin_outpoints = []
+        for txin in tx.inputs():
+            prev_h = txin['prevout_hash']
+            prev_n = txin['prevout_n']
+            outpoint = f'{prev_h}:{prev_n}'
+            assert outpoint not in txin_outpoints, 'repeated txin outpoint'
+            txin_outpoints.append(outpoint)
+
     @with_wallet2
     @with_wallet2_funded
     @with_get_input_tx_mocked
     def test_fundrawtransaction(self):
         w = self.wallet
         w2 = self.w2
+        coins = w.get_spendable_coins(domain=None, config=self.config,
+                                      include_ps=True)
+        coins = sorted(coins,
+                       key=lambda x: (x['value'], x['prevout_hash']),
+                       reverse=True)
+        assert len(coins) == 3
+        # freeze all coins except one to do stable test
+        w.set_frozen_state_of_coins(coins[1:], True)
+
         cmds = Commands(config=self.config, wallet=w, network=None)
         w2_cmds = Commands(config=self.config, wallet=w2, network=None)
         outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.3}
@@ -323,45 +348,68 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
+        self._check_no_repeat_in_txin_outpoints(res_tx)
         assert res['fee'] == -29999774   # not enough funded
         assert res['funded_fee'] == 226  # diff in new inputs/outputs values
         assert res['changepos'] == 1
-        assert w.get_tx_vals(res_tx) == ([701806547], [30000000, 701806321])
+        assert w.get_tx_vals(res_tx) == ([801806773], [30000000, 801806547])
+
+        # check not enough funds and same utxo not used again
+        cmd_opts.update({'fundupto': 0.1})
+        with self.assertRaises(NotEnoughFunds):
+            res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+
+        # unfreeze all coins
+        w.set_frozen_state_of_coins(coins, False)
+        # freeze all coins except first two to do stable test
+        w.set_frozen_state_of_coins(coins[2:], True)
 
         # check fundupto 0.1
         cmd_opts.update({'fundupto': 0.1})
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
+        self._check_no_repeat_in_txin_outpoints(res_tx)
         assert res['fee'] == -19999592   # not enough funded
         assert res['funded_fee'] == 408  # diff in new inputs/outputs values
         assert res['changepos'] == 1
-        assert w.get_tx_vals(res_tx) == ([701806547, 701806547],
-                                         [30000000, 691806365, 701806321])
+        assert w.get_tx_vals(res_tx) == ([801806773, 100001000],
+                                         [30000000, 90000818, 801806547])
 
-        # check fundupto 0.2
+        # check fundupto 0.2 from wallet2
         cmd_opts.update({'fundupto': 0.2})
         res = w2_cmds.fundrawtransaction(res_tx_hex, cmd_opts)
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
+        self._check_no_repeat_in_txin_outpoints(res_tx)
         assert res['fee'] == -9999410    # not enough funded
         assert res['funded_fee'] == 590  # diff in new inputs/outputs values
         assert res['changepos'] == 1
-        assert w.get_tx_vals(res_tx) == ([100000000, 701806547, 701806547],
-                                         [30000000, 89999818, 691806365,
-                                          701806321])
+        assert w.get_tx_vals(res_tx) == ([801806773, 60000000, 100001000],
+                                         [30000000, 49999818, 90000818,
+                                          801806547])
+
+        # check not enough funds and same utxo not used again
+        cmd_opts.update({'fundupto': 0.3})
+        with self.assertRaises(NotEnoughFunds):
+            res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
+
+        # unfreeze all coins
+        w.set_frozen_state_of_coins(coins, False)
+
         # check fundupto 0.3
         cmd_opts.update({'fundupto': 0.3})
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
+        self._check_no_repeat_in_txin_outpoints(res_tx)
         assert res['fee'] == 772
         assert res['funded_fee'] == 772
         assert res['changepos'] == -1
-        assert w.get_tx_vals(res_tx) == ([100000000, 701806547, 701806547,
-                                          701806547],
-                                         [30000000, 89999818, 691806365,
-                                          691806365, 701806321])
+        assert w.get_tx_vals(res_tx) == ([801806773, 100001000, 60000000,
+                                          100001000],
+                                         [30000000, 49999818, 90000818,
+                                          90000818, 801806547])
 
     @with_wallet2
     @with_wallet2_funded

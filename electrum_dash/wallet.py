@@ -1080,8 +1080,12 @@ class Abstract_Wallet(AddressSynchronizer):
                     outputs_new.append(o)
             tx._outputs = outputs_new
         coins = self.get_spendable_coins(None, config, include_ps=True)
-
-        new_tx = self.make_unsigned_transaction(coins,tx.outputs(), config,
+        # filter out coins already in tx inputs
+        txin_outpoints = [(txin['prevout_hash'], txin['prevout_n'])
+                          for txin in tx.inputs()]
+        coins = [c for c in coins
+                 if (c['prevout_hash'], c['prevout_n']) not in txin_outpoints]
+        new_tx = self.make_unsigned_transaction(coins, tx.outputs(), config,
                                                 inputs=tx.inputs())
         in_vals, out_vals = self.get_tx_vals(new_tx)
         sum_in_vals = sum(in_vals)
