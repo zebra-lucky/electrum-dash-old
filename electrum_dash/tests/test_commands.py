@@ -417,40 +417,32 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
     def test_signtransaction_with_multiwallet_inputs(self):
         w = self.wallet
         w2 = self.w2
+        coins = w.get_spendable_coins(domain=None, config=self.config,
+                                      include_ps=True)
+        coins = sorted(coins,
+                       key=lambda x: (x['value'], x['prevout_hash']),
+                       reverse=True)
+        assert len(coins) == 3
         cmds = Commands(config=self.config, wallet=w, network=None)
         w2_cmds = Commands(config=self.config, wallet=w2, network=None)
         outputs = {'yUyx5hJsEwAukTdRy7UihU57rC37Y4y2ZX': 0.2}
 
         res_tx_hex = cmds.createrawtransaction([], outputs)
-        # check fundupto 0.1 from w
         cmd_opts = {'fundupto': 0.1, 'outval': 0.2}
+        # fund on wallet 1
         res = cmds.fundrawtransaction(res_tx_hex, cmd_opts)
-        #assert res['fee'] == -9999626    # not enough funded
-        #assert res['funded_fee'] == 374 # diff in new inputs/outputs values
-        #assert res['changepos'] == 1
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        #assert w.get_tx_vals(res_tx) == ([30000000],
-        #                                 [20000000, 19999774])
-        # check fundupto 0.2 from w2
         cmd_opts.update({'fundupto': 0.2})
+        # fund on wallet 2
         res = w2_cmds.fundrawtransaction(res_tx_hex, cmd_opts)
-        #assert res['fee'] == 556
-        #assert res['funded_fee'] == 556  # diff in new inputs/outputs values
-        #assert res['changepos'] == 1
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
-        #assert w.get_tx_vals(res_tx) == ([100000000, 10000100, 10000100],
-        #                                 [9999826, 20000000, 89999818])
 
-        print('1'*10)
-        pprint(res_tx.inputs())
-        pprint(res_tx.outputs())
+        # sign on wallet 1
         res = cmds.signtransaction(res_tx_hex)
-        print('2'*10)
-        pprint(res)
+        assert not res['complete']  # partially signed
         res_tx_hex = res['hex']
+        # sign on wallet 2
         res = w2_cmds.signtransaction(res_tx_hex)
-        print('3'*10)
-        pprint(res)
-        assert 0
+        assert res['complete']  # signed
