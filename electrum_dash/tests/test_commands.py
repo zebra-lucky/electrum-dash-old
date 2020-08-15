@@ -321,6 +321,13 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
             assert outpoint not in txin_outpoints, 'repeated txin outpoint'
             txin_outpoints.append(outpoint)
 
+    def _check_no_repeat_in_out_addrs(self, tx):
+        out_addrs = []
+        for o in tx.outputs():
+            addr = o.address
+            assert addr not in out_addrs, 'repeated txin outpoint'
+            out_addrs.append(addr)
+
     @with_wallet2
     @with_wallet2_funded
     @with_get_input_tx_mocked
@@ -349,6 +356,7 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
         self._check_no_repeat_in_txin_outpoints(res_tx)
+        self._check_no_repeat_in_out_addrs(res_tx)
         assert res['fee'] == -29999774   # not enough funded
         assert res['funded_fee'] == 226  # diff in new inputs/outputs values
         assert res['changepos'] == 1
@@ -370,6 +378,7 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
         self._check_no_repeat_in_txin_outpoints(res_tx)
+        self._check_no_repeat_in_out_addrs(res_tx)
         assert res['fee'] == -19999592   # not enough funded
         assert res['funded_fee'] == 408  # diff in new inputs/outputs values
         assert res['changepos'] == 1
@@ -382,6 +391,7 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
         self._check_no_repeat_in_txin_outpoints(res_tx)
+        self._check_no_repeat_in_out_addrs(res_tx)
         assert res['fee'] == -9999410    # not enough funded
         assert res['funded_fee'] == 590  # diff in new inputs/outputs values
         assert res['changepos'] == 1
@@ -403,9 +413,10 @@ class TestTxCommandsTestnet(TestCaseForTestnet):
         res_tx_hex = res['hex']
         res_tx = Transaction(res_tx_hex)
         self._check_no_repeat_in_txin_outpoints(res_tx)
+        self._check_no_repeat_in_out_addrs(res_tx)
         assert res['fee'] == 772
         assert res['funded_fee'] == 772
-        assert res['changepos'] == -1
+        assert res['changepos'] == 3
         assert w.get_tx_vals(res_tx) == ([801806773, 100001000, 60000000,
                                           100001000],
                                          [30000000, 49999818, 90000818,

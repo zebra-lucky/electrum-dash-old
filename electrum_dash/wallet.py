@@ -1085,8 +1085,14 @@ class Abstract_Wallet(AddressSynchronizer):
                           for txin in tx.inputs()]
         coins = [c for c in coins
                  if (c['prevout_hash'], c['prevout_n']) not in txin_outpoints]
+        # filter out change_addr already in tx inputs
+        out_addrs = [o.address for o in tx.outputs()]
+        change_addrs = self.calc_unused_change_addresses()
+        change_addrs = [a for a in change_addrs if a not in out_addrs]
+        change_addr = change_addrs[0] if change_addrs else None
         new_tx = self.make_unsigned_transaction(coins, tx.outputs(), config,
-                                                inputs=tx.inputs())
+                                                inputs=tx.inputs(),
+                                                change_addr=change_addr)
         in_vals, out_vals = self.get_tx_vals(new_tx)
         sum_in_vals = sum(in_vals)
         sum_out_vals = sum(out_vals)
