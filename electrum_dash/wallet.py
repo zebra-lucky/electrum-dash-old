@@ -358,8 +358,7 @@ class Abstract_Wallet(AddressSynchronizer):
                     self.is_multisig_imported_addr(address)])
 
     def add_multisig_imported_input_sig_info(self, txin, addr):
-        redeem_script, m, pubkeys, my_addr = \
-            self.db.get_multisig_imported_addr(addr)
+        m, pubkeys, my_addr = self.db.get_multisig_imported_addr(addr)
         # x_pubkeys are not sorted here because it would be too slow
         # they are sorted in transaction.get_sorted_pubkeys
         # pubkeys is set to None to signal that x_pubkeys are unsorted
@@ -2048,7 +2047,7 @@ class Simple_Deterministic_Wallet(Simple_Wallet, Deterministic_Wallet):
     def derive_pubkeys(self, c, i):
         return self.keystore.derive_pubkey(c, i)
 
-    def import_multisig_addr(self, addr, redeem_script, m, pubkeys):
+    def import_multisig_addr(self, addr, m, pubkeys):
         if not bitcoin.is_address(addr):
             raise BitcoinException(_('invalid address'))
         if self.db.has_multisig_imported_addr(addr):
@@ -2063,7 +2062,7 @@ class Simple_Deterministic_Wallet(Simple_Wallet, Deterministic_Wallet):
         if len(my_addrs) > 1:
             raise Exception('for provided pubkeys multiple'
                             ' wallet addresses found')
-        addr_data = (redeem_script, m, pubkeys, my_addrs[0])
+        addr_data = (m, pubkeys, my_addrs[0])
         self.db.add_multisig_imported_addr(addr, addr_data)
         self.add_address(addr, multisig_imported=True)
         self.storage.write()

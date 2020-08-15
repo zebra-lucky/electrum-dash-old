@@ -427,7 +427,7 @@ class Commands:
             pubkeys.sort()
         redeem_script = multisig_script(pubkeys, num)
         address = bitcoin.hash160_to_p2sh(hash_160(bfh(redeem_script)))
-        w.import_multisig_addr(address, redeem_script, num, pubkeys)
+        w.import_multisig_addr(address, num, pubkeys)
         return {'address':address, 'redeemScript':redeem_script}
 
     @command('w')

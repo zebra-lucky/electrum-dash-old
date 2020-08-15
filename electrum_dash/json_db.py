@@ -1112,7 +1112,7 @@ class JsonDB(Logger):
 
     @modifier
     def rm_multisig_imported_addr(self, addr):
-        self.multisig_imported_addrs.pop(addr)
+        self.multisig_imported_addrs.pop(addr, None)
 
     @locked
     def has_multisig_imported_addr(self, addr):
@@ -1124,7 +1124,7 @@ class JsonDB(Logger):
 
     @locked
     def get_multisig_imported_addr(self, addr):
-        return self.multisig_imported_addrs.get(addr)
+        return self.multisig_imported_addrs.get(addr)[-3:]  # slice for compat
 
     def load_addresses(self, wallet_type):
         """ called from Abstract_Wallet.__init__ """
