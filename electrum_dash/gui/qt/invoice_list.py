@@ -24,97 +24,135 @@
 # SOFTWARE.
 
 from enum import IntEnum
+from typing import Sequence
 
 from PyQt5.QtCore import Qt, QItemSelectionModel
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QFont
-from PyQt5.QtWidgets import QHeaderView, QMenu
+from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from PyQt5.QtWidgets import QAbstractItemView
+from PyQt5.QtWidgets import QMenu, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QHeaderView
 
 from electrum_dash.i18n import _
 from electrum_dash.util import format_time
+from electrum_dash.invoices import Invoice, PR_UNPAID, PR_PAID, PR_INFLIGHT, PR_FAILED, PR_TYPE_ONCHAIN
 
-from .util import (MyTreeView, read_QIcon, MONOSPACE_FONT, PR_UNPAID,
-                   pr_tooltips, import_meta_gui, export_meta_gui, pr_icons)
+from .util import MyTreeView, read_QIcon, MySortModel, pr_icons
+from .util import CloseButton, Buttons
+from .util import WindowModalDialog
+
+
+
+ROLE_REQUEST_TYPE = Qt.UserRole
+ROLE_REQUEST_ID = Qt.UserRole + 1
+ROLE_SORT_ORDER = Qt.UserRole + 2
 
 
 class InvoiceList(MyTreeView):
 
     class Columns(IntEnum):
         DATE = 0
-        REQUESTOR = 1
-        DESCRIPTION = 2
-        AMOUNT = 3
-        STATUS = 4
+        DESCRIPTION = 1
+        AMOUNT = 2
+        STATUS = 3
 
     headers = {
-        Columns.DATE: _('Expires'),
-        Columns.REQUESTOR: _('Requestor'),
+        Columns.DATE: _('Date'),
         Columns.DESCRIPTION: _('Description'),
         Columns.AMOUNT: _('Amount'),
         Columns.STATUS: _('Status'),
     }
-    filter_columns = [Columns.DATE, Columns.REQUESTOR, Columns.DESCRIPTION, Columns.AMOUNT]
+    filter_columns = [Columns.DATE, Columns.DESCRIPTION, Columns.AMOUNT]
 
     def __init__(self, parent):
         super().__init__(parent, self.create_menu,
                          stretch_column=self.Columns.DESCRIPTION,
                          editable_columns=[])
+        self.std_model = QStandardItemModel(self)
+        self.proxy = MySortModel(self, sort_role=ROLE_SORT_ORDER)
+        self.proxy.setSourceModel(self.std_model)
+        self.setModel(self.proxy)
         self.setSortingEnabled(True)
-        self.setColumnWidth(self.Columns.REQUESTOR, 200)
-        self.setModel(QStandardItemModel(self))
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.update()
 
+    def update_item(self, key, invoice: Invoice):
+        model = self.std_model
+        for row in range(0, model.rowCount()):
+            item = model.item(row, 0)
+            if item.data(ROLE_REQUEST_ID) == key:
+                break
+        else:
+            return
+        status_item = model.item(row, self.Columns.STATUS)
+        status = self.parent.wallet.get_invoice_status(invoice)
+        status_str = invoice.get_status_str(status)
+        status_item.setText(status_str)
+        status_item.setIcon(read_QIcon(pr_icons.get(status)))
+
     def update(self):
-        inv_list = self.parent.invoices.unpaid_invoices()
-        self.model().clear()
+        # not calling maybe_defer_update() as it interferes with conditional-visibility
+        self.proxy.setDynamicSortFilter(False)  # temp. disable re-sorting after every change
+        self.std_model.clear()
         self.update_headers(self.__class__.headers)
-        self.header().setSectionResizeMode(self.Columns.REQUESTOR, QHeaderView.Interactive)
-        for idx, pr in enumerate(inv_list):
-            key = pr.get_id()
-            status = self.parent.invoices.get_status(key)
-            if status is None:
-                continue
-            requestor = pr.get_requestor()
-            exp = pr.get_expiration_date()
-            date_str = format_time(exp) if exp else _('Never')
-            labels = [date_str, requestor, pr.memo, self.parent.format_amount(pr.get_amount(), whitespaces=True), pr_tooltips.get(status,'')]
+        for idx, item in enumerate(self.parent.wallet.get_invoices()):
+            key = item.id
+            icon_name = 'dashcoin.png'
+            if item.bip70:
+                icon_name = 'seal.png'
+            status = self.parent.wallet.get_invoice_status(item)
+            status_str = item.get_status_str(status)
+            message = item.message
+            amount = item.get_amount_sat()
+            timestamp = item.time or 0
+            date_str = format_time(timestamp) if timestamp else _('Unknown')
+            amount_str = self.parent.format_amount(amount, whitespaces=True)
+            labels = [date_str, message, amount_str, status_str]
             items = [QStandardItem(e) for e in labels]
             self.set_editability(items)
+            items[self.Columns.DATE].setIcon(read_QIcon(icon_name))
             items[self.Columns.STATUS].setIcon(read_QIcon(pr_icons.get(status)))
-            items[self.Columns.DATE].setData(key, role=Qt.UserRole)
-            items[self.Columns.REQUESTOR].setFont(QFont(MONOSPACE_FONT))
-            items[self.Columns.AMOUNT].setFont(QFont(MONOSPACE_FONT))
-            self.model().insertRow(idx, items)
-        self.selectionModel().select(self.model().index(0,0), QItemSelectionModel.SelectCurrent)
+            items[self.Columns.DATE].setData(key, role=ROLE_REQUEST_ID)
+            items[self.Columns.DATE].setData(item.type, role=ROLE_REQUEST_TYPE)
+            items[self.Columns.DATE].setData(timestamp, role=ROLE_SORT_ORDER)
+            self.std_model.insertRow(idx, items)
+        self.filter()
+        self.proxy.setDynamicSortFilter(True)
+        # sort requests by date
+        self.sortByColumn(self.Columns.DATE, Qt.DescendingOrder)
+        # hide list if empty
         if self.parent.isVisible():
-            b = len(inv_list) > 0
+            b = self.std_model.rowCount() > 0
             self.setVisible(b)
             self.parent.invoices_label.setVisible(b)
-        self.filter()
-
-    def import_invoices(self):
-        import_meta_gui(self.parent, _('invoices'), self.parent.invoices.import_file, self.update)
-
-    def export_invoices(self):
-        export_meta_gui(self.parent, _('invoices'), self.parent.invoices.export_file)
 
     def create_menu(self, position):
+        wallet = self.parent.wallet
+        items = self.selected_in_column(0)
+        if len(items)>1:
+            keys = [ item.data(ROLE_REQUEST_ID)  for item in items]
+            invoices = [ wallet.invoices.get(key) for key in keys]
+            can_batch_pay = all([i.type == PR_TYPE_ONCHAIN and wallet.get_invoice_status(i) == PR_UNPAID for i in invoices])
+            menu = QMenu(self)
+            if can_batch_pay:
+                menu.addAction(_("Batch pay invoices"), lambda: self.parent.pay_multiple_invoices(invoices))
+            menu.addAction(_("Delete invoices"), lambda: self.parent.delete_invoices(keys))
+            menu.exec_(self.viewport().mapToGlobal(position))
+            return
         idx = self.indexAt(position)
-        item = self.model().itemFromIndex(idx)
-        item_col0 = self.model().itemFromIndex(idx.sibling(idx.row(), self.Columns.DATE))
+        item = self.item_from_index(idx)
+        item_col0 = self.item_from_index(idx.sibling(idx.row(), self.Columns.DATE))
         if not item or not item_col0:
             return
-        key = item_col0.data(Qt.UserRole)
-        column = idx.column()
-        column_title = self.model().horizontalHeaderItem(column).text()
-        column_data = item.text()
-        status = self.parent.invoices.get_status(key)
+        key = item_col0.data(ROLE_REQUEST_ID)
+        invoice = self.parent.wallet.get_invoice(key)
         menu = QMenu(self)
-        if column_data:
-            if column == self.Columns.AMOUNT:
-                column_data = column_data.strip()
-            menu.addAction(_("Copy {}").format(column_title), lambda: self.parent.app.clipboard().setText(column_data))
-        menu.addAction(_("Details"), lambda: self.parent.show_invoice(key))
+        self.add_copy_menu(menu, idx)
+        if len(invoice.outputs) == 1:
+            menu.addAction(_("Copy Address"), lambda: self.parent.do_copy(invoice.get_address(), title='Dash Address'))
+        menu.addAction(_("Details"), lambda: self.parent.show_onchain_invoice(invoice))
+        status = wallet.get_invoice_status(invoice)
         if status == PR_UNPAID:
-            menu.addAction(_("Pay Now"), lambda: self.parent.do_pay_invoice(key))
-        menu.addAction(_("Delete"), lambda: self.parent.delete_invoice(key))
+            menu.addAction(_("Pay"), lambda: self.parent.do_pay_invoice(invoice))
+        if status == PR_FAILED:
+            menu.addAction(_("Retry"), lambda: self.parent.do_pay_invoice(invoice))
+        menu.addAction(_("Delete"), lambda: self.parent.delete_invoices([key]))
         menu.exec_(self.viewport().mapToGlobal(position))

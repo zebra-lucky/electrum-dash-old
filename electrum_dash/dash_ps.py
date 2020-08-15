@@ -12,17 +12,18 @@ from decimal import Decimal
 from math import floor, ceil
 from uuid import uuid4
 
-from . import constants
-from .bitcoin import (COIN, TYPE_ADDRESS, TYPE_SCRIPT, address_to_script,
+from . import constants, util
+from .bitcoin import (COIN, address_to_script,
                       is_address, pubkey_to_address)
 from .dash_tx import (STANDARD_TX, PSTxTypes, SPEC_TX_NAMES, PSCoinRounds,
                       str_ip, CTxIn, CTxOut)
 from .dash_msg import (DSPoolStatusUpdate, DSMessageIDs, ds_msg_str,
                        ds_pool_state_str, DashDsaMsg, DashDsiMsg, DashDssMsg,
                        PRIVATESEND_ENTRY_MAX_SIZE)
-from .keystore import xpubkey_to_address, load_keystore, from_seed
+from .invoices import PR_EXPIRED
+from .keystore import load_keystore, from_seed
 from .logging import Logger
-from .transaction import Transaction, TxOutput
+from .transaction import Transaction, PartialTxOutput, PartialTransaction
 from .util import (NoDynamicFeeEstimates, log_exceptions, SilentTaskGroup,
                    NotEnoughFunds, bfh, is_android, profiler, InvalidPassword)
 from .i18n import _
@@ -95,7 +96,7 @@ def to_duffs(amount):
 
 
 def sort_utxos_by_ps_rounds(x):
-    ps_rounds = x['ps_rounds']
+    ps_rounds = x.ps_rounds
     if ps_rounds is None:
         return PSCoinRounds.MINUSINF
     return ps_rounds
@@ -550,9 +551,7 @@ class PSMixSession:
         icnt = 0
         ocnt = 0
         for i in tx.inputs():
-            prev_h = i['prevout_hash']
-            prev_n = i['prevout_n']
-            if f'{prev_h}:{prev_n}' in inputs:
+            if i.prevout.to_str() in inputs:
                 icnt += 1
         for o in tx.outputs():
             if o.address in outputs:
@@ -810,7 +809,7 @@ class PSManager(Logger):
                                      ' Coins tab.')
 
     gap_limit = 20
-    gap_limit_for_change = 6
+    gap_limit_for_change = 10
 
     def __init__(self, wallet):
         Logger.__init__(self)
@@ -826,7 +825,7 @@ class PSManager(Logger):
         self.wallet = wallet
         self.ps_keystore = None
         self.ps_ks_txin_type = 'p2pkh'
-        self.config = None
+        self.config = wallet.config
         self._state = PSStates.Unsupported
         self.wallet_types_supported = ['standard']
         self.keystore_types_supported = ['bip32', 'hardware']
@@ -934,7 +933,7 @@ class PSManager(Logger):
         _load_and_cleanup = self.load_and_cleanup
         await self.loop.run_in_executor(None, _load_and_cleanup)
         await self.find_untracked_ps_txs()
-        self.wallet.storage.write()
+        self.wallet.save_db()
 
     @property
     def state(self):
@@ -971,19 +970,19 @@ class PSManager(Logger):
     # enable and load ps_keystore
     def copy_standard_bip32_keystore(self):
         w = self.wallet
-        main_ks_copy = copy.deepcopy(w.storage.get('keystore'))
+        main_ks_copy = copy.deepcopy(dict(w.db.get('keystore')))
         main_ks_copy['type'] = 'ps_bip32'
         if self.ps_keystore:
-            ps_ks_copy = copy.deepcopy(w.storage.get('ps_keystore'))
+            ps_ks_copy = copy.deepcopy(dict(w.db.get('ps_keystore')))
             addr_deriv_offset = ps_ks_copy.get('addr_deriv_offset', None)
             if addr_deriv_offset is not None:
                 main_ks_copy['addr_deriv_offset'] = addr_deriv_offset
-        w.storage.put('ps_keystore', main_ks_copy)
+        w.db.put('ps_keystore', main_ks_copy)
 
     def load_ps_keystore(self):
         w = self.wallet
         if 'ps_keystore' in w.db.data:
-            self.ps_keystore = load_keystore(w.storage, 'ps_keystore')
+            self.ps_keystore = load_keystore(w.db, 'ps_keystore')
 
     def enable_ps_keystore(self):
         if self.w_type == 'standard':
@@ -1008,13 +1007,13 @@ class PSManager(Logger):
             raise Exception(f'can not create ps_keystore when main keystore'
                             f' type: "{self.w_ks_type}"')
         w = self.wallet
-        if w.storage.get('ps_keystore', {}):
+        if w.db.get('ps_keystore', {}):
             raise Exception('ps_keystore already exists')
         keystore = from_seed(seed, seed_ext, False)
         keystore.update_password(None, password)
         ps_keystore = keystore.dump()
         ps_keystore.update({'type': 'ps_bip32'})
-        w.storage.put('ps_keystore', ps_keystore)
+        w.db.put('ps_keystore', ps_keystore)
         self.enable_ps_keystore()
 
     def is_ps_ks_encrypted(self):
@@ -1041,27 +1040,26 @@ class PSManager(Logger):
             self.on_wallet_password_set()
 
         self.ps_keystore.update_password(old_pw, new_pw)
-        self.wallet.storage.put('ps_keystore', self.ps_keystore.dump())
-        self.wallet.storage.write()
+        self.wallet.db.put('ps_keystore', self.ps_keystore.dump())
+        self.wallet.save_db()
 
     def is_ps_ks_inputs_in_tx(self, tx):
         for txin in tx.inputs():
-            if self.is_ps_ks(txin['address']):
+            if self.is_ps_ks(txin.address):
                 return True
 
     # methods related to ps_keystore
-    def pubkeys_to_address(self, pubkey):
+    def pubkeys_to_address(self, pubkeys):
+        pubkey = pubkeys[0]
         return pubkey_to_address(self.ps_ks_txin_type, pubkey)
 
     def derive_pubkeys(self, c, i):
-        return self.ps_keystore.derive_pubkey(c, i)
+        return [self.ps_keystore.derive_pubkey(c, i).hex()]
 
-    def derive_address(self, for_change, i):
-        x = self.derive_pubkeys(for_change, i)
-        return self.pubkeys_to_address(x)
-
-    def get_pubkey(self, c, i):
-        return self.derive_pubkeys(c, i)
+    def derive_address(self, for_change, n):
+        for_change = int(for_change)
+        pubkeys = self.derive_pubkeys(for_change, n)
+        return self.pubkeys_to_address(pubkeys)
 
     def get_address_index(self, address):
         return self.wallet.db.get_address_index(address, ps_ks=True)
@@ -1071,7 +1069,8 @@ class PSManager(Logger):
 
     def get_public_key(self, address):
         sequence = self.get_address_index(address)
-        return self.get_pubkey(*sequence)
+        pubkeys = self.derive_pubkeys(*sequence)
+        return pubkeys[0]
 
     def get_public_keys(self, address):
         return [self.get_public_key(address)]
@@ -1083,30 +1082,19 @@ class PSManager(Logger):
                 raise PSKsInternalAddressCorruption()
 
     def create_new_address(self, for_change=False):
+        assert type(for_change) is bool
         with self.wallet.lock:
             if for_change:
                 n = self.wallet.db.num_change_addresses(ps_ks=True)
             else:
                 n = self.wallet.db.num_receiving_addresses(ps_ks=True)
-            address = self.derive_address(for_change, n)
+            address = self.derive_address(int(for_change), n)
             if for_change:
                 self.wallet.db.add_change_address(address, ps_ks=True)
             else:
                 self.wallet.db.add_receiving_address(address, ps_ks=True)
             self.wallet.add_address(address, ps_ks=True)  # addr synchronizer
             return address
-
-    def address_is_old(self, address, age_limit=2):
-        age = -1
-        h = self.wallet.db.get_addr_history(address)
-        for tx_hash, tx_height in h:
-            if tx_height <= 0:
-                tx_age = 0
-            else:
-                tx_age = self.wallet.get_local_height() - tx_height + 1
-            if tx_age > age:
-                age = tx_age
-        return age > age_limit
 
     def synchronize_sequence(self, for_change):
         limit = self.gap_limit_for_change if for_change else self.gap_limit
@@ -1120,7 +1108,7 @@ class PSManager(Logger):
                 self.create_new_address(for_change)
                 continue
             last_few_addresses = addrs[-limit:]
-            if any(map(self.address_is_old, last_few_addresses)):
+            if any(map(self.wallet.address_is_old, last_few_addresses)):
                 self.create_new_address(for_change)
             else:
                 break
@@ -1130,23 +1118,23 @@ class PSManager(Logger):
             self.synchronize_sequence(False)
             self.synchronize_sequence(True)
 
-    def is_beyond_limit(self, address):
-        is_change, i = self.get_address_index(address)
-        limit = self.gap_limit_for_change if is_change else self.gap_limit
-        if i < limit:
-            return False
-        slice_start = max(0, i - limit)
-        slice_stop = max(0, i)
-        if is_change:
-            prev_addrs = self.get_change_addresses(slice_start=slice_start,
-                                                   slice_stop=slice_stop)
-        else:
-            prev_addrs = self.get_receiving_addresses(slice_start=slice_start,
-                                                      slice_stop=slice_stop)
-        for addr in prev_addrs:
-            if self.wallet.db.get_addr_history(addr):
-                return False
-        return True
+    def get_all_known_addresses_beyond_gap_limit(self):
+        # note that we don't stop at first large gap
+        found = set()
+
+        def process_addresses(addrs, gap_limit):
+            rolling_num_unused = 0
+            for addr in addrs:
+                if self.wallet.db.get_addr_history(addr):
+                    rolling_num_unused = 0
+                else:
+                    if rolling_num_unused >= gap_limit:
+                        found.add(addr)
+                    rolling_num_unused += 1
+
+        process_addresses(self.get_receiving_addresses(), self.gap_limit)
+        process_addresses(self.get_change_addresses(), self.gap_limit_for_change)
+        return found
 
     def get_receiving_addresses(self, *, slice_start=None, slice_stop=None):
         return self.wallet.db.get_receiving_addresses(slice_start=slice_start,
@@ -1162,37 +1150,22 @@ class PSManager(Logger):
         return self.get_receiving_addresses() + self.get_change_addresses()
 
     def get_unused_addresses(self, for_change=False):
+        w = self.wallet
         if for_change:
             domain = self.get_change_addresses()
         else:
             domain = self.get_receiving_addresses()
-        ps_reserved = self.wallet.db.get_ps_reserved()
+        # TODO we should index receive_requests by id
+        in_use_by_request = [k for k in w.receive_requests.keys()
+                             if w.get_request_status(k) != PR_EXPIRED]
+        in_use_by_request = set(in_use_by_request)
+        ps_reserved = w.db.get_ps_reserved()
         tmp_reserved_addr = self.get_tmp_reserved_address()
         tmp_reserved_addrs = [tmp_reserved_addr] if tmp_reserved_addr else []
-        return [addr for addr in domain if not self.wallet.is_used(addr)
-                and addr not in self.wallet.receive_requests.keys()
+        return [addr for addr in domain if not w.is_used(addr)
+                and addr not in in_use_by_request
                 and addr not in ps_reserved
                 and addr not in tmp_reserved_addrs]
-
-    def add_input_info(self, txin):
-        w = self.wallet
-        address = w.get_txin_address(txin)
-        if w.is_mine(address):
-            if self.is_ps_ks(address):
-                txin['address'] = address
-                txin['type'] = self.ps_ks_txin_type
-                self.add_input_sig_info(txin, address)
-            else:
-                txin['address'] = address
-                txin['type'] = w.get_txin_type(address)
-                w.add_input_sig_info(txin, address)
-
-    def add_input_sig_info(self, txin, address):
-        derivation = self.get_address_index(address)
-        x_pubkey = self.ps_keystore.get_xpubkey(*derivation)
-        txin['x_pubkeys'] = [x_pubkey]
-        txin['signatures'] = [None]
-        txin['num_sig'] = 1
 
     # load ps related data
     def load_and_cleanup(self):
@@ -1257,10 +1230,8 @@ class PSManager(Logger):
 
     def on_network_start(self, network):
         self.network = network
-        self.network.register_callback(self.on_wallet_updated,
-                                       ['wallet_updated'])
-        self.network.register_callback(self.on_network_status,
-                                       ['status'])
+        util.register_callback(self.on_wallet_updated, ['wallet_updated'])
+        util.register_callback(self.on_network_status, ['status'])
         self.dash_net = network.dash_net
         self.loop = network.asyncio_loop
         self._loop_thread = network._loop_thread
@@ -1272,8 +1243,8 @@ class PSManager(Logger):
     def on_stop_threads(self):
         if self.state == PSStates.Mixing:
             self.stop_mixing()
-        self.network.unregister_callback(self.on_wallet_updated)
-        self.network.unregister_callback(self.on_network_status)
+        util.unregister_callback(self.on_wallet_updated)
+        util.unregister_callback(self.on_network_status)
 
     def on_network_status(self, event, *args):
         connected = self.network.is_connected()
@@ -1316,9 +1287,7 @@ class PSManager(Logger):
                     if not warn:
                         return
                     for txin in tx.inputs():
-                        prev_h = txin['prevout_hash']
-                        prev_n = txin['prevout_n']
-                        outpoint = f'{prev_h}:{prev_n}'
+                        outpoint = txin.prevout.to_str()
                         if (w.db.get_ps_spending_collateral(outpoint)
                                 or w.db.get_ps_spending_denom(outpoint)):
                             raise PSPossibleDoubleSpendError(warn)
@@ -1554,12 +1523,12 @@ class PSManager(Logger):
                  ' in regular way. However, you can mix these funds manually'
                  ' with PrivateSend mixing process.')
 
-        expl2_qt =  _('You can create new denoms or new collateral from other'
-                      ' PS coins on Coins tab. You can also select individual'
-                      ' coin to spend and return to originating address.')
+        expl2_qt = _('You can create new denoms or new collateral from other'
+                     ' PS coins on Coins tab. You can also select individual'
+                     ' coin to spend and return to originating address.')
 
-        expl2_kv =  _('You can create new denoms or new collateral from other'
-                      ' PS coins with Coins dialog from PrivateSend options.')
+        expl2_kv = _('You can create new denoms or new collateral from other'
+                     ' PS coins with Coins dialog from PrivateSend options.')
 
         q = _('This option allow spend other PS coins as a regular coins'
               ' without coins selection.'
@@ -2043,7 +2012,7 @@ class PSManager(Logger):
                                 mature_only=True)
             utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
             for c in utxos:
-                if c['address'] not in self._keypairs_cache[KP_SPENDABLE]:
+                if c.address not in self._keypairs_cache[KP_SPENDABLE]:
                     return True, prev_kp_state
 
             sign_cnt, sign_change_cnt, small_mix_funds = \
@@ -2057,10 +2026,10 @@ class PSManager(Logger):
 
             # check spendable ps coins keys (already saved denoms/collateral)
             for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
-                ps_rounds = c['ps_rounds']
+                ps_rounds = c.ps_rounds
                 if ps_rounds >= self.mix_rounds:
                     continue
-                addr = c['address']
+                addr = c.address
                 if addr not in self._keypairs_cache[KP_PS_SPENDABLE]:
                     return True, prev_kp_state
                 else:
@@ -2137,15 +2106,15 @@ class PSManager(Logger):
                 self._cleanup_unfinished_keypairs_cache()
                 return
             sequence = [0, ri]
-            x_pubkey = w.keystore.get_xpubkey(*sequence)
-            _, addr = xpubkey_to_address(x_pubkey)
+            pubkey = w.keystore.derive_pubkey(*sequence).hex()
+            addr = pubkey_to_address(w.txin_type, pubkey)
             ri += 1
             if w.is_used(addr):
                 continue
             if addr in ps_incoming_cache:
                 continue
             sec = w.keystore.get_private_key(sequence, password)
-            ps_incoming_cache[addr] = (x_pubkey, sec)
+            ps_incoming_cache[addr] = (pubkey, sec)
             cached += 1
         self.logger.info(f'Cached {cached} keys'
                          f' of {KP_INCOMING} type')
@@ -2160,25 +2129,25 @@ class PSManager(Logger):
                             mature_only=True)
         utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
         if self.is_hw_ks:
-            utxos = [utxo for utxo in utxos if utxo['is_ps_ks']]
+            utxos = [utxo for utxo in utxos if utxo.is_ps_ks]
         for c in utxos:
             if self.state != PSStates.Mixing:
                 self._cleanup_unfinished_keypairs_cache()
                 return
-            addr = c['address']
+            addr = c.address
             if addr in self._keypairs_cache[KP_SPENDABLE]:
                 continue
             sequence = None
             if self.ps_keystore:
                 sequence = self.get_address_index(addr)
             if sequence:
-                x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
                 sec = self.ps_keystore.get_private_key(sequence, password)
             else:
                 sequence = w.get_address_index(addr)
-                x_pubkey = w.keystore.get_xpubkey(*sequence)
+                pubkey = w.keystore.derive_pubkey(*sequence).hex()
                 sec = w.keystore.get_private_key(sequence, password)
-            self._keypairs_cache[KP_SPENDABLE][addr] = (x_pubkey, sec)
+            self._keypairs_cache[KP_SPENDABLE][addr] = (pubkey, sec)
             cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_SPENDABLE} type')
@@ -2194,13 +2163,11 @@ class PSManager(Logger):
             if self.state != PSStates.Mixing:
                 self._cleanup_unfinished_keypairs_cache()
                 return
-            prev_h = c['prevout_hash']
-            prev_n = c['prevout_n']
-            outpoint = f'{prev_h}:{prev_n}'
+            outpoint = c.prevout.to_str()
             ps_denom = w.db.get_ps_denom(outpoint)
             if ps_denom and ps_denom[2] >= self.mix_rounds:
                 continue
-            addr = c['address']
+            addr = c.address
             if self.is_hw_ks and not self.is_ps_ks(addr):
                 continue  # skip denoms on hw keystore
             if addr in ps_spendable_cache:
@@ -2209,13 +2176,13 @@ class PSManager(Logger):
             if self.ps_keystore:
                 sequence = self.get_address_index(addr)
             if sequence:
-                x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
                 sec = self.ps_keystore.get_private_key(sequence, password)
             else:
                 sequence = w.get_address_index(addr)
-                x_pubkey = w.keystore.get_xpubkey(*sequence)
+                pubkey = w.keystore.derive_pubkey(*sequence).hex()
                 sec = w.keystore.get_private_key(sequence, password)
-            ps_spendable_cache[addr] = (x_pubkey, sec)
+            ps_spendable_cache[addr] = (pubkey, sec)
             cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys of {KP_PS_SPENDABLE} type')
@@ -2243,13 +2210,13 @@ class PSManager(Logger):
                 if self.ps_keystore:
                     sequence = self.get_address_index(addr)
                 if sequence:
-                    x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                    pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
                     sec = self.ps_keystore.get_private_key(sequence, password)
                 else:
                     sequence = w.get_address_index(addr)
-                    x_pubkey = w.keystore.get_xpubkey(*sequence)
+                    pubkey = w.keystore.derive_pubkey(*sequence).hex()
                     sec = w.keystore.get_private_key(sequence, password)
-                ps_change_cache[addr] = (x_pubkey, sec)
+                ps_change_cache[addr] = (pubkey, sec)
                 cached += 1
             else:
                 sign_cnt -= 1
@@ -2259,13 +2226,13 @@ class PSManager(Logger):
                 if self.ps_keystore:
                     sequence = self.get_address_index(addr)
                 if sequence:
-                    x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                    pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
                     sec = self.ps_keystore.get_private_key(sequence, password)
                 else:
                     sequence = w.get_address_index(addr)
-                    x_pubkey = w.keystore.get_xpubkey(*sequence)
+                    pubkey = w.keystore.derive_pubkey(*sequence).hex()
                     sec = w.keystore.get_private_key(sequence, password)
-                ps_coins_cache[addr] = (x_pubkey, sec)
+                ps_coins_cache[addr] = (pubkey, sec)
                 cached += 1
         if cached:
             self.logger.info(f'Cached {cached} keys for ps_reserved addresses')
@@ -2285,10 +2252,11 @@ class PSManager(Logger):
                     return None, None
                 sequence = [1, ci]
                 if self.ps_keystore:
-                    x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                    pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
+                    addr = pubkey_to_address(self.ps_ks_txin_type, pubkey)
                 else:
-                    x_pubkey = w.keystore.get_xpubkey(*sequence)
-                _, addr = xpubkey_to_address(x_pubkey)
+                    pubkey = w.keystore.derive_pubkey(*sequence).hex()
+                    addr = pubkey_to_address(w.txin_type, pubkey)
                 ci += 1
                 if w.is_used(addr):
                     continue
@@ -2299,7 +2267,7 @@ class PSManager(Logger):
                     sec = self.ps_keystore.get_private_key(sequence, password)
                 else:
                     sec = w.keystore.get_private_key(sequence, password)
-                ps_change_cache[addr] = (x_pubkey, sec)
+                ps_change_cache[addr] = (pubkey, sec)
                 cached += 1
                 if not cached % 100:
                     self.logger.info(f'Cached {cached} keys'
@@ -2323,10 +2291,11 @@ class PSManager(Logger):
                     return None, None
                 sequence = [0, ri]
                 if self.ps_keystore:
-                    x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                    pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
+                    addr = pubkey_to_address(self.ps_ks_txin_type, pubkey)
                 else:
-                    x_pubkey = w.keystore.get_xpubkey(*sequence)
-                _, addr = xpubkey_to_address(x_pubkey)
+                    pubkey = w.keystore.derive_pubkey(*sequence).hex()
+                    addr = pubkey_to_address(w.txin_type, pubkey)
                 ri += 1
                 if w.is_used(addr):
                     continue
@@ -2337,7 +2306,7 @@ class PSManager(Logger):
                     sec = self.ps_keystore.get_private_key(sequence, password)
                 else:
                     sec = w.keystore.get_private_key(sequence, password)
-                ps_coins_cache[addr] = (x_pubkey, sec)
+                ps_coins_cache[addr] = (pubkey, sec)
                 cached += 1
                 if not cached % 100:
                     self.logger.info(f'Cached {cached} keys'
@@ -2356,14 +2325,14 @@ class PSManager(Logger):
         if self.ps_keystore:
             sequence = self.get_address_index(addr)
         if sequence:
-            x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+            pubkey = self.ps_keystore.derive_pubkey(*sequence).hex()
             sec = self.ps_keystore.get_private_key(sequence, password)
         else:
             sequence = w.get_address_index(addr)
-            x_pubkey = w.keystore.get_xpubkey(*sequence)
+            pubkey = w.keystore.derive_pubkey(*sequence).hex()
             sec = w.keystore.get_private_key(sequence, password)
         spendable_cache = self._keypairs_cache[KP_SPENDABLE]
-        spendable_cache[addr] = (x_pubkey, sec)
+        spendable_cache[addr] = (pubkey, sec)
         self.logger.info(f'Cached key of {KP_SPENDABLE} type'
                          f' for tmp reserved address')
         self.postpone_notification('ps-keypairs-changes', self.wallet)
@@ -2388,9 +2357,9 @@ class PSManager(Logger):
             w = self.wallet
             inputs = []
             for i in tx.inputs():
-                prev_h = i['prevout_hash']
-                prev_n = i['prevout_n']
-                outpoint = f'{prev_h}:{prev_n}'
+                prev_h = i.prevout.txid.hex()
+                prev_n = i.prevout.out_idx
+                outpoint = i.prevout.to_str()
                 prev_tx = w.db.get_transaction(prev_h)
                 if prev_tx:
                     o = prev_tx.outputs()[prev_n]
@@ -2473,20 +2442,14 @@ class PSManager(Logger):
         for cache_type in KP_ALL_TYPES:
             if cache_type not in self._keypairs_cache:
                 continue
-            for x_pubkey, sec in self._keypairs_cache[cache_type].values():
-                keypairs[x_pubkey] = sec
+            for pubkey, sec in self._keypairs_cache[cache_type].values():
+                keypairs[pubkey] = sec
         return keypairs
-
-    def add_tx_inputs_info(self, tx):
-        if tx.is_complete():
-            return
-        for txin in tx.inputs():
-            self.add_input_info(txin)
 
     def sign_transaction(self, tx, password, mine_txins_cnt=None):
         if self._keypairs_cache:
             if mine_txins_cnt is None:
-                self.add_tx_inputs_info(tx)
+                tx.add_info_from_wallet(self.wallet)
             keypairs = self.get_keypairs()
             signed_txins_cnt = tx.sign(keypairs)
             keypairs.clear()
@@ -2522,8 +2485,8 @@ class PSManager(Logger):
         coins = w.get_utxos(None,
                             mature_only=True, confirmed_only=True,
                             consider_islocks=True, min_rounds=0)
-        coins = [c for c in coins if c['value'] > MIN_DENOM_VAL]
-        return sorted(coins, key=lambda x: (x['ps_rounds'], -x['value']))
+        coins = [c for c in coins if c.value_sats() > MIN_DENOM_VAL]
+        return sorted(coins, key=lambda x: (x.ps_rounds, -x.value_sats()))
 
     def check_protx_info_completeness(self):
         if not self.network:
@@ -2836,7 +2799,7 @@ class PSManager(Logger):
 
     def check_min_rounds(self, coins, min_rounds):
         for c in coins:
-            ps_rounds = c['ps_rounds']
+            ps_rounds = c.ps_rounds
             if ps_rounds is None or ps_rounds < min_rounds:
                 raise PSMinRoundsCheckFailed(f'Check for mininum {min_rounds}'
                                              f' PrivateSend mixing rounds'
@@ -2983,7 +2946,7 @@ class PSManager(Logger):
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        coins_val = sum([c['value'] for c in coins])
+        coins_val = sum([c.value_sats() for c in coins])
         if coins_val < MIN_DENOM_VAL and not on_keep_amount:
             return []  # no coins to create denoms
 
@@ -3066,7 +3029,7 @@ class PSManager(Logger):
         return txs_fee
 
     def _calc_denoms_amounts_from_coins(self, coins, fee_per_kb):
-        coins_val = sum([c['value'] for c in coins])
+        coins_val = sum([c.value_sats() for c in coins])
         coins_cnt = len(coins)
         denoms_amounts = []
         denoms_val = 0
@@ -3153,8 +3116,6 @@ class PSManager(Logger):
 
     @property
     def min_new_denoms_from_coins_val(self):
-        if not self.config:
-            raise Exception('self.config is not set')
         fee_per_kb = self.config.fee_per_kb()
         # no change, one coin input, one 100001 out and 10000 collateral out
         new_denoms_fee = calc_tx_fee(1, 2, fee_per_kb, max_size=True)
@@ -3162,8 +3123,6 @@ class PSManager(Logger):
 
     @property
     def min_new_collateral_from_coins_val(self):
-        if not self.config:
-            raise Exception('self.config is not set')
         fee_per_kb = self.config.fee_per_kb()
         # no change, one coin input, one 10000 output
         new_collateral_fee = calc_tx_fee(1, 1, fee_per_kb, max_size=True)
@@ -3178,10 +3137,10 @@ class PSManager(Logger):
             coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                                 mature_only=True)
             coins = [c for c in coins if not w.is_frozen_coin(c)]
-            coins_val = sum([c['value'] for c in coins])
-            main_ks_coins = [c for c in coins if not c['is_ps_ks']]
-            main_ks_coins_val = sum([c['value'] for c in main_ks_coins])
-            ps_ks_coins_val = sum([c['value'] for c in coins if c['is_ps_ks']])
+            coins_val = sum([c.value_sats() for c in coins])
+            main_ks_coins = [c for c in coins if not c.is_ps_ks]
+            main_ks_coins_val = sum([c.value_sats() for c in main_ks_coins])
+            ps_ks_coins_val = sum([c.value_sats() for c in coins if c.is_ps_ks])
 
             outputs_amounts = self.calc_need_denoms_amounts()
             in_cnt = len(coins)
@@ -3198,13 +3157,14 @@ class PSManager(Logger):
             # prepare and send transaction to ps_keystore unused address
             unused = self.reserve_addresses(1, tmp=True)
             ps_ks_oaddr = unused[0]
-            outputs = [TxOutput(TYPE_ADDRESS, ps_ks_oaddr, need_transfer_val)]
-            tx = w.make_unsigned_transaction(main_ks_coins, outputs,
-                                             self.config)
+            outputs = [PartialTxOutput.from_address_and_value(ps_ks_oaddr, need_transfer_val)]
+            tx = w.make_unsigned_transaction(coins=main_ks_coins, outputs=outputs)
             tx = self.wallet.sign_transaction(tx, None)
             if tx and tx.is_complete():
                 return tx
         except BaseException as e:
+            import traceback
+            traceback.print_exc()
             self.logger.wfl_err(f'prepare_funds_from_hw_wallet: {str(e)}')
 
     async def _prepare_funds_from_hw_wallet(self):
@@ -3220,28 +3180,27 @@ class PSManager(Logger):
         w = self.wallet
         coins_ps = w.get_utxos(None, mature_only=True,
                                min_rounds=PSCoinRounds.MINUSINF)
-        ps_ks_coins_ps = [c for c in coins_ps if c['is_ps_ks']]
+        ps_ks_coins_ps = [c for c in coins_ps if c.is_ps_ks]
         coins_regular = w.get_utxos(None, mature_only=True)
-        ps_ks_coins_regular = [c for c in coins_regular if c['is_ps_ks']]
+        ps_ks_coins_regular = [c for c in coins_regular if c.is_ps_ks]
         if not ps_ks_coins_ps and not ps_ks_coins_regular:
             raise NotEnoughFunds('No funds found on PS Keystore')
         unused = w.get_unused_addresses()
         if not unused:
             raise NotEnoughFunds('No unused addresses to prepare transaction')
         res = []
-        outputs_ps = [TxOutput(TYPE_ADDRESS, unused[0], '!')]
-        outputs_regular = [TxOutput(TYPE_ADDRESS, unused[1], '!')]
+        outputs_ps = [PartialTxOutput.from_address_and_value(unused[0], '!')]
+        outputs_regular = [PartialTxOutput.from_address_and_value(unused[1], '!')]
         if ps_ks_coins_ps:
-            tx = w.make_unsigned_transaction(ps_ks_coins_ps, outputs_ps,
-                                             self.config)
+            tx = w.make_unsigned_transaction(coins=ps_ks_coins_ps, outputs=outputs_ps)
             tx = self.wallet.sign_transaction(tx, password)
             if tx and tx.is_complete():
                 res.append(tx)
             else:
                 raise Exception('Sign transaction failed')
         if ps_ks_coins_regular:
-            tx = w.make_unsigned_transaction(ps_ks_coins_regular,
-                                             outputs_regular, self.config)
+            tx = w.make_unsigned_transaction(coins=ps_ks_coins_regular,
+                                             outputs=outputs_regular)
             tx = self.wallet.sign_transaction(tx, password)
             if tx and tx.is_complete():
                 res.append(tx)
@@ -3254,7 +3213,7 @@ class PSManager(Logger):
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        ps_ks_coins = [c for c in coins if c['is_ps_ks']]
+        ps_ks_coins = [c for c in coins if c.is_ps_ks]
         if ps_ks_coins:
             return True
         else:
@@ -3269,11 +3228,9 @@ class PSManager(Logger):
                                 confirmed_only=True, consider_islocks=True)
             inputs = []
             for utxo in utxos:
-                prev_h = utxo['prevout_hash']
-                prev_n = utxo['prevout_n']
-                if f'{prev_h}:{prev_n}' != outpoint:
+                if utxo.prevout.to_str() != outpoint:
                     continue
-                self.add_input_info(utxo)
+                w.add_input_info(utxo)
                 inputs.append(utxo)
             if inputs:
                 return outpoint, value, inputs
@@ -3289,7 +3246,7 @@ class PSManager(Logger):
                 txid, wfl = res
                 self.logger.wfl_ok(f'Completed pay collateral workflow with'
                                    f' tx: {txid}, workflow: {wfl.lid}')
-                self.wallet.storage.write()
+                self.wallet.save_db()
         except Exception as e:
             wfl = self.pay_collateral_wfl
             if wfl:
@@ -3326,7 +3283,7 @@ class PSManager(Logger):
 
         # check input addresses is in keypairs if keypairs cache available
         if self._keypairs_cache:
-            input_addrs = [utxo['address'] for utxo in inputs]
+            input_addrs = [utxo.address for utxo in inputs]
             not_found_addrs = self._find_addrs_not_in_keypairs(input_addrs)
             if not_found_addrs:
                 not_found_addrs = ', '.join(list(not_found_addrs))
@@ -3346,13 +3303,13 @@ class PSManager(Logger):
                 reserved = self.reserve_addresses(1, for_change=True,
                                                   data=outpoint)
                 output_addr = reserved[0]
-            outputs = [TxOutput(TYPE_ADDRESS, output_addr, ovalue)]
+            outputs = [PartialTxOutput.from_address_and_value(output_addr, ovalue)]
         else:
             # OP_RETURN as ouptut script
-            outputs = [TxOutput(TYPE_SCRIPT, '6a', 0)]
+            outputs = [PartialTxOutput(scriptpubkey=bfh('6a'), value=0)]
 
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0].nsequence = 0xffffffff
         tx = self.sign_transaction(tx, None)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
@@ -3372,7 +3329,7 @@ class PSManager(Logger):
         _cleanup = self._cleanup_pay_collateral_wfl
         changed = await self.loop.run_in_executor(None, _cleanup, force)
         if changed:
-            self.wallet.storage.write()
+            self.wallet.save_db()
 
     def _cleanup_pay_collateral_wfl(self, force=False):
         with self.pay_collateral_wfl_lock:
@@ -3479,7 +3436,7 @@ class PSManager(Logger):
     def new_collateral_from_coins_info(self, coins):
         if not coins or len(coins) > 1:
             return
-        coins_val = sum([c['value'] for c in coins])
+        coins_val = sum([c.value_sats() for c in coins])
         if (coins_val >= self.min_new_denoms_from_coins_val
                 or coins_val < self.min_new_collateral_from_coins_val):
             return
@@ -3510,7 +3467,7 @@ class PSManager(Logger):
         try:
             w = self.wallet
             txid, tx = self._make_new_collateral_tx(wfl, coins, password)
-            if not w.add_transaction(txid, tx):
+            if not w.add_transaction(tx):
                 raise Exception(f'Transaction with txid: {txid}'
                                 f' conflicts with current history')
             if not w.db.get_ps_tx(txid)[0] == PSTxTypes.NEW_COLLATERAL:
@@ -3547,7 +3504,7 @@ class PSManager(Logger):
                                                        wfl, coins)
             w = self.wallet
             # add_transaction need run in network therad
-            if not w.add_transaction(txid, tx):
+            if not w.add_transaction(tx):
                 raise Exception(f'Transaction with txid: {txid}'
                                 f' conflicts with current history')
 
@@ -3565,7 +3522,7 @@ class PSManager(Logger):
                                        f' with tx: {txid},'
                                        f' workflow: {wfl.lid}')
             await self.loop.run_in_executor(None, _after_create_tx)
-            w.storage.write()
+            w.save_db()
         except Exception as e:
             self.logger.wfl_err(f'Error creating new collateral tx:'
                                 f' {str(e)}, workflow: {wfl.lid}')
@@ -3600,8 +3557,6 @@ class PSManager(Logger):
 
     def _make_new_collateral_tx(self, wfl, coins=None, password=None):
         with self.new_collateral_wfl_lock:
-            if self.config is None:
-                raise Exception('self.config is not set')
             saved = self.new_collateral_wfl
             if not saved:
                 raise Exception('new_collateral_wfl not found')
@@ -3620,8 +3575,8 @@ class PSManager(Logger):
                                 consider_islocks=True)
             utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
             if self.w_ks_type != 'bip32':  # filter coins from ps_keystore
-                utxos = [utxo for utxo in utxos if utxo['is_ps_ks']]
-            utxos_val = sum([utxo['value'] for utxo in utxos])
+                utxos = [utxo for utxo in utxos if utxo.is_ps_ks]
+            utxos_val = sum([utxo.value_sats() for utxo in utxos])
             # try calc fee with change output
             new_collateral_fee = calc_tx_fee(len(utxos), 2, fee_per_kb,
                                              max_size=True)
@@ -3637,16 +3592,16 @@ class PSManager(Logger):
                                         consider_islocks=True,
                                         min_rounds=0)
                     coins = [c for c in coins
-                             if c['value'] == MIN_DENOM_VAL]
+                             if c.value_sats() == MIN_DENOM_VAL]
                     if not coins:
                         raise NotEnoughFunds()
-                    coins = sorted(coins, key=lambda x: x['ps_rounds'])
+                    coins = sorted(coins, key=lambda x: x.ps_rounds)
                     coins = coins[0:1]
 
         if coins is not None:
             if len(coins) > 1:
                 raise TooManyUtxos('Not allowed multiple utxos')
-            utxos_val = coins[0]['value']
+            utxos_val = coins[0].value_sats()
             if utxos_val >= self.min_new_denoms_from_coins_val:
                 raise TooLargeUtxoVal('To large utxo selected')
             outputs = None
@@ -3654,19 +3609,19 @@ class PSManager(Logger):
                 new_collateral_fee = calc_tx_fee(1, 1, fee_per_kb,
                                                  max_size=True)
                 if utxos_val - new_collateral_fee >= collateral_val:
-                    outputs = [TxOutput(TYPE_ADDRESS, oaddr, collateral_val)]
+                    outputs = [PartialTxOutput.from_address_and_value(oaddr, collateral_val)]
                     utxos = coins
                     break
             if outputs is None:
                 raise NotEnoughFunds()
         else:
-            outputs = [TxOutput(TYPE_ADDRESS, oaddr, CREATE_COLLATERAL_VAL)]
+            outputs = [PartialTxOutput.from_address_and_value(oaddr, CREATE_COLLATERAL_VAL)]
 
-        tx = w.make_unsigned_transaction(utxos, outputs, self.config)
+        tx = w.make_unsigned_transaction(coins=utxos, outputs=outputs)
         inputs = tx.inputs()
         # check input addresses is in keypairs if keypairs cache available
         if self._keypairs_cache:
-            input_addrs = [utxo['address'] for utxo in inputs]
+            input_addrs = [utxo.address for utxo in inputs]
             not_found_addrs = self._find_addrs_not_in_keypairs(input_addrs)
             if not_found_addrs:
                 not_found_addrs = ', '.join(list(not_found_addrs))
@@ -3675,12 +3630,12 @@ class PSManager(Logger):
                                          f' {not_found_addrs}')
 
         if coins is not None:  # no change output
-            tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
+            tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
             for txin in tx.inputs():
-                txin['sequence'] = 0xffffffff
+                txin.nsequence = 0xffffffff
         else:  # use first input address as a change, use selected inputs
-            change_addr = inputs[0]['address']
-            tx = w.make_unsigned_transaction(inputs, outputs, self.config,
+            change_addr = inputs[0].address
+            tx = w.make_unsigned_transaction(coins=inputs, outputs=outputs,
                                              change_addr=change_addr)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
@@ -3700,7 +3655,7 @@ class PSManager(Logger):
         _cleanup = self._cleanup_new_collateral_wfl
         changed = await self.loop.run_in_executor(None, _cleanup, force)
         if changed:
-            self.wallet.storage.write()
+            self.wallet.save_db()
 
     def _cleanup_new_collateral_wfl(self, force=False):
         with self.new_collateral_wfl_lock:
@@ -3841,7 +3796,7 @@ class PSManager(Logger):
     def new_denoms_from_coins_info(self, coins):
         if not coins or len(coins) > 1:
             return
-        coins_val = sum([c['value'] for c in coins])
+        coins_val = sum([c.value_sats() for c in coins])
         if coins_val < self.min_new_denoms_from_coins_val:
             return
         fee_per_kb = self.config.fee_per_kb()
@@ -3883,7 +3838,7 @@ class PSManager(Logger):
                 txid, tx = self._make_new_denoms_tx(wfl, tx_amounts,
                                                     last_tx_idx, i,
                                                     coins, password)
-                if not w.add_transaction(txid, tx):
+                if not w.add_transaction(tx):
                     raise Exception(f'Transaction with txid: {txid}'
                                     f' conflicts with current history')
                 if not w.db.get_ps_tx(txid)[0] == PSTxTypes.NEW_DENOMS:
@@ -3905,8 +3860,7 @@ class PSManager(Logger):
                     return wfl, None
                 else:
                     txin0 = copy.deepcopy(tx.inputs()[0])
-                    self.add_input_info(txin0)
-                    txin0_addr = txin0['address']
+                    txin0_addr = w.get_txin_address(txin0)
                     utxos = w.get_utxos([txin0_addr],
                                         min_rounds=PSCoinRounds.OTHER)
                     change_outpoint = None
@@ -3916,9 +3870,7 @@ class PSManager(Logger):
                             break
                     coins = []
                     for utxo in utxos:
-                        prev_h = utxo['prevout_hash']
-                        prev_n = utxo['prevout_n']
-                        if f'{prev_h}:{prev_n}' != change_outpoint:
+                        if utxo.prevout.to_str() != change_outpoint:
                             continue
                         coins.append(utxo)
             except Exception as e:
@@ -3944,7 +3896,7 @@ class PSManager(Logger):
                                                            wfl, tx_amounts,
                                                            last_tx_idx, i)
                 # add_transaction need run in network therad
-                if not w.add_transaction(txid, tx):
+                if not w.add_transaction(tx):
                     raise Exception(f'Transaction with txid: {txid}'
                                     f' conflicts with current history')
 
@@ -3964,7 +3916,7 @@ class PSManager(Logger):
                             self.logger.wfl_ok(f'Completed new denoms'
                                                f' workflow: {wfl.lid}')
                 await self.loop.run_in_executor(None, _after_create_tx)
-                w.storage.write()
+                w.save_db()
             except Exception as e:
                 self.logger.wfl_err(f'Error creating new denoms tx:'
                                     f' {str(e)}, workflow: {wfl.lid}')
@@ -4005,15 +3957,12 @@ class PSManager(Logger):
 
     def _make_new_denoms_tx(self, wfl, tx_amounts, last_tx_idx, i,
                             coins=None, password=None):
-        if self.config is None:
-            raise Exception('self.config is not set')
-
         w = self.wallet
         # try to create new denoms tx with change outupt at first
         use_confirmed = (i == 0)  # for first tx use confirmed coins
         addrs_cnt = len(tx_amounts)
         oaddrs = self.reserve_addresses(addrs_cnt, data=wfl.uuid)
-        outputs = [TxOutput(TYPE_ADDRESS, addr, a)
+        outputs = [PartialTxOutput.from_address_and_value(addr, a)
                    for addr, a in zip(oaddrs, tx_amounts)]
         if coins is None:
             utxos = w.get_utxos(None,
@@ -4023,14 +3972,14 @@ class PSManager(Logger):
                                 consider_islocks=True)
             utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
             if self.w_ks_type != 'bip32':  # filter coins from ps_keystore
-                utxos = [utxo for utxo in utxos if utxo['is_ps_ks']]
+                utxos = [utxo for utxo in utxos if utxo.is_ps_ks]
         else:
             utxos = coins
-        tx = w.make_unsigned_transaction(utxos, outputs, self.config)
+        tx = w.make_unsigned_transaction(coins=utxos, outputs=outputs)
         inputs = tx.inputs()
         # check input addresses is in keypairs if keypairs cache available
         if self._keypairs_cache:
-            input_addrs = [utxo['address'] for utxo in inputs]
+            input_addrs = [utxo.address for utxo in inputs]
             not_found_addrs = self._find_addrs_not_in_keypairs(input_addrs)
             if not_found_addrs:
                 not_found_addrs = ', '.join(list(not_found_addrs))
@@ -4039,14 +3988,14 @@ class PSManager(Logger):
                                          f' {not_found_addrs}')
 
         if coins and i == last_tx_idx:
-            tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
+            tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
             for txin in tx.inputs():
-                txin['sequence'] = 0xffffffff
+                txin.nsequence = 0xffffffff
         else:
             # use first input address as a change, use selected inputs
-            in0 = inputs[0]['address']
-            tx = w.make_unsigned_transaction(inputs, outputs,
-                                             self.config, change_addr=in0)
+            in0 = inputs[0].address
+            tx = w.make_unsigned_transaction(coins=inputs, outputs=outputs,
+                                             change_addr=in0)
         tx = self.sign_transaction(tx, password)
         txid = tx.txid()
         raw_tx = tx.serialize_to_network()
@@ -4065,7 +4014,7 @@ class PSManager(Logger):
         _cleanup = self._cleanup_new_denoms_wfl
         changed = await self.loop.run_in_executor(None, _cleanup, force)
         if changed:
-            self.wallet.storage.write()
+            self.wallet.save_db()
 
     def _cleanup_new_denoms_wfl(self, force=False):
         with self.new_denoms_wfl_lock:
@@ -4219,7 +4168,7 @@ class PSManager(Logger):
             if self.enabled:
                 done = await self.loop.run_in_executor(None, _cleanup_staled)
                 if done:
-                    self.wallet.storage.write()
+                    self.wallet.save_db()
             await asyncio.sleep(WAIT_FOR_MN_TXS_TIME_SEC/12)
 
     async def start_denominate_wfl(self):
@@ -4277,7 +4226,7 @@ class PSManager(Logger):
                 if cmd == 'dssu':
                     continue
                 elif cmd == 'dsf':
-                    final_tx = res
+                    final_tx = PartialTransaction.from_tx(res)
                     break
                 else:
                     raise Exception(f'Unsolisited cmd: {cmd} after dsi sent')
@@ -4302,7 +4251,7 @@ class PSManager(Logger):
                     saved = await self.loop.run_in_executor(None, _on_dsc)
                     if saved:
                         wfl = saved
-                        self.wallet.storage.write()
+                        self.wallet.save_db()
                     break
                 else:
                     raise Exception(f'Unsolisited cmd: {cmd} after dss sent')
@@ -4471,37 +4420,27 @@ class PSManager(Logger):
         signed_inputs = []
         tx = self._sign_denominate_tx(tx)
         for i in tx.inputs():
-            prev_h = i['prevout_hash']
-            prev_n = i['prevout_n']
-            if f'{prev_h}:{prev_n}' not in inputs:
+            if i.prevout.to_str() not in inputs:
                 continue
-            prev_h = bfh(prev_h)[::-1]
-            prev_n = int(prev_n)
-            scriptSig = bfh(i['scriptSig'])
-            sequence = i['sequence']
-            signed_inputs.append(CTxIn(prev_h, prev_n, scriptSig, sequence))
+            signed_inputs.append(CTxIn(i.prevout.txid[::-1], i.prevout.out_idx,
+                                       i.script_sig, i.nsequence))
         return signed_inputs
 
     def _sign_denominate_tx(self, tx):
         mine_txins_cnt = 0
         for txin in tx.inputs():
-            self.add_input_info(txin)
-            if txin['address'] is None:
-                del txin['num_sig']
-                txin['x_pubkeys'] = []
-                txin['pubkeys'] = []
-                txin['signatures'] = []
+            self.wallet.add_input_info(txin)
+            if txin.address is None:
                 continue
             mine_txins_cnt += 1
         self.sign_transaction(tx, None, mine_txins_cnt)
-        raw_tx = tx.serialize()
-        return Transaction(raw_tx)
+        return tx
 
     async def cleanup_denominate_wfl(self, wfl):
         _cleanup = self._cleanup_denominate_wfl
         changed = await self.loop.run_in_executor(None, _cleanup, wfl)
         if changed:
-            self.wallet.storage.write()
+            self.wallet.save_db()
 
     def _cleanup_denominate_wfl(self, wfl):
         with self.denominate_wfl_lock:
@@ -4590,8 +4529,8 @@ class PSManager(Logger):
             ocnt = op_return_ocnt = 0
             for i in tx.inputs():
                 icnt += 1
-                prev_h = i['prevout_hash']
-                prev_n = i['prevout_n']
+                prev_h = i.prevout.txid.hex()
+                prev_n = i.prevout.out_idx
                 prev_tx = w.db.get_transaction(prev_h)
                 tx_type = w.db.get_ps_tx(prev_h)[0]
                 if prev_tx:
@@ -4607,7 +4546,7 @@ class PSManager(Logger):
                     others_icnt += 1
             for idx, o in enumerate(tx.outputs()):
                 ocnt += 1
-                if o.address.lower() == '6a':
+                if o.address is None and o.scriptpubkey.hex() == '6a':
                     op_return_ocnt += 1
                 outputs.append((o, txid, idx))
             io_values = (inputs, outputs,
@@ -4620,9 +4559,7 @@ class PSManager(Logger):
         spent_ps_addrs = set()
         spent_outpoints = []
         for txin in tx.inputs():
-            spent_prev_h = txin['prevout_hash']
-            spent_prev_n = txin['prevout_n']
-            spent_outpoint = f'{spent_prev_h}:{spent_prev_n}'
+            spent_outpoint = txin.prevout.to_str()
             spent_outpoints.append(spent_outpoint)
 
             with self.denoms_lock:
@@ -4667,9 +4604,8 @@ class PSManager(Logger):
         w = self.wallet
         restored_ps_addrs = set()
         for txin in tx.inputs():
-            restore_prev_h = txin['prevout_hash']
-            restore_prev_n = txin['prevout_n']
-            restore_outpoint = f'{restore_prev_h}:{restore_prev_n}'
+            restore_prev_h = txin.prevout.txid.hex()
+            restore_outpoint = txin.prevout.to_str()
             tx_type, completed = w.db.get_ps_tx_removed(restore_prev_h)
             with self.denoms_lock:
                 if not tx_type:
@@ -4781,16 +4717,13 @@ class PSManager(Logger):
         new_outpoints = []
         new_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
-        self.add_input_info(txin0)
-        txin0_addr = txin0['address']
+        txin0_addr = w.get_txin_address(txin0)
         for i, o in enumerate(outputs):
             addr = o.address
             val = o.value
             new_outpoint = f'{txid}:{i}'
             if addr == txin0_addr:
-                txin0_prev_h = txin0['prevout_hash']
-                txin0_prev_n = txin0['prevout_n']
-                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                txin0_outpoint = txin0.prevout.to_str()
                 if (w.db.get_ps_spent_denom(txin0_outpoint)
                         or w.db.get_ps_spent_collateral(txin0_outpoint)
                         or w.db.get_ps_spent_other(txin0_outpoint)):
@@ -4819,16 +4752,13 @@ class PSManager(Logger):
         rm_outpoints = []
         rm_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
-        self.add_input_info(txin0)
-        txin0_addr = txin0['address']
+        txin0_addr = w.get_txin_address(txin0)
         for i, o in enumerate(outputs):
             addr = o.address
             val = o.value
             rm_outpoint = f'{txid}:{i}'
             if addr == txin0_addr:
-                txin0_prev_h = txin0['prevout_hash']
-                txin0_prev_n = txin0['prevout_n']
-                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                txin0_outpoint = txin0.prevout.to_str()
                 if (w.db.get_ps_spent_denom(txin0_outpoint)
                         or w.db.get_ps_spent_collateral(txin0_outpoint)
                         or w.db.get_ps_spent_other(txin0_outpoint)):
@@ -4903,16 +4833,13 @@ class PSManager(Logger):
         new_outpoints = []
         new_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
-        self.add_input_info(txin0)
-        txin0_addr = txin0['address']
+        txin0_addr = w.get_txin_address(txin0)
         for i, o in enumerate(outputs):
             addr = o.address
             val = o.value
             new_outpoint = f'{txid}:{i}'
             if addr == txin0_addr:
-                txin0_prev_h = txin0['prevout_hash']
-                txin0_prev_n = txin0['prevout_n']
-                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                txin0_outpoint = txin0.prevout.to_str()
                 if (w.db.get_ps_spent_denom(txin0_outpoint)
                         or w.db.get_ps_spent_collateral(txin0_outpoint)
                         or w.db.get_ps_spent_other(txin0_outpoint)):
@@ -4937,16 +4864,13 @@ class PSManager(Logger):
         rm_outpoints = []
         rm_others_outpoints = []
         txin0 = copy.deepcopy(tx.inputs()[0])
-        self.add_input_info(txin0)
-        txin0_addr = txin0['address']
+        txin0_addr = w.get_txin_address(txin0)
         for i, o in enumerate(outputs):
             addr = o.address
             val = o.value
             rm_outpoint = f'{txid}:{i}'
             if addr == txin0_addr:
-                txin0_prev_h = txin0['prevout_hash']
-                txin0_prev_n = txin0['prevout_n']
-                txin0_outpoint = f'{txin0_prev_h}:{txin0_prev_n}'
+                txin0_outpoint = txin0.prevout.to_str()
                 if (w.db.get_ps_spent_denom(txin0_outpoint)
                         or w.db.get_ps_spent_collateral(txin0_outpoint)
                         or w.db.get_ps_spent_other(txin0_outpoint)):
@@ -4976,7 +4900,7 @@ class PSManager(Logger):
             return 'Wrong collateral amount'
 
         o, o_prev_h, o_prev_n = outputs[0]
-        if o.address.lower() == '6a':
+        if o.address is None and o.scriptpubkey.hex() == '6a':
             if o.value != 0:
                 return 'Wrong output collateral amount'
         else:
@@ -4999,9 +4923,7 @@ class PSManager(Logger):
     def _add_pay_collateral_ps_data(self, txid, tx):
         w = self.wallet
         in0 = tx.inputs()[0]
-        spent_prev_h = in0['prevout_hash']
-        spent_prev_n = in0['prevout_n']
-        spent_outpoint = f'{spent_prev_h}:{spent_prev_n}'
+        spent_outpoint = in0.prevout.to_str()
         spent_ps_addrs = set()
         with self.collateral_lock:
             spent_collateral = w.db.get_ps_spent_collateral(spent_outpoint)
@@ -5017,7 +4939,7 @@ class PSManager(Logger):
 
             out0 = tx.outputs()[0]
             addr = out0.address
-            if addr.lower() != '6a':
+            if out0.scriptpubkey.hex() != '6a' and addr is not None:
                 new_outpoint = f'{txid}:{0}'
                 new_collateral = (addr, out0.value)
                 w.db.add_ps_collateral(new_outpoint, new_collateral)
@@ -5046,9 +4968,8 @@ class PSManager(Logger):
     def _rm_pay_collateral_ps_data(self, txid, tx):
         w = self.wallet
         in0 = tx.inputs()[0]
-        restore_prev_h = in0['prevout_hash']
-        restore_prev_n = in0['prevout_n']
-        restore_outpoint = f'{restore_prev_h}:{restore_prev_n}'
+        restore_prev_h = in0.prevout.txid.hex()
+        restore_outpoint = in0.prevout.to_str()
         restored_ps_addrs = set()
         with self.collateral_lock:
             tx_type, completed = w.db.get_ps_tx_removed(restore_prev_h)
@@ -5067,7 +4988,7 @@ class PSManager(Logger):
 
             out0 = tx.outputs()[0]
             addr = out0.address
-            if addr.lower() != '6a':
+            if out0.scriptpubkey.hex() != '6a' and addr is not None:
                 rm_outpoint = f'{txid}:{0}'
                 self.add_ps_reserved(addr, restore_outpoint)
                 w.db.pop_ps_collateral(rm_outpoint)
@@ -5118,13 +5039,10 @@ class PSManager(Logger):
         ocnt = 0
         for i, txin in enumerate(tx.inputs()):
             txin = copy.deepcopy(txin)
-            self.add_input_info(txin)
-            addr = txin['address']
+            addr = w.get_txin_address(txin)
             if not w.is_mine(addr):
                 continue
-            prev_h = txin['prevout_hash']
-            prev_n = txin['prevout_n']
-            outpoint = f'{prev_h}:{prev_n}'
+            outpoint = txin.prevout.to_str()
             if outpoint in wfl.inputs:
                 icnt += 1
         for i, o in enumerate(tx.outputs()):
@@ -5196,12 +5114,10 @@ class PSManager(Logger):
         # generate new addrs and check match
         idx = first_idx + len(addrs)
         while len(addrs) < look_ahead_cnt:
-            sequence = [1, idx] if for_change else [0, idx]
             if ps_ks:
-                x_pubkey = self.ps_keystore.get_xpubkey(*sequence)
+                generated_addr = self.derive_address(for_change, idx)
             else:
-                x_pubkey = w.keystore.get_xpubkey(*sequence)
-            _, generated_addr = xpubkey_to_address(x_pubkey)
+                generated_addr = w.derive_address(for_change, idx)
             if generated_addr not in addrs:
                 addrs.append(generated_addr)
             if addr in addrs:
@@ -5240,13 +5156,10 @@ class PSManager(Logger):
         spent_outpoints = []
         for txin in tx.inputs():
             txin = copy.deepcopy(txin)
-            self.add_input_info(txin)
-            addr = txin['address']
+            addr = w.get_txin_address(txin)
             if not w.is_mine(addr):
                 continue
-            spent_prev_h = txin['prevout_hash']
-            spent_prev_n = txin['prevout_n']
-            spent_outpoint = f'{spent_prev_h}:{spent_prev_n}'
+            spent_outpoint = txin.prevout.to_str()
             spent_outpoints.append(spent_outpoint)
 
         new_outpoints = []
@@ -5289,13 +5202,11 @@ class PSManager(Logger):
         restore_outpoints = []
         for txin in tx.inputs():
             txin = copy.deepcopy(txin)
-            self.add_input_info(txin)
-            addr = txin['address']
+            addr = w.get_txin_address(txin)
             if not w.is_mine(addr):
                 continue
-            restore_prev_h = txin['prevout_hash']
-            restore_prev_n = txin['prevout_n']
-            restore_outpoint = f'{restore_prev_h}:{restore_prev_n}'
+            restore_prev_h = txin.prevout.txid.hex()
+            restore_outpoint = txin.prevout.to_str()
             restore_outpoints.append((restore_outpoint, restore_prev_h))
 
         rm_outpoints = []
@@ -5493,8 +5404,7 @@ class PSManager(Logger):
         check_denoms_by_vals = False
         if tx_type == PSTxTypes.NEW_DENOMS:
             txin0 = copy.deepcopy(tx.inputs()[0])
-            self.add_input_info(txin0)
-            txin0_addr = txin0['address']
+            txin0_addr = w.get_txin_address(txin0)
             if txin0_addr not in [o.address for o in tx.outputs()]:
                 check_denoms_by_vals = True
         elif tx_type in [PSTxTypes.SPEND_PS_COINS, PSTxTypes.PRIVATESEND]:
@@ -5628,7 +5538,7 @@ class PSManager(Logger):
         else:
             self.trigger_callback('ps-state-changes', w, None, None)
             self.postpone_notification('ps-data-changes', w)
-            w.storage.write()
+            w.save_db()
 
     def find_untracked_ps_txs_from_gui(self):
         if self.loop:
@@ -5649,7 +5559,7 @@ class PSManager(Logger):
             _find = self._find_untracked_ps_txs
             found = await self.loop.run_in_executor(None, _find, log)
             if found:
-                w.storage.write()
+                w.save_db()
                 self.postpone_notification('ps-data-changes', w)
         except Exception as e:
             with self.state_lock:
@@ -5743,7 +5653,7 @@ class PSManager(Logger):
                     found += 1
                     detected_txs.add(txid)
                 else:
-                    parents = set([i['prevout_hash'] for i in tx.inputs()])
+                    parents = set([i.prevout.txid.hex() for i in tx.inputs()])
                     not_detected_parents |= parents
             all_detected_txs |= detected_txs
             if not detected_txs & not_detected_parents:
@@ -5767,11 +5677,11 @@ class PSManager(Logger):
 
     def prob_denominate_tx_coin(self, c, check_inputs_vals=False):
         w = self.wallet
-        val = c['value']
+        val = c.value_sats()
         if val not in PS_DENOMS_VALS:
             return
 
-        prev_txid = c['prevout_hash']
+        prev_txid = c.prevout.txid.hex()
         prev_tx = w.db.get_transaction(prev_txid)
         if not prev_tx:
             return
@@ -5802,7 +5712,7 @@ class PSManager(Logger):
         for prev_txin in prev_tx.inputs():
             is_denominate_input = False
             try:
-                prev_txin_txid = prev_txin['prevout_hash']
+                prev_txin_txid = prev_txin.prevout.txid.hex()
                 prev_txin_tx = w.get_input_tx(prev_txin_txid)
                 if not prev_txin_tx:
                     return
@@ -5833,30 +5743,28 @@ class PSManager(Logger):
         while cur_depth <= search_depth:
             next_utxos_a = []
             for utxo, path in cur_utxos_a:
-                txid = utxo['prevout_hash']
+                txid = utxo.prevout.txid.hex()
                 txid_path = path + (txid, )
                 txids_a[txid] = txid_path
                 tx = w.db.get_transaction(txid)
                 if tx:
                     for txin in tx.inputs():
                         txin = copy.deepcopy(txin)
-                        self.add_input_info(txin)
-                        addr = txin['address']
+                        addr = w.get_txin_address(txin)
                         if addr and w.is_mine(addr):
                             next_utxos_a.append((txin, txid_path))
             cur_utxos_a = next_utxos_a[:]
 
             next_utxos_b = []
             for utxo, path in cur_utxos_b:
-                txid = utxo['prevout_hash']
+                txid = utxo.prevout.txid.hex()
                 txid_path = path + (txid, )
                 txids_b[txid] = txid_path
                 tx = w.db.get_transaction(txid)
                 if tx:
                     for txin in tx.inputs():
                         txin = copy.deepcopy(txin)
-                        self.add_input_info(txin)
-                        addr = txin['address']
+                        addr = w.get_txin_address(txin)
                         if addr and w.is_mine(addr):
                             next_utxos_b.append((txin, txid_path))
             cur_utxos_b = next_utxos_b[:]

@@ -8,13 +8,33 @@ from kivy.uix.recycleboxlayout import RecycleBoxLayout
 from kivy.uix.behaviors import FocusBehavior
 
 from electrum_dash.dash_ps import sort_utxos_by_ps_rounds
-from electrum_dash.dash_tx import PSCoinRounds, SPEC_TX_NAMES
+from electrum_dash.dash_tx import PSCoinRounds
 from electrum_dash.gui.kivy.i18n import _
 from electrum_dash.gui.kivy.uix.context_menu import ContextMenu
-from electrum_dash.gui.kivy.uix.dialogs.question import Question
 
 
 Builder.load_string('''
+<AddressButton@Button>:
+    background_color: 1, .585, .878, 0
+    halign: 'center'
+    text_size: (self.width, None)
+    shorten: True
+    size_hint: 0.5, None
+    default_text: ''
+    text: self.default_text
+    padding: '5dp', '5dp'
+    height: '40dp'
+    text_color: self.foreground_color
+    disabled_color: 1, 1, 1, 1
+    foreground_color: 1, 1, 1, 1
+    canvas.before:
+        Color:
+            rgba: (0.9, .498, 0.745, 1) if self.state == 'down' else self.background_color
+        Rectangle:
+            size: self.size
+            pos: self.pos
+
+
 <CoinLabel@Label>
     text_size: self.width, None
     halign: 'left'
@@ -207,7 +227,7 @@ class CoinsDialog(Factory.Popup):
         w = self.app.wallet
         if self.show_ps == 1:  # PS Other coins
             utxos = w.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
-            utxos = [c for c in utxos if c['ps_rounds'] <= PSCoinRounds.OTHER]
+            utxos = [c for c in utxos if c.ps_rounds <= PSCoinRounds.OTHER]
         elif self.show_ps == 2:  # Regular
             utxos = w.get_utxos()
         elif self.show_ps == 3:  # All
@@ -215,9 +235,9 @@ class CoinsDialog(Factory.Popup):
         else:  # PrivateSend
             utxos = w.get_utxos(min_rounds=PSCoinRounds.COLLATERAL)
         if self.show_ps_ks == 0:    # Main
-            utxos = [c for c in utxos if not c['is_ps_ks']]
+            utxos = [c for c in utxos if not c.is_ps_ks]
         elif self.show_ps_ks == 1:  # PS Keystore
-            utxos = [c for c in utxos if c['is_ps_ks']]
+            utxos = [c for c in utxos if c.is_ps_ks]
         utxos.sort(key=sort_utxos_by_ps_rounds)
         container = self.ids.scroll_container
         container.layout_manager.clear_selection()
@@ -225,12 +245,12 @@ class CoinsDialog(Factory.Popup):
         cards = []
         self.utxos = utxos
         for utxo in utxos:
-            prev_h = utxo['prevout_hash']
-            prev_n = utxo['prevout_n']
-            addr = utxo['address']
-            amount = utxo['value']
-            height = utxo['height']
-            ps_rounds = utxo['ps_rounds']
+            prev_h = utxo.prevout.txid.hex()
+            prev_n = utxo.prevout.out_idx
+            addr = utxo.address
+            amount = utxo.value_sats()
+            height = utxo.block_height
+            ps_rounds = utxo.ps_rounds
             card = self.get_card(prev_h, prev_n, addr,
                                  amount, height, ps_rounds)
             cards.append(card)
@@ -261,11 +281,11 @@ class CoinsDialog(Factory.Popup):
         coins = self.coins_selected
         if len(coins) != 1:
             return
-        r = coins[0]['ps_rounds']
+        r = coins[0].ps_rounds
         if r is None:
             return
         if r == PSCoinRounds.OTHER or r >= 0:
-            coin_value = coins[0]['value']
+            coin_value = coins[0].value_sats()
             if coin_value >= psman.min_new_denoms_from_coins_val:
                 cmenu = [(_('Create New Denoms'), self.create_new_denoms)]
             elif coin_value >= psman.min_new_collateral_from_coins_val:

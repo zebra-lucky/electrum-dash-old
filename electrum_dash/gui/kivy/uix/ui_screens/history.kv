@@ -1,5 +1,4 @@
 #:import _ electrum_dash.gui.kivy.i18n._
-#:import HistBoxLayout electrum_dash.gui.kivy.uix.screens.HistBoxLayout
 #:import Factory kivy.factory.Factory
 #:set font_light 'electrum_dash/gui/kivy/data/fonts/Roboto-Condensed.ttf'
 #:set btc_symbol chr(171)
@@ -7,11 +6,9 @@
 
 
 <CardLabel@Label>
-    color: 0.95, 0.95, 0.95, 1
-    size_hint: 1, None
-    text: ''
+    color: .7, .7, .7, 1
     text_size: self.width, None
-    height: self.texture_size[1]
+    #height: self.texture_size[1]
     halign: 'left'
     valign: 'top'
 
@@ -28,14 +25,16 @@
     icon: 'atlas://electrum_dash/gui/kivy/theming/light/important'
     group_icn: 'atlas://electrum_dash/gui/kivy/theming/light/kv_tx_group_empty'
     message: ''
+    fee_text: ''
     is_mine: True
     amount: '--'
-    action: _('Sent') if self.is_mine else _('Received')
     amount_color: '#FF6657' if self.is_mine else '#2EA442'
     confirmations: 0
     date: ''
     tx_type: ''
     quote_text: ''
+    amount_str: self.quote_text if app.is_fiat else self.amount
+    unit_str: app.fx.ccy if app.is_fiat else app.base_unit
     Image:
         id: icon
         source: root.group_icn
@@ -54,23 +53,37 @@
             width: self.height*1.5
             mipmap: True
         BoxLayout:
+            spacing: '8dp'
+            height: '32dp'
             orientation: 'vertical'
             Widget
             CardLabel:
-                text:
-                    u'[color={color}]{s}[/color]'.\
-                    format(s='<<' if root.is_mine else '>>',
-                    color=root.amount_color)\
-                    + ' ' + root.action + ' ' + \
-                    (root.quote_text if app.is_fiat else root.amount)
-                font_size: '15sp'
-            CardLabel:
-                color: .699, .699, .699, 1
-                font_size: '14sp'
+                color: 0.95, 0.95, 0.95, 1
+                text: root.message
                 shorten: True
-                text: root.date + '   ' + root.tx_type + '   ' + root.message
+                shorten_from: 'right'
+                font_size: '15sp'
             Widget
-
+            CardLabel:
+                font_size: '12sp'
+                shorten: True
+                text: root.date
+            Widget
+    BoxLayout:
+        spacing: '8dp'
+        height: '32dp'
+        orientation: 'vertical'
+        Widget
+        CardLabel:
+            text: u'[color={color}]{s}[/color]'.format(s=root.amount_str, color=root.amount_color) + ' ' + '[size=12sp]' + root.unit_str + '[/size]'
+            halign: 'right'
+            font_size: '15sp'
+        Widget
+        CardLabel:
+            text: root.fee_text
+            halign: 'right'
+            font_size: '12sp'
+        Widget
 
 <HistoryRecycleView@RecycleView>:
     viewclass: 'HistoryItem'
@@ -85,7 +98,7 @@
         touch_deselect_last: True
 
 
-HistoryScreen:
+<HistoryScreen>:
     name: 'history'
     content: history_container
     cmbox: cmbox
@@ -104,7 +117,7 @@ HistoryScreen:
             id: history_container
             scroll_type: ['bars', 'content']
             bar_width: '25dp'
-            hist_screen: root.parent
+            hist_screen: root
         BoxLayout:
             id: cmbox
             height: '48dp'

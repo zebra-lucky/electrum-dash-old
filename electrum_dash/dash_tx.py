@@ -337,13 +337,15 @@ class DashProRegTx(ProTxBase):
                     break
             self.collateralOutpoint = TxOutPoint(b'\x00'*32, found_idx)
 
-        outpoints = [TxOutPoint(bfh(i['prevout_hash'])[::-1], i['prevout_n'])
+        outpoints = [TxOutPoint(bfh(i.prevout.txid.hex())[::-1],
+                                i.prevout.out_idx)
                      for i in tx.inputs()]
         outpoints_ser = [o.serialize() for o in outpoints]
         self.inputsHash = sha256d(b''.join(outpoints_ser))
 
     def check_after_tx_prepared(self, tx):
-        outpoints = [TxOutPoint(bfh(i['prevout_hash'])[::-1], i['prevout_n'])
+        outpoints = [TxOutPoint(bfh(i.prevout.txid.hex())[::-1],
+                                i.prevout.out_idx)
                      for i in tx.inputs()]
 
         outpoints_str = [str(o) for o in outpoints]
@@ -360,11 +362,11 @@ class DashProRegTx(ProTxBase):
 
         c_hash = bh2u(self.collateralOutpoint.hash[::-1])
         c_index = self.collateralOutpoint.index
-        coins = list(filter(lambda x: (x['prevout_hash'] == c_hash
-                                       and x['prevout_n'] == c_index),
+        coins = list(filter(lambda x: (x.prevout.txid.hex() == c_hash
+                                       and x.prevout.out_idx == c_index),
                             coins))
         if len(coins) == 1:
-            coll_address = coins[0]['address']
+            coll_address = coins[0].address
             payload_hash = bh2u(sha256d(self.serialize(full=False))[::-1])
             payload_sig_msg = self.payload_sig_msg_part + payload_hash
             self.payloadSig = wallet.sign_message(coll_address,
@@ -442,7 +444,8 @@ class DashProUpServTx(ProTxBase):
                                scriptOperatorPayout, inputsHash, payloadSig)
 
     def update_with_tx_data(self, tx):
-        outpoints = [TxOutPoint(bfh(i['prevout_hash'])[::-1], i['prevout_n'])
+        outpoints = [TxOutPoint(bfh(i.prevout.txid.hex())[::-1],
+                                i.prevout.out_idx)
                      for i in tx.inputs()]
         outpoints_ser = [o.serialize() for o in outpoints]
         self.inputsHash = sha256d(b''.join(outpoints_ser))
@@ -533,7 +536,8 @@ class DashProUpRegTx(ProTxBase):
         )
 
     def update_with_tx_data(self, tx):
-        outpoints = [TxOutPoint(bfh(i['prevout_hash'])[::-1], i['prevout_n'])
+        outpoints = [TxOutPoint(bfh(i.prevout.txid.hex())[::-1],
+                                i.prevout.out_idx)
                      for i in tx.inputs()]
         outpoints_ser = [o.serialize() for o in outpoints]
         self.inputsHash = sha256d(b''.join(outpoints_ser))
@@ -606,7 +610,8 @@ class DashProUpRevTx(ProTxBase):
         )
 
     def update_with_tx_data(self, tx):
-        outpoints = [TxOutPoint(bfh(i['prevout_hash'])[::-1], i['prevout_n'])
+        outpoints = [TxOutPoint(bfh(i.prevout.txid.hex())[::-1],
+                                i.prevout.out_idx)
                      for i in tx.inputs()]
         outpoints_ser = [o.serialize() for o in outpoints]
         self.inputsHash = sha256d(b''.join(outpoints_ser))
@@ -684,9 +689,10 @@ class DashSubTxRegister(ProTxBase):
             f'{len(self.pubKey)} not 48'
         assert len(self.payloadSig) == 96, \
             f'{len(self.payloadSig)} not 96'
+        userName = self.userName.encode('utf-8')
         return (
             struct.pack('<H', self.version) +           # version
-            to_varbytes(self.userName) +                # userName
+            to_varbytes(userName) +                     # userName
             self.pubKey +                               # pubKey
             self.payloadSig                             # payloadSig
         )
@@ -695,7 +701,7 @@ class DashSubTxRegister(ProTxBase):
     def read_vds(cls, vds):
         return DashSubTxRegister(
             vds.read_uint16(),                          # version
-            read_varbytes(vds),                         # userName
+            read_varbytes(vds).decode('utf-8'),         # userName
             vds.read_bytes(48),                         # pubKey
             vds.read_bytes(96)                          # payloadSig
         )

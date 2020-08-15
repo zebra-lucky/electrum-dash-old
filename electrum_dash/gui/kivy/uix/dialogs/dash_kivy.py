@@ -122,7 +122,7 @@ class TorWarnDialog(Factory.Popup):
         self.dismiss()
 
     def open_orbot_app(self):
-        err = self.app.run_app('org.torproject.android')
+        err = self.app.run_other_app('org.torproject.android')
         if err:
             self.app.show_error(err)
 

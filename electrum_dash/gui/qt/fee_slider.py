@@ -2,9 +2,29 @@ import threading
 
 from PyQt5.QtGui import QCursor
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QSlider, QToolTip
+from PyQt5.QtWidgets import QSlider, QToolTip, QComboBox
 
 from electrum_dash.i18n import _
+
+class FeeComboBox(QComboBox):
+
+    def __init__(self, fee_slider):
+        QComboBox.__init__(self)
+        self.config = fee_slider.config
+        self.fee_slider = fee_slider
+        self.addItems([_('Static'), _('ETA')])
+        self.setCurrentIndex(1 if self.config.is_dynfee() else 0)
+        self.currentIndexChanged.connect(self.on_fee_type)
+        self.help_msg = '\n'.join([
+            _('Static: the fee slider uses static values'),
+            _('ETA: fee rate is based on average confirmation time estimates'),
+            ]
+        )
+
+    def on_fee_type(self, x):
+        self.config.set_key('mempool_fees', False)
+        self.config.set_key('dynamic_fees', x>0)
+        self.fee_slider.update()
 
 
 class FeeSlider(QSlider):

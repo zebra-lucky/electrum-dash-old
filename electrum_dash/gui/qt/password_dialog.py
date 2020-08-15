@@ -25,6 +25,7 @@
 
 import re
 import math
+from functools import partial
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
@@ -33,7 +34,8 @@ from PyQt5.QtWidgets import QLineEdit, QLabel, QGridLayout, QVBoxLayout, QCheckB
 from electrum_dash.i18n import _
 from electrum_dash.plugin import run_hook
 
-from .util import icon_path, WindowModalDialog, OkButton, CancelButton, Buttons
+from .util import (icon_path, WindowModalDialog, OkButton, CancelButton, Buttons,
+                   PasswordLineEdit)
 
 
 def check_password_strength(password):
@@ -65,12 +67,9 @@ class PasswordLayout(object):
                  on_edit_cb=None, has_password=False):
         self.wallet = wallet
 
-        self.pw = QLineEdit()
-        self.pw.setEchoMode(2)
-        self.new_pw = QLineEdit()
-        self.new_pw.setEchoMode(2)
-        self.conf_pw = QLineEdit()
-        self.conf_pw.setEchoMode(2)
+        self.pw = PasswordLineEdit()
+        self.new_pw = PasswordLineEdit()
+        self.conf_pw = PasswordLineEdit()
         self.kind = kind
         self.OK_button = OK_button
         self.on_edit_cb = on_edit_cb
@@ -174,6 +173,10 @@ class PasswordLayout(object):
             pw = None
         return pw
 
+    def clear_password_fields(self):
+        for field in [self.pw, self.new_pw, self.conf_pw]:
+            field.clear()
+
 
 class PasswordLayoutForHW(object):
 
@@ -267,9 +270,12 @@ class ChangePasswordDialogForSW(ChangePasswordDialogBase):
                                       force_disable_encrypt_cb=not wallet.can_have_keystore_encryption())
 
     def run(self):
-        if not self.exec_():
-            return False, None, None, None
-        return True, self.playout.old_password(), self.playout.new_password(), self.playout.encrypt_cb.isChecked()
+        try:
+            if not self.exec_():
+                return False, None, None, None
+            return True, self.playout.old_password(), self.playout.new_password(), self.playout.encrypt_cb.isChecked()
+        finally:
+            self.playout.clear_password_fields()
 
 
 class ChangePasswordDialogForHW(ChangePasswordDialogBase):
@@ -297,8 +303,7 @@ class PasswordDialog(WindowModalDialog):
     def __init__(self, parent=None, msg=None):
         msg = msg or _('Please enter your password')
         WindowModalDialog.__init__(self, parent, _("Enter Password"))
-        self.pw = pw = QLineEdit()
-        pw.setEchoMode(2)
+        self.pw = pw = PasswordLineEdit()
         vbox = QVBoxLayout()
         vbox.addWidget(QLabel(msg))
         grid = QGridLayout()
@@ -311,6 +316,9 @@ class PasswordDialog(WindowModalDialog):
         run_hook('password_dialog', pw, grid, 1)
 
     def run(self):
-        if not self.exec_():
-            return
-        return self.pw.text()
+        try:
+            if not self.exec_():
+                return
+            return self.pw.text()
+        finally:
+            self.pw.clear()

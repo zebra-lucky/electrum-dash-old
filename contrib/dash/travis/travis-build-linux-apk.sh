@@ -31,7 +31,7 @@ DOCKER_CMD="$DOCKER_CMD && rm -rf packages"
 DOCKER_CMD="$DOCKER_CMD && ./contrib/make_packages"
 DOCKER_CMD="$DOCKER_CMD && rm -rf packages/bls_py"
 DOCKER_CMD="$DOCKER_CMD && rm -rf packages/python_bls*"
-DOCKER_CMD="$DOCKER_CMD && ./contrib/make_apk"
+DOCKER_CMD="$DOCKER_CMD && ./contrib/android/make_apk"
 
 if [[ $ELECTRUM_MAINNET == "false" ]]; then
     DOCKER_CMD="$DOCKER_CMD release-testnet"

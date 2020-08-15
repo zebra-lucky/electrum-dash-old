@@ -1,18 +1,26 @@
 from decimal import Decimal
 
 from electrum_dash.util import (format_satoshis, format_fee_satoshis, parse_URI,
-                                is_hash256_str, chunks, InvalidBitcoinURI)
+                                is_hash256_str, chunks, InvalidBitcoinURI,
+                                is_ip_address, list_enabled_bits,
+                                format_satoshis_plain, is_private_netaddress)
 
-from . import SequentialTestCase
+from . import ElectrumTestCase
 
 
-class TestUtil(SequentialTestCase):
+class TestUtil(ElectrumTestCase):
 
     def test_format_satoshis(self):
         self.assertEqual("0.00001234", format_satoshis(1234))
 
     def test_format_satoshis_negative(self):
         self.assertEqual("-0.00001234", format_satoshis(-1234))
+
+    def test_format_satoshis_to_mbtc(self):
+        self.assertEqual("0.01234", format_satoshis(1234, decimal_point=5))
+
+    def test_format_satoshis_decimal(self):
+        self.assertEqual("0.00001234", format_satoshis(Decimal(1234)))
 
     def test_format_fee_float(self):
         self.assertEqual("1.7", format_fee_satoshis(1700/1000))
@@ -44,6 +52,15 @@ class TestUtil(SequentialTestCase):
 
     def test_format_satoshis_diff_negative(self):
         self.assertEqual("-0.00001234", format_satoshis(-1234, is_diff=True))
+
+    def test_format_satoshis_plain(self):
+        self.assertEqual("0.00001234", format_satoshis_plain(1234))
+
+    def test_format_satoshis_plain_decimal(self):
+        self.assertEqual("0.00001234", format_satoshis_plain(Decimal(1234)))
+
+    def test_format_satoshis_plain_to_mbtc(self):
+        self.assertEqual("0.01234", format_satoshis_plain(1234, decimal_point=5))
 
     def _do_test_parse_URI(self, uri, expected):
         result = parse_URI(uri)
@@ -168,5 +185,40 @@ class TestUtil(SequentialTestCase):
     def test_chunks(self):
         self.assertEqual([[1, 2], [3, 4], [5]],
                          list(chunks([1, 2, 3, 4, 5], 2)))
+        self.assertEqual([], list(chunks(b'', 64)))
+        self.assertEqual([b'12', b'34', b'56'],
+                         list(chunks(b'123456', 2)))
         with self.assertRaises(ValueError):
             list(chunks([1, 2, 3], 0))
+
+    def test_list_enabled_bits(self):
+        self.assertEqual((0, 2, 3, 6), list_enabled_bits(77))
+        self.assertEqual((), list_enabled_bits(0))
+
+    def test_is_ip_address(self):
+        self.assertTrue(is_ip_address("127.0.0.1"))
+        self.assertTrue(is_ip_address("127.000.000.1"))
+        self.assertTrue(is_ip_address("255.255.255.255"))
+        self.assertFalse(is_ip_address("255.255.256.255"))
+        self.assertFalse(is_ip_address("123.456.789.000"))
+        self.assertTrue(is_ip_address("2001:0db8:0000:0000:0000:ff00:0042:8329"))
+        self.assertTrue(is_ip_address("2001:db8:0:0:0:ff00:42:8329"))
+        self.assertTrue(is_ip_address("2001:db8::ff00:42:8329"))
+        self.assertFalse(is_ip_address("2001:::db8::ff00:42:8329"))
+        self.assertTrue(is_ip_address("::1"))
+        self.assertFalse(is_ip_address("2001:db8:0:0:g:ff00:42:8329"))
+        self.assertFalse(is_ip_address("lol"))
+        self.assertFalse(is_ip_address(":@ASD:@AS\x77\x22\xff¬!"))
+
+    def test_is_private_netaddress(self):
+        self.assertTrue(is_private_netaddress("127.0.0.1"))
+        self.assertTrue(is_private_netaddress("127.5.6.7"))
+        self.assertTrue(is_private_netaddress("::1"))
+        self.assertTrue(is_private_netaddress("[::1]"))
+        self.assertTrue(is_private_netaddress("localhost"))
+        self.assertTrue(is_private_netaddress("localhost."))
+        self.assertFalse(is_private_netaddress("[::2]"))
+        self.assertFalse(is_private_netaddress("2a00:1450:400e:80d::200e"))
+        self.assertFalse(is_private_netaddress("[2a00:1450:400e:80d::200e]"))
+        self.assertFalse(is_private_netaddress("8.8.8.8"))
+        self.assertFalse(is_private_netaddress("example.com"))

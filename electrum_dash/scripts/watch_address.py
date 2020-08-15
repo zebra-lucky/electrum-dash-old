@@ -6,6 +6,7 @@ import asyncio
 from electrum_dash.network import Network
 from electrum_dash.util import print_msg, create_and_start_event_loop
 from electrum_dash.synchronizer import SynchronizerBase
+from electrum_dash.simple_config import SimpleConfig
 
 
 try:
@@ -14,9 +15,11 @@ except Exception:
     print("usage: watch_address <dash_address>")
     sys.exit(1)
 
+config = SimpleConfig()
+
 # start network
 loop = create_and_start_event_loop()[0]
-network = Network()
+network = Network(config)
 network.start()
 
 

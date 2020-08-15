@@ -40,8 +40,6 @@ Depends:
  keepkey (>= 6.1.0),
  python3-keepkey (>= 6.1.0),
  python3-btchip (>= 0.1.28),
- hideez (>= 0.2.1),
- python3-hideez (>= 0.2.1),
  python3-aiohttp (>= 3.3.0),
  python3-aiohttp-socks,
  python3-aiorpcx (<< 0.19),

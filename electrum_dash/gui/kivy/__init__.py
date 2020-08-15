@@ -27,25 +27,31 @@
 
 import sys
 import os
+from typing import TYPE_CHECKING
 
 try:
     sys.argv = ['']
     import kivy
 except ImportError:
     # This error ideally shouldn't be raised with pre-built packages
-    sys.exit("Error: Could not import kivy. Please install it using the" + \
-             "instructions mentioned here `http://kivy.org/#download` .")
+    sys.exit("Error: Could not import kivy. Please install it using the "
+             "instructions mentioned here `https://kivy.org/#download` .")
 
 # minimum required version for kivy
 kivy.require('1.8.0')
 from kivy.logger import Logger
+
+if TYPE_CHECKING:
+    from electrum_dash.simple_config import SimpleConfig
+    from electrum_dash.daemon import Daemon
+    from electrum_dash.plugin import Plugins
 
 
 
 
 class ElectrumGui:
 
-    def __init__(self, config, daemon, plugins):
+    def __init__(self, config: 'SimpleConfig', daemon: 'Daemon', plugins: 'Plugins'):
         Logger.debug('ElectrumGUI: initialising')
         self.daemon = daemon
         self.network = daemon.network
@@ -54,9 +60,11 @@ class ElectrumGui:
 
     def main(self):
         from .main_window import ElectrumWindow
-        self.config.open_last_wallet()
         w = ElectrumWindow(config=self.config,
                            network=self.network,
                            plugins = self.plugins,
                            gui_object=self)
         w.run()
+
+    def stop(self):
+        pass

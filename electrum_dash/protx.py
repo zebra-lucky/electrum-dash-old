@@ -27,6 +27,7 @@ import copy
 import threading
 from collections import defaultdict
 
+from . import util
 from .bitcoin import TYPE_ADDRESS, is_b58_address, b58_address_to_hash160
 from .dash_tx import (TxOutPoint, ProTxService, DashProRegTx, DashProUpServTx,
                       DashProUpRegTx, DashProUpRevTx,
@@ -178,16 +179,16 @@ class ProTxManager(Logger):
 
     def on_network_start(self, network):
         self.network = network
-        self.network.register_callback(self.on_verified_tx, ['verified'])
+        util.register_callback(self.on_verified_tx, ['verified'])
 
     def clean_up(self):
         if self.network:
-            self.network.unregister_callback(self.on_verified_tx)
+            util.unregister_callback(self.on_verified_tx)
 
     @with_manager_lock
     def load(self):
         '''Load masternodes from wallet storage.'''
-        stored_mns = self.wallet.storage.get('protx_mns', {})
+        stored_mns = self.wallet.db.get_protx_mns()
         self.mns = {k: ProTxMN.from_dict(d) for k, d in stored_mns.items()}
 
     def save(self, with_lock=True):
@@ -206,8 +207,8 @@ class ProTxManager(Logger):
                 raise ProTxManagerExc('Attempt to write Masternode '
                                       'with empty alias')
             stored_mns[mn.alias] = mn.as_dict()
-        self.wallet.storage.put('protx_mns', stored_mns)
-        self.wallet.storage.write()
+        self.wallet.db.put_protx_mns(stored_mns)
+        self.wallet.save_db()
 
     @with_manager_lock
     def update_mn(self, alias, new_mn):

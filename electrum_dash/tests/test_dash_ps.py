@@ -10,7 +10,6 @@ from collections import defaultdict
 from pprint import pprint
 
 from electrum_dash import dash_ps, ecc
-from electrum_dash.bitcoin import TYPE_ADDRESS
 from electrum_dash.address_synchronizer import (TX_HEIGHT_LOCAL,
                                                 TX_HEIGHT_UNCONF_PARENT,
                                                 TX_HEIGHT_UNCONFIRMED)
@@ -25,12 +24,13 @@ from electrum_dash.dash_ps import (COLLATERAL_VAL, PSPossibleDoubleSpendError,
                                    CREATE_COLLATERAL_VALS, MIN_DENOM_VAL)
 from electrum_dash.dash_tx import PSTxTypes, PSCoinRounds, SPEC_TX_NAMES
 from electrum_dash import keystore
-from electrum_dash.keystore import xpubkey_to_address
 from electrum_dash.simple_config import SimpleConfig
 from electrum_dash.storage import WalletStorage
-from electrum_dash.transaction import TxOutput, Transaction
+from electrum_dash.transaction import (Transaction, PartialTxOutput,
+                                       PartialTransaction)
 from electrum_dash.util import Satoshis, NotEnoughFunds, TxMinedInfo, bh2u
 from electrum_dash.wallet import Wallet
+from electrum_dash.wallet_db import WalletDB
 
 from . import TestCaseForTestnet
 
@@ -89,7 +89,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         self.config = SimpleConfig({'electrum_path': self.user_dir})
         self.config.set_key('dynamic_fees', False, True)
         self.storage = WalletStorage(self.wallet_path)
-        self.wallet = Wallet(self.storage)
+        self.w_db = WalletDB(self.storage.read(), manual_upgrades=True)
+        self.w_db.upgrade()  # wallet_ps1 have version 18
+        self.wallet = Wallet(self.w_db, self.storage, config=self.config)
         psman = self.wallet.psman
         psman.state = PSStates.Ready
         psman.loop = asyncio.get_event_loop()
@@ -291,40 +293,61 @@ class PSWalletTestCase(TestCaseForTestnet):
         asyncio.get_event_loop().run_until_complete(coro)
         # check with show_dip2_tx_type on
         self.config.set_key('show_dip2_tx_type', True, True)
-        h = self.wallet.get_full_history(config=self.config)
+        h = self.wallet.get_detailed_history()
+        h_f = self.wallet.get_full_history()
         assert h['summary']['end_balance'] == Satoshis(1484831773)
         txs = h['transactions']
+        txf = list(h_f.values())
         assert len(txs) == 88
+        assert len(txf) == 88
         for i in [1, 6, 7, 10, 11, 83, 84, 85, 86]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
         for i in [51]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
         for i in [2, 3, 4, 5, 8, 9, 12, 13, 14, 15, 16, 81]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(18, 36):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(37, 49):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(52, 64):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(65, 80):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in [17, 36, 49, 50, 64, 80]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
         for i in [82]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
-        for i, tx in enumerate(txs):
-            assert not txs[i]['group_txid']
-            assert txs[i]['group_data'] == []
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
+        for tx in txs:
+            assert not tx['group_txid']
+            assert tx['group_data'] == []
+        for tx in txf:
+            assert not tx['group_txid']
+            assert tx['group_data'] == []
         # check with show_dip2_tx_type off
         self.config.set_key('show_dip2_tx_type', False, True)
-        h = self.wallet.get_full_history(config=self.config)
+        h = self.wallet.get_detailed_history()
+        h_f = self.wallet.get_full_history()
         assert h['summary']['end_balance'] == Satoshis(1484831773)
         txs = h['transactions']
+        txf = list(h_f.values())
         assert len(txs) == 88
-        for i, tx in enumerate(txs):
-            assert not txs[i]['group_txid']
-            assert txs[i]['group_data'] == []
+        assert len(txf) == 88
+        for tx in txs:
+            assert not tx['group_txid']
+            assert tx['group_data'] == []
+        for tx in txf:
+            assert not tx['group_txid']
+            assert tx['group_data'] == []
 
     def test_ps_history_show_grouped(self):
         psman = self.wallet.psman
@@ -333,15 +356,19 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         # check with show_dip2_tx_type off
         self.config.set_key('show_dip2_tx_type', False, True)
-        h = self.wallet.get_full_history(config=self.config, group_ps=True)
+        h = self.wallet.get_detailed_history(group_ps=True)
+        h_f = self.wallet.get_full_history(group_ps=True)
         end_balance = Satoshis(1484831773)
         assert h['summary']['end_balance'] == end_balance
         txs = h['transactions']
+        txf = list(h_f.values())
         group0 = txs[81]['group_data']
+        group0f = txf[81]['group_data']
         group0_val = Satoshis(-64144)
         group0_balance = Satoshis(1599935856)
         group0_txs_cnt = 81
         group1 = txs[86]['group_data']
+        group1f = txf[86]['group_data']
         group1_txs = ['d9565c9cf5d819acb0f94eca4522c442'
                       'f40d8ebee973f6f0896763af5868db4b',
                       '4a256db62ff0c1764d6eeb8708b87d8a'
@@ -355,57 +382,74 @@ class PSWalletTestCase(TestCaseForTestnet):
         group1_txs_cnt = 4
 
         # group is tuple: (val, balance, ['txid1', 'txid2, ...])
-        assert group0[0] == group0_val
-        assert group0[1] == group0_balance
-        assert len(group0[2]) == group0_txs_cnt
-        assert group1[0] == group1_val
-        assert group1[1] == group1_balance
-        assert len(group1[2]) == group1_txs_cnt
-        assert group1[2] == group1_txs
+        assert group0[0] == group0f[0] == group0_val
+        assert group0[1] == group0f[1] == group0_balance
+        assert len(group0[2]) == len(group0f[2]) == group0_txs_cnt
+        assert group1[0] == group1f[0] == group1_val
+        assert group1[1] == group1f[1] == group1_balance
+        assert len(group1[2]) == len(group1f[2]) == group1_txs_cnt
+        assert group1[2] == group1[2] == group1_txs
 
         for i, tx in enumerate(txs):
             if i not in [81, 86]:
                 assert txs[i]['group_data'] == []
+                assert txf[i]['group_data'] == []
             if i in [0, 81, 82, 86, 87]:
                 assert not txs[i]['group_txid']
+                assert not txf[i]['group_txid']
             if i in range(1, 81):
-                assert txs[i]['group_txid'] == txs[81]['txid']
+                assert txf[i]['group_txid'] == txf[81]['txid']
+                assert txf[i]['group_txid'] == txf[81]['txid']
             if i in range(83, 86):
                 assert txs[i]['group_txid'] == txs[86]['txid']
+                assert txf[i]['group_txid'] == txf[86]['txid']
 
         # check with show_dip2_tx_type on
         self.config.set_key('show_dip2_tx_type', True, True)
-        h = self.wallet.get_full_history(config=self.config, group_ps=True)
+        h = self.wallet.get_detailed_history(group_ps=True)
+        h_f = self.wallet.get_full_history(group_ps=True)
         assert h['summary']['end_balance'] == end_balance
         txs = h['transactions']
+        txf = list(h_f.values())
         for i in [1, 6, 7, 10, 11, 83, 84, 85, 86]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_DENOMS]
         for i in [51]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.NEW_COLLATERAL]
         for i in [2, 3, 4, 5, 8, 9, 12, 13, 14, 15, 16, 81]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(18, 36):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(37, 49):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(52, 64):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in range(65, 80):
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.DENOMINATE]
         for i in [17, 36, 49, 50, 64, 80]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PAY_COLLATERAL]
         for i in [82]:
-            assert txs[i]['dip2'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
+            assert txs[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
+            assert txf[i]['tx_type'] == SPEC_TX_NAMES[PSTxTypes.PRIVATESEND]
 
         group0 = txs[81]['group_data']
+        group0f = txf[81]['group_data']
         group1 = txs[86]['group_data']
-        assert group0[0] == group0_val
-        assert group0[1] == group0_balance
-        assert len(group0[2]) == group0_txs_cnt
-        assert group1[0] == group1_val
-        assert group1[1] == group1_balance
-        assert len(group1[2]) == group1_txs_cnt
-        assert group1[2] == group1_txs
+        group1f = txf[86]['group_data']
+        assert group0[0] == group0f[0] == group0_val
+        assert group0[1] == group0f[1] == group0_balance
+        assert len(group0[2]) == len(group0f[2]) == group0_txs_cnt
+        assert group1[0] == group1f[0] == group1_val
+        assert group1[1] == group1f[1] == group1_balance
+        assert len(group1[2]) == len(group1f[2]) == group1_txs_cnt
+        assert group1[2] == group1f[2] == group1_txs
 
         for i, tx in enumerate(txs):
             if i not in [81, 86]:
@@ -416,6 +460,15 @@ class PSWalletTestCase(TestCaseForTestnet):
                 assert txs[i]['group_txid'] == txs[81]['txid']
             if i in range(83, 86):
                 assert txs[i]['group_txid'] == txs[86]['txid']
+        for i, tx in enumerate(txf):
+            if i not in [81, 86]:
+                assert txf[i]['group_data'] == []
+            if i in [0, 81, 82, 86, 87]:
+                assert not txf[i]['group_txid']
+            if i in range(1, 81):
+                assert txf[i]['group_txid'] == txf[81]['txid']
+            if i in range(83, 86):
+                assert txf[i]['group_txid'] == txf[86]['txid']
 
     def test_ps_get_utxos_all(self):
         psman = self.wallet.psman
@@ -423,10 +476,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         asyncio.get_event_loop().run_until_complete(coro)
         ps_denoms = self.wallet.db.get_ps_denoms()
         for utxo in self.wallet.get_utxos():
-            prev_h = utxo['prevout_hash']
-            prev_n = utxo['prevout_n']
-            ps_rounds = utxo['ps_rounds']
-            ps_denom = ps_denoms.get(f'{prev_h}:{prev_n}')
+            ps_rounds = utxo.ps_rounds
+            ps_denom = ps_denoms.get(utxo.prevout.to_str())
             if ps_denom:
                 assert ps_rounds == ps_denom[2]
             else:
@@ -460,13 +511,13 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         # check balance with ps_other
         w = wallet
-        coins = w.get_spendable_coins(domain=None, config=self.config)
+        coins = w.get_spendable_coins(domain=None)
         denom_addr = list(w.db.get_ps_denoms().values())[0][0]
-        outputs = [TxOutput(TYPE_ADDRESS, denom_addr, 300000)]
-        tx = w.make_unsigned_transaction(coins, outputs, config=self.config)
+        outputs = [PartialTxOutput.from_address_and_value(denom_addr, 300000)]
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         w.sign_transaction(tx, None)
         txid = tx.txid()
-        w.add_transaction(txid, tx)
+        w.add_transaction(tx)
         w.db.add_islock(txid)
 
         # check when transaction is standard
@@ -516,17 +567,16 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = self.wallet.psman
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
-        conf = self.config
-        coins = self.wallet.get_spendable_coins(None, conf)
+        coins = self.wallet.get_spendable_coins(None)
         assert len(coins) == 6
         for c in coins:
-            assert c['ps_rounds'] is None
+            assert c.ps_rounds is None
 
-        coins = self.wallet.get_spendable_coins(None, conf, include_ps=True)
+        coins = self.wallet.get_spendable_coins(None, include_ps=True)
         assert len(coins) == 138
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert rounds[None] == 6
         assert rounds[C_RNDS] == 1
         assert rounds[0] == 53
@@ -534,83 +584,80 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert rounds[2] == 77
         assert rounds[3] == 0
 
-        coins = self.wallet.get_spendable_coins(None, conf, min_rounds=C_RNDS)
+        coins = self.wallet.get_spendable_coins(None, min_rounds=C_RNDS)
         assert len(coins) == 132
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert rounds[C_RNDS] == 1
         assert rounds[0] == 53
         assert rounds[1] == 1
         assert rounds[2] == 77
         assert rounds[3] == 0
 
-        coins = self.wallet.get_spendable_coins(None, conf, min_rounds=0)
+        coins = self.wallet.get_spendable_coins(None, min_rounds=0)
         assert len(coins) == 131
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert None not in rounds
         assert rounds[0] == 53
         assert rounds[1] == 1
         assert rounds[2] == 77
         assert rounds[3] == 0
 
-        coins = self.wallet.get_spendable_coins(None, conf, min_rounds=1)
+        coins = self.wallet.get_spendable_coins(None, min_rounds=1)
         assert len(coins) == 78
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert None not in rounds
         assert 0 not in rounds
         assert rounds[1] == 1
         assert rounds[2] == 77
         assert rounds[3] == 0
 
-        coins = self.wallet.get_spendable_coins(None, conf, min_rounds=2)
+        coins = self.wallet.get_spendable_coins(None, min_rounds=2)
         assert len(coins) == 77
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert None not in rounds
         assert 0 not in rounds
         assert 1 not in rounds
         assert rounds[2] == 77
         assert rounds[3] == 0
 
-        coins = self.wallet.get_spendable_coins(None, conf, min_rounds=3)
+        coins = self.wallet.get_spendable_coins(None, min_rounds=3)
         assert len(coins) == 0
 
     def test_get_spendable_coins_allow_others(self):
         w = self.wallet
         psman = w.psman
-        psman.config = config = self.config
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
 
         # add other coins
-        coins = w.get_spendable_coins(domain=None, config=config)
+        coins = w.get_spendable_coins(domain=None)
         denom_addr = list(w.db.get_ps_denoms().values())[0][0]
-        outputs = [TxOutput(TYPE_ADDRESS, denom_addr, 300000)]
-        tx = w.make_unsigned_transaction(coins, outputs, config=config)
+        outputs = [PartialTxOutput.from_address_and_value(denom_addr, 300000)]
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         w.sign_transaction(tx, None)
         txid = tx.txid()
-        w.add_transaction(txid, tx)
+        w.add_transaction(tx)
         w.db.add_islock(txid)
         coro = psman.find_untracked_ps_txs(log=True)
         asyncio.get_event_loop().run_until_complete(coro)
 
         assert not psman.allow_others
-        coins = w.get_spendable_coins(domain=None, include_ps=True,
-                                      config=config)
-        cset = set([c['ps_rounds'] for c in coins])
+        coins = w.get_spendable_coins(domain=None, include_ps=True)
+        cset = set([c.ps_rounds for c in coins])
         assert cset == {None, 0, 1, 2, PSCoinRounds.COLLATERAL}
         assert len(coins) == 138
 
         psman.allow_others = True
-        coins = w.get_spendable_coins(domain=None, include_ps=True,
-                                      config=config)
-        cset = set([c['ps_rounds'] for c in coins])
+        coins = w.get_spendable_coins(domain=None, include_ps=True)
+        cset = set([c.ps_rounds for c in coins])
         assert cset == {None, 0, 1, 2,
                         PSCoinRounds.COLLATERAL, PSCoinRounds.OTHER}
         assert len(coins) == 139
@@ -623,13 +670,13 @@ class PSWalletTestCase(TestCaseForTestnet):
         coins = self.wallet.get_utxos()
         assert len(coins) == 6
         for c in coins:
-            assert c['ps_rounds'] is None
+            assert c.ps_rounds is None
 
         coins = self.wallet.get_utxos(include_ps=True)
         assert len(coins) == 138
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert rounds[None] == 6
         assert rounds[C_RNDS] == 1
         assert rounds[0] == 53
@@ -642,7 +689,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(coins) == 132
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert rounds[C_RNDS] == 1
         assert rounds[0] == 53
         assert rounds[1] == 1
@@ -654,7 +701,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(coins) == 131
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert None not in rounds
         assert rounds[0] == 53
         assert rounds[1] == 1
@@ -665,7 +712,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(coins) == 78
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert None not in rounds
         assert 0 not in rounds
         assert rounds[1] == 1
@@ -676,7 +723,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(coins) == 77
         rounds = defaultdict(int)
         for c in coins:
-            rounds[c['ps_rounds']] += 1
+            rounds[c.ps_rounds] += 1
         assert None not in rounds
         assert 0 not in rounds
         assert 1 not in rounds
@@ -797,7 +844,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         unused1 = w.calc_unused_change_addresses()
-        assert len(unused1) == 13
+        assert len(unused1) == 17
         for addr in unused1:
             psman.add_ps_reserved(addr, 'test')
         unused2 = w.calc_unused_change_addresses()
@@ -834,12 +881,12 @@ class PSWalletTestCase(TestCaseForTestnet):
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         unused1 = w.calc_unused_change_addresses()
-        assert len(unused1) == 13
+        assert len(unused1) == 17
 
         w.synchronize_sequence(for_change=True)
 
         unused1 = w.calc_unused_change_addresses()
-        assert len(unused1) == 13
+        assert len(unused1) == 17
         for addr in unused1:
             psman.add_ps_reserved(addr, 'test')
         unused2 = w.calc_unused_change_addresses()
@@ -858,10 +905,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         ps_addrs = w.db.get_ps_addresses()
         assert len(set(w.get_receiving_addresses()) - ps_addrs) == 21
         assert len(w.get_receiving_addresses()) == 333
-        assert len(set(w.get_change_addresses()) - ps_addrs) == 18
-        assert len(w.get_change_addresses()) == 23
+        assert len(set(w.get_change_addresses()) - ps_addrs) == 22
+        assert len(w.get_change_addresses()) == 27
         unused_change = w.calc_unused_change_addresses()
-        assert len(unused_change) == 13
+        assert len(unused_change) == 17
         unused = w.get_unused_addresses()
         assert len(unused) == 20
 
@@ -880,13 +927,13 @@ class PSWalletTestCase(TestCaseForTestnet):
         unused_change = w.calc_unused_change_addresses()
         for a in sel2:
             assert a not in unused_change
-        assert len(unused_change) == 12
+        assert len(unused_change) == 16
 
         ps_addrs = w.db.get_ps_addresses()
         assert len(set(w.get_receiving_addresses()) - ps_addrs) == 11
         assert len(w.get_receiving_addresses()) == 333
-        assert len(set(w.get_change_addresses()) - ps_addrs) == 17
-        assert len(w.get_change_addresses()) == 23
+        assert len(set(w.get_change_addresses()) - ps_addrs) == 21
+        assert len(w.get_change_addresses()) == 27
 
     def test_first_unused_index(self):
         w = self.wallet
@@ -896,9 +943,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert psman.first_unused_index(for_change=True) == 7
 
         assert w.db.num_receiving_addresses() == 333
-        assert w.db.num_change_addresses() == 23
+        assert w.db.num_change_addresses() == 27
         assert len(w.get_unused_addresses()) == 20
-        assert len(w.calc_unused_change_addresses()) == 13
+        assert len(w.calc_unused_change_addresses()) == 17
 
         psman.reserve_addresses(20)
         psman.reserve_addresses(13, for_change=True)
@@ -907,9 +954,9 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert psman.first_unused_index(for_change=True) == 23
 
         assert w.db.num_receiving_addresses() == 333
-        assert w.db.num_change_addresses() == 23
+        assert w.db.num_change_addresses() == 27
         assert len(w.get_unused_addresses()) == 0
-        assert len(w.calc_unused_change_addresses()) == 0
+        assert len(w.calc_unused_change_addresses()) == 4
 
     def test_add_ps_collateral(self):
         w = self.wallet
@@ -1298,15 +1345,13 @@ class PSWalletTestCase(TestCaseForTestnet):
         in0 = txins[0]
         c_outpoint, ps_collateral = w.db.get_ps_collateral()
         assert w.db.get_ps_spending_collateral(c_outpoint) == wfl.uuid
-        in0_prev_h = in0['prevout_hash']
-        in0_prev_n = in0['prevout_n']
-        assert f'{in0_prev_h}:{in0_prev_n}' == c_outpoint
+        assert in0.prevout.to_str() == c_outpoint
         assert txouts[0].value == COLLATERAL_VAL
         reserved = w.db.select_ps_reserved(for_change=True, data=c_outpoint)
         assert len(reserved) == 1
         assert txouts[0].address in reserved
         assert tx.locktime == 0
-        assert txins[0]['sequence'] == 0xffffffff
+        assert txins[0].nsequence == 0xffffffff
 
     def test_cleanup_pay_collateral_wfl(self):
         w = self.wallet
@@ -1390,7 +1435,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_create_new_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
@@ -1403,13 +1447,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         asyncio.get_event_loop().run_until_complete(coro)
         assert psman.new_collateral_wfl == wfl
         psman.clear_new_collateral_wfl()
-
-        # check not created if psman.config is not set
-        psman.config = None
-        coro = psman.create_new_collateral_wfl()
-        asyncio.get_event_loop().run_until_complete(coro)
-        assert not psman.new_collateral_wfl
-        psman.config = self.config
 
         # check prepared tx
         coro = psman.create_new_collateral_wfl()
@@ -1431,14 +1468,13 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_create_new_collateral_wfl_from_coins(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         psman.state = PSStates.Mixing
 
-        coins = w.get_spendable_coins(domain=None, config=self.config)
-        coins = sorted([c for c in coins], key=lambda x: x['value'])
+        coins = w.get_spendable_coins(domain=None)
+        coins = sorted([c for c in coins], key=lambda x: x.value_sats())
         # check selected to many utxos
         coro = psman.create_new_collateral_wfl(coins=coins)
         asyncio.get_event_loop().run_until_complete(coro)
@@ -1449,8 +1485,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert not psman.new_collateral_wfl
 
         w.set_frozen_state_of_coins(coins, True)
-        coins = w.get_spendable_coins(domain=None, include_ps=False,
-                                      config=self.config)
+        coins = w.get_spendable_coins(domain=None, include_ps=False)
         assert coins == []
 
         # check created from minimal denom value
@@ -1466,8 +1501,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(inputs) == 1
         assert len(outputs) == 1  # no change
         txin = inputs[0]
-        prev_h = txin['prevout_hash']
-        prev_n = txin['prevout_n']
+        prev_h = txin.prevout.txid.hex()
+        prev_n = txin.prevout.out_idx
         prev_tx = w.db.get_transaction(prev_h)
         prev_txout = prev_tx.outputs()[prev_n]
         assert prev_txout.value == MIN_DENOM_VAL
@@ -1487,13 +1522,12 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_create_new_collateral_wfl_from_gui(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
 
-        coins = w.get_spendable_coins(domain=None, config=self.config)
-        coins = sorted([c for c in coins], key=lambda x: x['value'])
+        coins = w.get_spendable_coins(domain=None)
+        coins = sorted([c for c in coins], key=lambda x: x.value_sats())
         # check selected to many utxos
         assert not psman.new_collateral_from_coins_info(coins)
         wfl, err = psman.create_new_collateral_wfl_from_gui(coins, None)
@@ -1501,7 +1535,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert not wfl
 
         # check selected to large utxo
-        assert not psman.new_collateral_from_coins_info(coins[-1])
+        assert not psman.new_collateral_from_coins_info(coins[-1:])
         wfl, err = psman.create_new_collateral_wfl_from_gui(coins, None)
         assert err
         assert not wfl
@@ -1509,8 +1543,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         # check on single minimal denom
         coins = w.get_utxos(None, mature_only=True, confirmed_only=True,
                             consider_islocks=True, min_rounds=0)
-        coins = [c for c in coins if c['value'] == MIN_DENOM_VAL]
-        coins = sorted(coins, key=lambda x: x['ps_rounds'])
+        coins = [c for c in coins if c.value_sats() == MIN_DENOM_VAL]
+        coins = sorted(coins, key=lambda x: x.ps_rounds)
         coins = coins[0:1]
         assert psman.new_collateral_from_coins_info(coins) == \
             ('Transactions type: PS New Collateral\n'
@@ -1537,8 +1571,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(inputs) == 1
         assert len(outputs) == 1  # no change
         txin = inputs[0]
-        prev_h = txin['prevout_hash']
-        prev_n = txin['prevout_n']
+        prev_h = txin.prevout.txid.hex()
+        prev_n = txin.prevout.out_idx
         prev_tx = w.db.get_transaction(prev_h)
         prev_txout = prev_tx.outputs()[prev_n]
         assert prev_txout.value == MIN_DENOM_VAL
@@ -1558,7 +1592,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_cleanup_new_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         psman.state = PSStates.Mixing
@@ -1620,7 +1653,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_broadcast_new_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         psman.state = PSStates.Mixing
@@ -1678,7 +1710,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_process_by_new_collateral_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         psman.state = PSStates.Mixing
@@ -1714,7 +1745,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         ]
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         res = psman.calc_need_denoms_amounts()
         assert res == all_test_amounts
         res = psman.calc_need_denoms_amounts(use_cache=True)
@@ -1729,18 +1759,18 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_calc_need_denoms_amounts_from_coins(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         dv0001 = PS_DENOMS_VALS[0]
         dv001 = PS_DENOMS_VALS[1]
         dv01 = PS_DENOMS_VALS[2]
         dv1 = PS_DENOMS_VALS[3]
-        coins = w.get_spendable_coins(domain=None, config=self.config)
-        c0001 = list(filter(lambda x: x['value'] == dv0001, coins))
-        c001 = list(filter(lambda x: x['value'] == dv001, coins))
-        c01 = list(filter(lambda x: x['value'] == dv01, coins))
-        c1 = list(filter(lambda x: x['value'] == dv1, coins))
-        other = list(filter(lambda x: x['value'] not in PS_DENOMS_VALS, coins))
+        coins = w.get_spendable_coins(domain=None)
+        c0001 = list(filter(lambda x: x.value_sats() == dv0001, coins))
+        c001 = list(filter(lambda x: x.value_sats() == dv001, coins))
+        c01 = list(filter(lambda x: x.value_sats() == dv01, coins))
+        c1 = list(filter(lambda x: x.value_sats() == dv1, coins))
+        other = list(filter(lambda x: x.value_sats() not in PS_DENOMS_VALS,
+                            coins))
         ccv = COLLATERAL_VAL*9
         assert len(c1) == 2
         assert len(c01) == 26
@@ -1848,7 +1878,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_calc_need_denoms_amounts_on_keep_amount(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         two_dash_amnts_val = 200142001
 
         res = psman.calc_need_denoms_amounts()
@@ -1859,14 +1888,14 @@ class PSWalletTestCase(TestCaseForTestnet):
         # test with spendable amount < keep_amount
         coins0 = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                              mature_only=True, include_ps=True)
-        coins = [c for c in coins0 if c['value'] < 50000000]
+        coins = [c for c in coins0 if c.value_sats() < 50000000]
         w.set_frozen_state_of_coins(coins, True)
-        coins = [c for c in coins0 if c['value'] >= 100000000]
+        coins = [c for c in coins0 if c.value_sats() >= 100000000]
         w.set_frozen_state_of_coins(coins, True)
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        assert sum([c['value'] for c in coins]) == 50000000  # 0.5 Dash
+        assert sum([c.value_sats() for c in coins]) == 50000000  # 0.5 Dash
 
         res = psman.calc_need_denoms_amounts()
         assert sum([sum(amnts)for amnts in res]) == 49840498
@@ -1927,7 +1956,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_create_new_denoms_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.state = PSStates.Mixing
 
         # check not created if new_denoms_wfl is not empty
@@ -1937,13 +1965,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         asyncio.get_event_loop().run_until_complete(coro)
         assert psman.new_denoms_wfl == wfl
         psman.clear_new_denoms_wfl()
-
-        # check not created if psman.config is not set
-        with self.assertRaises(AttributeError):
-            psman.config = None
-            coro = psman.create_new_denoms_wfl()
-            asyncio.get_event_loop().run_until_complete(coro)
-        psman.config = self.config
 
         # check created successfully
         coro = psman.create_new_denoms_wfl()
@@ -2034,7 +2055,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_create_new_denoms_wfl_low_balance(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.keep_amount = 1000
         fee_per_kb = self.config.fee_per_kb()
 
@@ -2059,13 +2079,12 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_create_new_denoms_wfl_from_gui(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
 
-        coins = w.get_spendable_coins(domain=None, config=self.config)
-        coins = sorted([c for c in coins], key=lambda x: x['value'])
+        coins = w.get_spendable_coins(domain=None)
+        coins = sorted([c for c in coins], key=lambda x: x.value_sats())
         # check selected to many utxos
         assert not psman.new_denoms_from_coins_info(coins)
         wfl, err = psman.create_new_denoms_wfl_from_gui(coins, None)
@@ -2074,8 +2093,8 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         coins = w.get_utxos(None, mature_only=True, confirmed_only=True,
                             consider_islocks=True, min_rounds=0)
-        coins = [c for c in coins if c['value'] == PS_DENOMS_VALS[-2]]
-        coins = sorted(coins, key=lambda x: x['ps_rounds'])
+        coins = [c for c in coins if c.value_sats() == PS_DENOMS_VALS[-2]]
+        coins = sorted(coins, key=lambda x: x.ps_rounds)
 
         # check on single max value available denom
         coins = coins[0:1]
@@ -2105,8 +2124,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert len(inputs) == 1
         assert len(outputs) == 32
         txin = inputs[0]
-        prev_h = txin['prevout_hash']
-        prev_n = txin['prevout_n']
+        prev_h = txin.prevout.txid.hex()
+        prev_n = txin.prevout.out_idx
         prev_tx = w.db.get_transaction(prev_h)
         prev_txout = prev_tx.outputs()[prev_n]
         assert prev_txout.value == PS_DENOMS_VALS[-2]
@@ -2159,8 +2178,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         total_out_vals = 0
         coins = w.get_utxos(None, mature_only=True, confirmed_only=True,
                             consider_islocks=True, min_rounds=0)
-        coins = [c for c in coins if c['value'] == PS_DENOMS_VALS[-3]]
-        coins = sorted(coins, key=lambda x: x['ps_rounds'])
+        coins = [c for c in coins if c.value_sats() == PS_DENOMS_VALS[-3]]
+        coins = sorted(coins, key=lambda x: x.ps_rounds)
         coins = coins[0:1]
         assert psman.new_denoms_from_coins_info(coins) == \
             ('Transactions type: PS New Denoms\n'
@@ -2196,8 +2215,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         total_out_vals = 0
         coins = w.get_utxos(None, mature_only=True, confirmed_only=True,
                             consider_islocks=True, min_rounds=0)
-        coins = [c for c in coins if c['value'] == PS_DENOMS_VALS[-4]]
-        coins = sorted(coins, key=lambda x: x['ps_rounds'])
+        coins = [c for c in coins if c.value_sats() == PS_DENOMS_VALS[-4]]
+        coins = sorted(coins, key=lambda x: x.ps_rounds)
         coins = coins[0:1]
         assert psman.new_denoms_from_coins_info(coins) == \
             ('Transactions type: PS New Denoms\n'
@@ -2223,7 +2242,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_cleanup_new_denoms_wfl(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.state = PSStates.Mixing
 
         # check if new_denoms_wfl is empty
@@ -2294,7 +2312,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.state = PSStates.Mixing
-        psman.config = self.config
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_denoms_wfl
@@ -2374,7 +2391,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.state = PSStates.Mixing
-        psman.config = self.config
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_denoms_wfl
@@ -2429,13 +2445,14 @@ class PSWalletTestCase(TestCaseForTestnet):
             '0000001976a914f787ffced16771f5f88445450af7b8cf9262fffd88ace49698'
             '00000000001976a914f7ad936793f2206a0fb67fa27f4c4dc5723175c188ac00'
             '000000')
-        tx = Transaction(raw_tx_final)
+        tx = PartialTransaction.from_tx(Transaction(raw_tx_final))
+        tx.deserialize()
         tx = self.wallet.psman._sign_denominate_tx(tx)
-        assert tx.inputs()[-1]['scriptSig'] == (
-            '48304502210085e21ab1c080886d4bd84e523962cd52d5aeabaea50f571f99e7'
-            '19cabbd23d3a02201de6a77f885aa3d718c5de9c3771af5d51f3155d2ce4f457'
-            'cd1628dbbf3fd80b012102a17ec54ed6f8ba9a110d4f4f61f5b9d20024c16bf9'
-            '6239ec8a3ebfc4b1f658b0')
+        assert bh2u(tx.inputs()[-1].script_sig) == (
+            '47304402203dff9b1e2c4d0d7b2e5835a84aa2136280fa0def81299c7046074b'
+            '27ef080439022062ab7a09ac4670f632110148c7e37234a5a1dee7042fedf909'
+            'aa29945d20c1d0012102a17ec54ed6f8ba9a110d4f4f61f5b9d20024c16bf962'
+            '39ec8a3ebfc4b1f658b0')
 
     def _check_tx_io(self, tx, spend_to, spend_duffs, fee_duffs,
                      change=None, change_duffs=None,
@@ -2445,16 +2462,16 @@ class PSWalletTestCase(TestCaseForTestnet):
         out_duffs = 0
         if not include_ps and min_rounds is None:
             for _in_ in tx.inputs():
-                in_duffs += _in_['value']
-                assert _in_['ps_rounds'] is None
+                in_duffs += _in_.value_sats()
+                assert _in_.ps_rounds is None
         elif include_ps:
             for _in_ in tx.inputs():
-                in_duffs += _in_['value']
+                in_duffs += _in_.value_sats()
         elif min_rounds is not None:
             assert len(o) == 1
             for _in_ in tx.inputs():
-                in_duffs += _in_['value']
-                assert _in_['ps_rounds'] == min_rounds
+                in_duffs += _in_.value_sats()
+                assert _in_.ps_rounds == min_rounds
 
         if change is not None:
             assert len(o) == 2
@@ -2462,10 +2479,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         for oi in o:
             out_duffs += oi.value
             if oi.value == spend_duffs:
-                assert oi.type == 0
                 assert oi.address == spend_to
             elif oi.value == change_duffs:
-                assert oi.type == 0
                 assert oi.address == change
             else:
                 raise Exception(f'Unknown amount: {oi.value}')
@@ -2476,82 +2491,75 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = w.psman
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
-        config = self.config
-        addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
         change = 'yanRmD5ZR66L1G51ixvXvUiJEmso5trn97'
         test_amounts = [0.0123, 0.123, 1.23, 5.123]
         test_fees = [226, 226, 374, 374]
         test_changes = [0.00769774, 0.17699774, 0.26999626, 2.90506399]
 
-        coins = w.get_spendable_coins(domain=None, config=config)
+        coins = w.get_spendable_coins(domain=None)
         for i in range(len(test_amounts)):
             amount_duffs = to_duffs(test_amounts[i])
             change_duffs = to_duffs(test_changes[i])
-            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-            tx = w.make_unsigned_transaction(coins, outputs, config=config)
+            outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
             self._check_tx_io(tx, spend_to, amount_duffs, test_fees[i],
                               change, change_duffs)
 
         # check max amount
         amount_duffs = to_duffs(9.84805841)
-        outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-        coins = w.get_spendable_coins(domain=None, config=config)
-        tx = w.make_unsigned_transaction(coins, outputs, config=config)
+        outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+        coins = w.get_spendable_coins(domain=None)
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         self._check_tx_io(tx, spend_to, amount_duffs, 932)  # no change
 
         amount_duffs = to_duffs(9.84805842)  # NotEnoughFunds
-        outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-        coins = w.get_spendable_coins(domain=None, config=config)
+        outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+        coins = w.get_spendable_coins(domain=None)
         with self.assertRaises(NotEnoughFunds):
-            tx = w.make_unsigned_transaction(coins, outputs, config=config)
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
 
     def test_make_unsigned_transaction_include_ps(self):
         w = self.wallet
         psman = w.psman
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
-        config = self.config
-        addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
         change = 'yanRmD5ZR66L1G51ixvXvUiJEmso5trn97'
         test_amounts = [0.0123, 0.123, 1.23, 5.123]
         test_fees = [226, 226, 374, 374]
         test_changes = [0.00769774, 0.17699774, 0.26999626, 2.90506399]
 
-        coins = w.get_spendable_coins(domain=None, config=config,
-                                      include_ps=True)
+        coins = w.get_spendable_coins(domain=None, include_ps=True)
         for i in range(len(test_amounts)):
             amount_duffs = to_duffs(test_amounts[i])
             change_duffs = to_duffs(test_changes[i])
-            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-            tx = w.make_unsigned_transaction(coins, outputs, config=config)
+            outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
             self._check_tx_io(tx, spend_to, amount_duffs, test_fees[i],
                               change, change_duffs)
 
         # check max amount
         amount_duffs = to_duffs(9.84805841)
-        outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-        coins = w.get_spendable_coins(domain=None, config=config)
-        tx = w.make_unsigned_transaction(coins, outputs, config=config)
+        outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+        coins = w.get_spendable_coins(domain=None)
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         self._check_tx_io(tx, spend_to, amount_duffs, 932)  # no change
 
         # check with include_ps
         amount_duffs = to_duffs(14.84811305)
-        outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-        coins = w.get_spendable_coins(domain=None, config=config,
-                                      include_ps=True)
-        tx = w.make_unsigned_transaction(coins, outputs, config=config)
+        outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+        coins = w.get_spendable_coins(domain=None, include_ps=True)
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         self._check_tx_io(tx, spend_to, amount_duffs, 20468,  # no change
                           include_ps=True)
 
         # check max amount with include_ps
         amount_duffs = to_duffs(14.84811306)  # NotEnoughFunds
-        outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-        coins = w.get_spendable_coins(domain=None, config=config,
-                                      include_ps=True)
+        outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+        coins = w.get_spendable_coins(domain=None, include_ps=True)
         with self.assertRaises(NotEnoughFunds):
-            tx = w.make_unsigned_transaction(coins, outputs, config=config)
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
 
     def test_make_unsigned_transaction_min_rounds(self):
         C_RNDS = PSCoinRounds.COLLATERAL
@@ -2559,33 +2567,30 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = w.psman
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
-        config = self.config
-        addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
 
         amount_duffs = to_duffs(1)
-        outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
+        outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
 
         # check PSMinRoundsCheckFailed raises on inappropriate coins selection
-        coins = w.get_spendable_coins(domain=None, config=config)
+        coins = w.get_spendable_coins(domain=None)
         with self.assertRaises(PSMinRoundsCheckFailed):
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              min_rounds=2)
 
-        coins = w.get_spendable_coins(domain=None, config=config,
-                                      min_rounds=C_RNDS)
+        coins = w.get_spendable_coins(domain=None, min_rounds=C_RNDS)
         with self.assertRaises(PSMinRoundsCheckFailed):
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              min_rounds=0)
 
-        coins = w.get_spendable_coins(domain=None, config=config, min_rounds=0)
+        coins = w.get_spendable_coins(domain=None, min_rounds=0)
         with self.assertRaises(PSMinRoundsCheckFailed):
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              min_rounds=1)
 
-        coins = w.get_spendable_coins(domain=None, config=config, min_rounds=1)
+        coins = w.get_spendable_coins(domain=None, min_rounds=1)
         with self.assertRaises(PSMinRoundsCheckFailed):
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              min_rounds=2)
 
         # check different amounts and resulting fees
@@ -2625,11 +2630,11 @@ class PSWalletTestCase(TestCaseForTestnet):
                      10162, 50945, 45502, 42575, 8563, 74809, 20081, 99571,
                      62631, 78389, 19466, 25700, 32769, 50654, 19681, 3572,
                      69981, 70753, 45028, 8952]
-        coins = w.get_spendable_coins(domain=None, config=config, min_rounds=2)
+        coins = w.get_spendable_coins(domain=None, min_rounds=2)
         for i in range(len(test_amounts)):
             amount_duffs = to_duffs(test_amounts[i])
-            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              min_rounds=2)
             self._check_tx_io(tx, spend_to, amount_duffs,  # no change
                               test_fees[i],
@@ -2661,10 +2666,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         # check spending ps_collateral currently in mixing
         c_outpoint, collateral = w.db.get_ps_collateral()
         psman.add_ps_spending_collateral(c_outpoint, 'uuid')
-        inputs = w.get_spendable_coins([collateral[0]], self.config)
+        inputs = w.get_spendable_coins([collateral[0]])
         dummy = w.dummy_address()
-        outputs = [TxOutput(TYPE_ADDRESS, dummy, COLLATERAL_VAL)]
-        tx = w.make_unsigned_transaction(inputs, outputs, self.config)
+        outputs = [PartialTxOutput.from_address_and_value(dummy, COLLATERAL_VAL)]
+        tx = w.make_unsigned_transaction(coins=inputs, outputs=outputs)
 
         psman.state = PSStates.Mixing
         with self.assertRaises(PSPossibleDoubleSpendError):
@@ -2686,10 +2691,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         outpoint = list(ps_denoms.keys())[0]
         denom = ps_denoms[outpoint]
         psman.add_ps_spending_denom(outpoint, 'uuid')
-        inputs = w.get_spendable_coins([denom[0]], self.config)
+        inputs = w.get_spendable_coins([denom[0]])
         dummy = w.dummy_address()
-        outputs = [TxOutput(TYPE_ADDRESS, dummy, COLLATERAL_VAL)]
-        tx = w.make_unsigned_transaction(inputs, outputs, self.config)
+        outputs = [PartialTxOutput.from_address_and_value(dummy, COLLATERAL_VAL)]
+        tx = w.make_unsigned_transaction(coins=inputs, outputs=outputs)
 
         psman.last_mix_stop_time = time.time()
         with self.assertRaises(PSPossibleDoubleSpendError):
@@ -2699,7 +2704,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_sign_transaction(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         # test sign with no _keypairs_cache
         coro = psman.create_new_collateral_wfl()
@@ -2722,7 +2726,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_calc_need_new_keypairs_cnt(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.keep_amount = 14
 
         psman.mix_rounds = 2
@@ -2761,7 +2764,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_calc_need_new_keypairs_cnt_on_small_mix_funds(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.keep_amount = 25
 
         psman.mix_rounds = 2
@@ -2800,7 +2802,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_check_need_new_keypairs(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.mix_rounds = 2
         psman.keep_amount = 2
         coro = psman.find_untracked_ps_txs(log=False)
@@ -2858,7 +2859,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_find_addrs_not_in_keypairs(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.mix_rounds = 2
         psman.keep_amount = 2
         coro = psman.find_untracked_ps_txs(log=False)
@@ -2906,7 +2906,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_cache_keypairs(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         psman.mix_rounds = 2
         psman.keep_amount = 2
@@ -2981,18 +2980,17 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_cache_keypairs_on_small_mix_funds(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         coins0 = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                              mature_only=True, include_ps=True)
-        coins = [c for c in coins0 if c['value'] < 50000000]
+        coins = [c for c in coins0 if c.value_sats() < 50000000]
         w.set_frozen_state_of_coins(coins, True)
-        coins = [c for c in coins0 if c['value'] >= 100000000]
+        coins = [c for c in coins0 if c.value_sats() >= 100000000]
         w.set_frozen_state_of_coins(coins, True)
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        assert sum([c['value'] for c in coins]) == 50000000  # 0.5 Dash
+        assert sum([c.value_sats() for c in coins]) == 50000000  # 0.5 Dash
 
         psman.mix_rounds = 2
         psman.keep_amount = 2
@@ -3070,7 +3068,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         w = self.wallet
         psman = w.psman
         psman.keep_amount = 16  # raise keep amount to make small change val
-        psman.config = self.config
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
         psman.state = PSStates.Mixing
@@ -3080,7 +3077,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True)
         coins = [c for c in coins if not w.is_frozen_coin(c) ]
-        coins = [c for c in coins if not c['value'] in selected_coins_vals]
+        coins = [c for c in coins if not c.value_sats() in selected_coins_vals]
         w.set_frozen_state_of_coins(coins, True)
 
         # check spendable coins
@@ -3088,13 +3085,13 @@ class PSWalletTestCase(TestCaseForTestnet):
                             mature_only=True)
         coins = [c for c in coins if not w.is_frozen_coin(c) ]
         coins = sorted([c for c in coins if not w.is_frozen_coin(c)],
-                       key=lambda x: -x['value'])
-        assert coins[0]['address'] == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
-        assert coins[0]['value'] == 801806773
-        assert coins[1]['address'] == 'yeeU1n6Bm4Y3rz7Y1JZb9gQAbsc4uv4Y5j'
-        assert coins[1]['value'] == 50000000
-        assert coins[2]['address'] == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
-        assert coins[2]['value'] == 1000000
+                       key=lambda x: -x.value_sats())
+        assert coins[0].address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+        assert coins[0].value_sats() == 801806773
+        assert coins[1].address == 'yeeU1n6Bm4Y3rz7Y1JZb9gQAbsc4uv4Y5j'
+        assert coins[1].value_sats() == 50000000
+        assert coins[2].address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
+        assert coins[2].value_sats() == 1000000
 
         psman._cache_keypairs(password=None)
         spendable = ['yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF',
@@ -3159,7 +3156,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_is_mine_lookahead(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         last_recv_addr = w.db.get_receiving_addresses(slice_start=-1)[0]
         last_recv_index = w.get_address_index(last_recv_addr)[1]
@@ -3169,16 +3165,14 @@ class PSWalletTestCase(TestCaseForTestnet):
         not_in_wallet_recv_addrs = []
         for ri in range(last_recv_index + 1, last_recv_index + 101):
             sequence = [0, ri]
-            x_pubkey = w.keystore.get_xpubkey(*sequence)
-            _, generated_addr = xpubkey_to_address(x_pubkey)
+            generated_addr = w.derive_address(0, ri)
             assert not w.is_mine(generated_addr)
             not_in_wallet_recv_addrs.append(generated_addr)
 
         not_in_wallet_change_addrs = []
         for ci in range(last_change_index + 1, last_change_index + 101):
             sequence = [1, ci]
-            x_pubkey = w.keystore.get_xpubkey(*sequence)
-            _, generated_addr = xpubkey_to_address(x_pubkey)
+            generated_addr = w.derive_address(1, ci)
             assert not w.is_mine(generated_addr)
             not_in_wallet_change_addrs.append(generated_addr)
 
@@ -3196,7 +3190,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_calc_denoms_by_values(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         assert psman.calc_denoms_by_values() == {}
 
@@ -3210,27 +3203,16 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_min_new_denoms_from_coins_val(self):
         w = self.wallet
         psman = w.psman
-
-        with self.assertRaises(Exception):
-            psman.min_new_denoms_from_coins_val
-
-        psman.config = self.config
         assert psman.min_new_denoms_from_coins_val == 110228
 
     def test_min_new_collateral_from_coins_val(self):
         w = self.wallet
         psman = w.psman
-
-        with self.assertRaises(Exception):
-            psman.min_new_collateral_from_coins_val
-
-        psman.config = self.config
         assert psman.min_new_collateral_from_coins_val == 10193
 
     def test_check_enough_sm_denoms(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         denoms_by_vals = {}
         assert not psman.check_enough_sm_denoms(denoms_by_vals)
@@ -3254,7 +3236,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_check_big_denoms_presented(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         denoms_by_vals = {}
         assert not psman.check_big_denoms_presented(denoms_by_vals)
@@ -3278,7 +3259,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_get_biggest_denoms_by_min_round(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         assert psman.get_biggest_denoms_by_min_round() == []
 
@@ -3286,8 +3266,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         asyncio.get_event_loop().run_until_complete(coro)
 
         coins = psman.get_biggest_denoms_by_min_round()
-        res_r = [c['ps_rounds'] for c in coins]
-        res_v = [c['value'] for c in coins]
+        res_r = [c.ps_rounds for c in coins]
+        res_v = [c.value_sats() for c in coins]
         assert res_r == [0] * 22 + [2] * 39
         assert res_v == ([10000100] * 10 + [1000010] * 12 + [100001000] * 2 +
                          [10000100] * 16 + [1000010] * 21)
@@ -3295,17 +3275,14 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_all_mixed(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         coro = psman.find_untracked_ps_txs(log=False)
         asyncio.get_event_loop().run_until_complete(coro)
 
         # move spendable to ps_others
-        for c in w.get_spendable_coins(domain=None, config=self.config):
-            prev_h = c['prevout_hash']
-            prev_n = c['prevout_n']
-            outpoint = f'{prev_h}:{prev_n}'
-            w.db.add_ps_other(outpoint, (c['address'], c['value']))
+        for c in w.get_spendable_coins(domain=None):
+            outpoint = c.prevout.to_str()
+            w.db.add_ps_other(outpoint, (c.address, c.value_sats()))
 
         r = psman.mix_rounds
         dn_balance = sum(w.get_balance(include_ps=False, min_rounds=0))
@@ -3351,16 +3328,15 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_enable_ps_keystore(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         assert type(psman.ps_keystore) == keystore.PS_BIP32_KeyStore
         assert psman.ps_ks_txin_type == 'p2pkh'
-        keystore_d = copy.deepcopy(w.keystore.dump())
+        keystore_d = copy.deepcopy(dict(w.keystore.dump()))
         keystore_d['type'] = 'ps_bip32'
         assert psman.ps_keystore.dump() == keystore_d
 
         keystore_d['addr_deriv_offset'] = 2
-        w.storage.put('ps_keystore', keystore_d)
+        w.db.put('ps_keystore', keystore_d)
         psman.load_ps_keystore()
 
         keystore_d = copy.deepcopy(w.keystore.dump())
@@ -3372,7 +3348,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_ps_ks_after_wallet_password_set_standard_bip32(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         keystore_d = copy.deepcopy(w.keystore.dump())
         xprv = ('tprv8gcGuHWitNxNiGHB37gwo6m41W1fNZBT5m79Fr56Q5F7HkagvRpCCPEs'
@@ -3390,7 +3365,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_ps_ks_derive_pubkey(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         pubk = w.keystore.derive_pubkey(for_change=False, n=0)
         pubk_chg = w.keystore.derive_pubkey(for_change=True, n=0)
@@ -3398,15 +3372,15 @@ class PSWalletTestCase(TestCaseForTestnet):
         ps_pubk = psman.ps_keystore.derive_pubkey(for_change=False, n=0)
         ps_pubk_chg = psman.ps_keystore.derive_pubkey(for_change=True, n=0)
 
-        assert pubk == ('02eda8b0b1356ea544d0741b90b7c5d5'
-                        'a69ace3353ff4aa5253ada23458ba7c8ec')
-        assert pubk_chg == ('03e8f307174144ef506fe6e5173da6a8'
-                            '7d0864c0d435cda8029ede0df060a5026d')
+        assert pubk.hex() == ('02eda8b0b1356ea544d0741b90b7c5d5'
+                              'a69ace3353ff4aa5253ada23458ba7c8ec')
+        assert pubk_chg.hex() == ('03e8f307174144ef506fe6e5173da6a8'
+                                  '7d0864c0d435cda8029ede0df060a5026d')
 
-        assert ps_pubk == ('03248abb6109f7e0f60eb05c21df9ddc'
-                           'a21d237013a7f066e88cc0658fb4cf08a1')
-        assert ps_pubk_chg == ('0253bb653ff17f4a5da462ed674c3ace'
-                               '7ed1e94d9b01712c2738ac3d06ee75289c')
+        assert ps_pubk.hex() == ('03248abb6109f7e0f60eb05c21df9ddc'
+                                 'a21d237013a7f066e88cc0658fb4cf08a1')
+        assert ps_pubk_chg.hex() == ('0253bb653ff17f4a5da462ed674c3ace'
+                                     '7ed1e94d9b01712c2738ac3d06ee75289c')
 
     def synchronize_ps_ks(func):
         def generate_ps_addrs(self, *args, **kwargs):
@@ -3432,56 +3406,55 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_sign_tx_with_ps_ks_input(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         addrs = w.get_unused_addresses()
         ps_ks_addrs = psman.get_unused_addresses()
 
         # make tx from wallet keystore utxo to ps keystore address
-        inputs = sorted(w.get_spendable_coins(domain=None, config=self.config),
-                        key=lambda x: x['address'])[-1:]
+        inputs = sorted(w.get_spendable_coins(domain=None),
+                        key=lambda x: x.address)[-1:]
         w.add_input_info(inputs[0])
         # one input: from yjGqNe2m4zFZ6RKVxo1VkN6qGUzQbbrGkK val is 1000010
-        assert inputs[0]['value'] == 1000010
-        assert inputs[0]['address'] == 'yjGqNe2m4zFZ6RKVxo1VkN6qGUzQbbrGkK'
+        assert inputs[0].value_sats() == 1000010
+        assert inputs[0].address == 'yjGqNe2m4zFZ6RKVxo1VkN6qGUzQbbrGkK'
         # one ouput to yWiHa55aVbBen3ddhyTwQRsMjvwDUFwiya, no fee
         oaddr1 = ps_ks_addrs[0]
         assert oaddr1 == 'yWiHa55aVbBen3ddhyTwQRsMjvwDUFwiya'
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr1, 1000010)]
+        outputs = [PartialTxOutput.from_address_and_value(oaddr1, 1000010)]
 
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0].sequence = 0xffffffff
         tx = psman.sign_transaction(tx, None)
         txid1 = tx.txid()
 
-        w.add_transaction(txid1, tx)
+        w.add_transaction(tx)
         w.add_unverified_tx(txid1, TX_HEIGHT_UNCONFIRMED)
 
         # make tx from txid1 output to ps keystore address
-        inputs = w.get_spendable_coins(domain=None, config=self.config)
-        inputs = [i for i in inputs if i['is_ps_ks']]
-        psman.add_input_info(inputs[0])
+        inputs = w.get_spendable_coins(domain=None)
+        inputs = [i for i in inputs if i.is_ps_ks]
+        w.add_input_info(inputs[0])
         oaddr2 = ps_ks_addrs[1]
         assert oaddr2 == 'yNB6U2WKEKw4gjDnfbmBoRZKbTbsGHvvZ9'
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr2, 1000010)]
+        outputs = [PartialTxOutput.from_address_and_value(oaddr2, 1000010)]
 
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0].sequence = 0xffffffff
         tx = psman.sign_transaction(tx, None)
         txid2 = tx.txid()
 
-        w.add_transaction(txid2, tx)
+        w.add_transaction(tx)
         w.add_unverified_tx(txid2, TX_HEIGHT_UNCONFIRMED)
 
         # make tx from txid2 output to wallet keystore address
-        inputs = w.get_spendable_coins(domain=None, config=self.config)
-        inputs = [i for i in inputs if i['is_ps_ks']]
-        psman.add_input_info(inputs[0])
+        inputs = w.get_spendable_coins(domain=None)
+        inputs = [i for i in inputs if i.is_ps_ks]
+        w.add_input_info(inputs[0])
         oaddr3 = addrs[0]
         assert oaddr3 == 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr3, 1000010)]
+        outputs = [PartialTxOutput.from_address_and_value(oaddr3, 1000010)]
 
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0].sequence = 0xffffffff
         tx = psman.sign_transaction(tx, None)
         txid3 = tx.txid()
         assert len(txid3) == 64
@@ -3504,7 +3477,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman.create_ps_ks_from_seed_ext_password(TEST_MNEMONIC, '222', None)
         ps_ks_dump = psman.ps_keystore.dump()
         assert list(ps_ks_dump.keys()) == ['type', 'pw_hash_version', 'seed',
-                                           'passphrase', 'xpub', 'xprv']
+                                           'passphrase', 'xpub', 'xprv',
+                                           'derivation', 'root_fingerprint']
         assert ps_ks_dump['type'] == 'ps_bip32'
         assert ps_ks_dump['pw_hash_version'] == 1
         assert ps_ks_dump['seed'] == TEST_MNEMONIC
@@ -3515,6 +3489,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert ps_ks_dump['xprv'] == ('tprv8ZgxMBicQKsPe8GUjgpR5qSJsNDR3dbF83V'
                                       'ua27JGtu13JBBkqg9nywjXTKjdDVbo95m2vz1CG'
                                       'eXR35wy621YuMw1bNevP9qe55f5k5vWqP')
+        assert ps_ks_dump['derivation'] == 'm'
+        assert ps_ks_dump['root_fingerprint'] == '1345bb4d'
 
     def test_is_ps_ks_encrypted(self):
         w = self.wallet
@@ -3559,50 +3535,49 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_is_ps_ks_inputs_in_tx(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         addrs = w.get_unused_addresses()
         ps_ks_addrs = psman.get_unused_addresses()
 
         # make tx from wallet keystore utxo to ps keystore address
-        inputs = sorted(w.get_spendable_coins(domain=None, config=self.config),
-                        key=lambda x: x['address'])[-1:]
+        inputs = sorted(w.get_spendable_coins(domain=None),
+                        key=lambda x: x.address)[-1:]
         w.add_input_info(inputs[0])
         oaddr1 = ps_ks_addrs[0]
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr1, 1000010)]
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
+        outputs = [PartialTxOutput.from_address_and_value(oaddr1, 1000010)]
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
 
         assert not psman.is_ps_ks_inputs_in_tx(tx)
 
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        tx.inputs()[0].sequence = 0xffffffff
         tx = psman.sign_transaction(tx, None)
         txid1 = tx.txid()
-        w.add_transaction(txid1, tx)
+        w.add_transaction(tx)
         w.add_unverified_tx(txid1, TX_HEIGHT_UNCONFIRMED)
 
         # make tx from txid1 output to ps keystore address
-        inputs = w.get_spendable_coins(domain=None, config=self.config)
-        inputs = [i for i in inputs if i['is_ps_ks']]
-        psman.add_input_info(inputs[0])
+        inputs = w.get_spendable_coins(domain=None)
+        inputs = [i for i in inputs if i.is_ps_ks]
+        w.add_input_info(inputs[0])
         oaddr2 = ps_ks_addrs[1]
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr2, 1000010)]
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        outputs = [PartialTxOutput.from_address_and_value(oaddr2, 1000010)]
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0].sequence = 0xffffffff
 
         assert psman.is_ps_ks_inputs_in_tx(tx)
 
         tx = psman.sign_transaction(tx, None)
         txid2 = tx.txid()
-        w.add_transaction(txid2, tx)
+        w.add_transaction(tx)
         w.add_unverified_tx(txid2, TX_HEIGHT_UNCONFIRMED)
 
         # make tx from txid2 output to wallet keystore address
-        inputs = w.get_spendable_coins(domain=None, config=self.config)
-        inputs = [i for i in inputs if i['is_ps_ks']]
-        psman.add_input_info(inputs[0])
+        inputs = w.get_spendable_coins(domain=None)
+        inputs = [i for i in inputs if i.is_ps_ks]
+        w.add_input_info(inputs[0])
         oaddr3 = addrs[0]
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr3, 1000010)]
-        tx = Transaction.from_io(inputs[:], outputs[:], locktime=0)
-        tx.inputs()[0]['sequence'] = 0xffffffff
+        outputs = [PartialTxOutput.from_address_and_value(oaddr3, 1000010)]
+        tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
+        tx.inputs()[0].sequence = 0xffffffff
 
         assert psman.is_ps_ks_inputs_in_tx(tx)
 
@@ -3611,22 +3586,21 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_prepare_funds_from_hw_wallet(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
         psman.keep_amount = 2
         psman.mix_rounds = 2
 
         # test with spendable amount > keep_amount
         coins0 = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                              mature_only=True, include_ps=True)
-        coins = [c for c in coins0 if c['value'] < 50000000]
+        coins = [c for c in coins0 if c.value_sats() < 50000000]
         w.set_frozen_state_of_coins(coins, True)
-        coins = [c for c in coins0 if c['value'] > 800000000]
+        coins = [c for c in coins0 if c.value_sats() > 800000000]
         w.set_frozen_state_of_coins(coins, True)
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
 
-        assert sum([c['value'] for c in coins]) == 350002000  # 3.5 Dash
+        assert sum([c.value_sats() for c in coins]) == 350002000  # 3.5 Dash
 
         tx = psman.prepare_funds_from_hw_wallet()
         assert tx.txid()
@@ -3638,7 +3612,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         ps_ks_out = outputs[1]
 
         for txin in inputs:
-            assert not psman.is_ps_ks(txin['address'])
+            assert not psman.is_ps_ks(txin.address)
 
         assert change.value == 99734653
         assert not psman.is_ps_ks(change.address)
@@ -3647,12 +3621,12 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert psman.is_ps_ks(ps_ks_out.address)
 
         # test with spendable amount < keep_amount
-        coins = [c for c in coins0 if c['value'] >= 100000000]
+        coins = [c for c in coins0 if c.value_sats() >= 100000000]
         w.set_frozen_state_of_coins(coins, True)
         coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                             mature_only=True, include_ps=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        assert sum([c['value'] for c in coins]) == 50000000  # 0.5 Dash
+        assert sum([c.value_sats() for c in coins]) == 50000000  # 0.5 Dash
 
         tx = psman.prepare_funds_from_hw_wallet()
         assert tx.txid()
@@ -3749,7 +3723,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_prepare_funds_from_ps_keystore(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         with self.assertRaises(NotEnoughFunds):
             psman.prepare_funds_from_ps_keystore(None)
@@ -3761,19 +3734,18 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         coins1 = coins[:1]
         oaddr1 = unused[0]
-        outputs1 = [TxOutput(TYPE_ADDRESS, oaddr1, '!')]
-        tx = w.make_unsigned_transaction(coins1, outputs1, self.config)
+        outputs1 = [PartialTxOutput.from_address_and_value(oaddr1, '!')]
+        tx = w.make_unsigned_transaction(coins=coins1, outputs=outputs1)
         tx = w.sign_transaction(tx, None)
-        txid = tx.txid()
-        w.add_transaction(txid, tx)
+        w.add_transaction(tx)
 
         coins2 = coins[1:2]
         oaddr2 = unused[1]
-        outputs2 = [TxOutput(TYPE_ADDRESS, oaddr2, '!')]
-        tx2 = w.make_unsigned_transaction(coins2, outputs2, self.config)
+        outputs2 = [PartialTxOutput.from_address_and_value(oaddr2, '!')]
+        tx2 = w.make_unsigned_transaction(coins=coins2, outputs=outputs2)
         tx2 = w.sign_transaction(tx2, None)
-        txid2 = tx.txid()
-        w.add_transaction(txid2, tx2)
+        txid2 = tx2.txid()
+        w.add_transaction(tx2)
         psman.add_ps_denom(f'{txid2}:0', (oaddr2, 100001, 0))
 
         tx_list = psman.prepare_funds_from_ps_keystore(None)
@@ -3786,7 +3758,6 @@ class PSWalletTestCase(TestCaseForTestnet):
     def test_check_funds_on_ps_keystore(self):
         w = self.wallet
         psman = w.psman
-        psman.config = self.config
 
         assert not psman.check_funds_on_ps_keystore()
 
@@ -3796,11 +3767,10 @@ class PSWalletTestCase(TestCaseForTestnet):
         coins = coins[:1]
         unused = psman.get_unused_addresses()
         oaddr = unused[0]
-        outputs = [TxOutput(TYPE_ADDRESS, oaddr, '!')]
-        tx = w.make_unsigned_transaction(coins, outputs, self.config)
+        outputs = [PartialTxOutput.from_address_and_value(oaddr, '!')]
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         tx = w.sign_transaction(tx, None)
-        txid = tx.txid()
-        w.add_transaction(txid, tx)
+        w.add_transaction(tx)
 
         assert psman.check_funds_on_ps_keystore()
 
@@ -3816,16 +3786,14 @@ class PSWalletTestCase(TestCaseForTestnet):
         coro = psman.find_untracked_ps_txs(log=False)
         found_txs = asyncio.get_event_loop().run_until_complete(coro)
         for c in denom_coins:
-            utxos = w.get_utxos([c['address']])
+            utxos = w.get_utxos([c.address])
             assert len(utxos) == 1
-            assert utxos[0]['ps_rounds'] in [1, 2]
+            assert utxos[0].ps_rounds in [1, 2]
 
     def test_make_unsigned_transaction_ps_coins_no_ps_data(self):
         """PS tx with probable denom coins"""
         w = self.wallet
         psman = w.psman
-        config = self.config
-        addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
 
         # check different amounts and resulting fees
@@ -3865,12 +3833,12 @@ class PSWalletTestCase(TestCaseForTestnet):
                      10162, 50945, 45502, 42575, 8563, 74809, 20081, 99571,
                      62631, 78389, 19466, 25700, 32769, 50654, 19681, 3572,
                      69981, 70753, 45028, 8952]
-        coins = w.get_spendable_coins(domain=None, config=config,
+        coins = w.get_spendable_coins(domain=None,
                                       min_rounds=2, no_ps_data=True)
         for i in range(len(test_amounts)):
             amount_duffs = to_duffs(test_amounts[i])
-            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              min_rounds=2, no_ps_data=True)
             self._check_tx_io(tx, spend_to, amount_duffs,  # no change
                               test_fees[i],
@@ -3882,24 +3850,22 @@ class PSWalletTestCase(TestCaseForTestnet):
         """Regular tx with probable denom coins, must spent denoms last"""
         w = self.wallet
         psman = w.psman
-        config = self.config
-        addr_type = TYPE_ADDRESS
         spend_to = 'yiXJV2PodX4uuadFtt6e7wMTNkydHpp8ns'
 
         # check different amounts and resulting fees
-        coins = w.get_spendable_coins(domain=None, config=config,
+        coins = w.get_spendable_coins(domain=None,
                                       include_ps=True, no_ps_data=True)
         test_amounts = [3.0, 5.0, 7.0, 10.98, 11.0, 13.0, 14.8]
         for i in range(len(test_amounts)):
             amount_duffs = to_duffs(test_amounts[i])
-            outputs = [TxOutput(addr_type, spend_to, amount_duffs)]
-            tx = w.make_unsigned_transaction(coins, outputs, config=config,
+            outputs = [PartialTxOutput.from_address_and_value(spend_to, amount_duffs)]
+            tx = w.make_unsigned_transaction(coins=coins, outputs=outputs,
                                              no_ps_data=True)
             if amount_duffs < 1098000000:
                 for txin in tx.inputs():
-                    assert txin['value'] not in PS_DENOMS_VALS
+                    assert txin.value_sats() not in PS_DENOMS_VALS
             else:
                 found = 0
                 for txin in tx.inputs():
-                    found += 1 if txin['value'] in PS_DENOMS_VALS else 0
+                    found += 1 if txin.value_sats() in PS_DENOMS_VALS else 0
                 assert found > 0

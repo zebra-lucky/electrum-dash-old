@@ -23,7 +23,9 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from typing import Optional, List, Dict, Sequence, Set
 from enum import IntEnum
+import copy
 
 from PyQt5.QtCore import (pyqtSignal, Qt, QModelIndex, QVariant,
                           QAbstractItemModel, QItemSelectionModel)
@@ -32,12 +34,44 @@ from PyQt5.QtWidgets import (QAbstractItemView, QHeaderView, QComboBox,
                              QLabel, QMenu)
 
 from electrum_dash.i18n import _
+from electrum_dash.transaction import PartialTxInput
 from electrum_dash.dash_ps import sort_utxos_by_ps_rounds
 from electrum_dash.dash_tx import PSCoinRounds
 from electrum_dash.logging import Logger
 from electrum_dash.util import profiler
 
-from .util import MyTreeView, ColorScheme, MONOSPACE_FONT, GetDataThread
+from .util import MyTreeView, ColorScheme, MONOSPACE_FONT, EnterButton, GetDataThread
+
+
+SELECTED_TO_SPEND_TOOLTIP = _('Coin selected to be spent')
+
+
+class PSStateFilter(IntEnum):
+    ALL = 0
+    PS = 1
+    PS_OTHER = 2
+    REGULAR = 3
+
+    def ui_text(self) -> str:
+        return {
+            self.ALL: _('All'),
+            self.PS: _('PrivateSend'),
+            self.PS_OTHER: _('PS Other coins'),
+            self.REGULAR: _('Regular'),
+        }[self]
+
+
+class KeystoreFilter(IntEnum):
+    ALL = 0
+    PS_KS = 1
+    MAIN = 2
+
+    def ui_text(self) -> str:
+        return {
+            self.ALL: _('All'),
+            self.PS_KS: _('PS Keystore'),
+            self.MAIN: _('Main'),
+        }[self]
 
 
 class UTXOColumns(IntEnum):
@@ -48,6 +82,17 @@ class UTXOColumns(IntEnum):
     HEIGHT = 4
     PS_ROUNDS = 5
     KEYSTORE_TYPE = 6
+
+
+UTXOHeaders = {
+    UTXOColumns.ADDRESS: _('Address'),
+    UTXOColumns.LABEL: _('Label'),
+    UTXOColumns.PS_ROUNDS: _('PS Rounds'),
+    UTXOColumns.KEYSTORE_TYPE : _('Keystore'),
+    UTXOColumns.AMOUNT: _('Amount'),
+    UTXOColumns.HEIGHT: _('Height'),
+    UTXOColumns.OUTPOINT: _('Output point'),
+}
 
 
 class UTXOModel(QAbstractItemModel, Logger):
@@ -84,15 +129,7 @@ class UTXOModel(QAbstractItemModel, Logger):
     def headerData(self, section, orientation, role):
         if role != Qt.DisplayRole:
             return
-        return {
-            UTXOColumns.ADDRESS: _('Address'),
-            UTXOColumns.LABEL: _('Label'),
-            UTXOColumns.PS_ROUNDS: _('PS Rounds'),
-            UTXOColumns.KEYSTORE_TYPE : _('Keystore'),
-            UTXOColumns.AMOUNT: _('Amount'),
-            UTXOColumns.HEIGHT: _('Height'),
-            UTXOColumns.OUTPOINT: _('Output point'),
-        }[section]
+        return UTXOHeaders[section]
 
     def flags(self, idx):
         extra_flags = Qt.NoItemFlags
@@ -147,19 +184,26 @@ class UTXOModel(QAbstractItemModel, Logger):
             ps_rounds = 'Other'
         else:
             ps_rounds = str(ps_rounds)
-        if role == Qt.ToolTipRole:
+        if (role == self.view.ROLE_CLIPBOARD_DATA
+                and col == UTXOColumns.OUTPOINT):
+            return QVariant(outpoint)
+        elif role == Qt.ToolTipRole:
             if col == UTXOColumns.ADDRESS and is_frozen_addr:
                 return QVariant(_('Address is frozen'))
-            elif col == UTXOColumns.OUTPOINT:
-                if is_frozen_coin:
-                    return QVariant(f'{outpoint}\n{_("Coin is frozen")}')
+            elif col == UTXOColumns.OUTPOINT and is_frozen_coin:
+                return QVariant(f'{outpoint}\n{_("Coin is frozen")}')
+            elif outpoint in (self.view._spend_set or set()):
+                if col == UTXOColumns.OUTPOINT:
+                    return QVariant(f'{outpoint}\n{SELECTED_TO_SPEND_TOOLTIP}')
                 else:
-                    return QVariant(outpoint)
+                    return QVariant(SELECTED_TO_SPEND_TOOLTIP)
+            elif col == UTXOColumns.OUTPOINT:
+                return QVariant(outpoint)
         elif role not in (Qt.DisplayRole, Qt.EditRole):
             if role == Qt.TextAlignmentRole:
                 if col in [UTXOColumns.AMOUNT, UTXOColumns.HEIGHT,
                            UTXOColumns.PS_ROUNDS, UTXOColumns.KEYSTORE_TYPE]:
-                    return QVariant(Qt.AlignRight|Qt.AlignVCenter)
+                    return QVariant(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     return QVariant(Qt.AlignVCenter)
             elif role == Qt.FontRole:
@@ -169,6 +213,8 @@ class UTXOModel(QAbstractItemModel, Logger):
                     return QVariant(ColorScheme.BLUE.as_color(True))
                 elif col == UTXOColumns.OUTPOINT and is_frozen_coin:
                     return QVariant(ColorScheme.BLUE.as_color(True))
+                elif outpoint in (self.view._spend_set or set()):
+                    return QVariant(ColorScheme.GREEN.as_color(True))
         elif col == UTXOColumns.OUTPOINT:
             return QVariant(out_short)
         elif col == UTXOColumns.ADDRESS:
@@ -193,43 +239,47 @@ class UTXOModel(QAbstractItemModel, Logger):
         show_ps = self.view.show_ps
         show_ps_ks = self.view.show_ps_ks
         w = self.wallet
-        if show_ps == 0:  # All
+        if show_ps == PSStateFilter.ALL:
             utxos = w.get_utxos(include_ps=True)
-        elif show_ps == 1:  # PrivateSend
+        elif show_ps == PSStateFilter.PS:
             utxos = w.get_utxos(min_rounds=PSCoinRounds.COLLATERAL)
-        elif show_ps == 2:  # PS Other coins
+        elif show_ps == PSStateFilter.PS_OTHER:
             utxos = w.get_utxos(min_rounds=PSCoinRounds.MINUSINF)
-            utxos = [c for c in utxos if c['ps_rounds'] <= PSCoinRounds.OTHER]
+            utxos = [c for c in utxos if c.ps_rounds <= PSCoinRounds.OTHER]
         else:  # Regular
             utxos = w.get_utxos()
-        if show_ps_ks == 1:     # PS Keystore
-            utxos = [c for c in utxos if c['is_ps_ks']]
-        elif show_ps_ks == 2:   # Main Keystore
-            utxos = [c for c in utxos if not c['is_ps_ks']]
+        if show_ps_ks == KeystoreFilter.PS_KS:
+            utxos = [c for c in utxos if c.is_ps_ks]
+        elif show_ps_ks == KeystoreFilter.MAIN:
+            utxos = [c for c in utxos if not c.is_ps_ks]
         utxos.sort(key=sort_utxos_by_ps_rounds)
+        self.view._maybe_reset_spend_list(utxos)
+        self.view._utxo_dict = {}
         for i, utxo in enumerate(utxos):
-            address = utxo['address']
-            value = utxo['value']
-            prev_h = utxo['prevout_hash']
-            prev_n = utxo['prevout_n']
-            outpoint = f'{prev_h}:{prev_n}'
+            address = utxo.address
+            value = utxo.value_sats()
+            prev_h = utxo.prevout.txid.hex()
+            prev_n = utxo.prevout.out_idx
+            outpoint = utxo.prevout.to_str()
+            self.view._utxo_dict[outpoint] = utxo
+            label = w.get_label_for_txid(prev_h) or w.get_label(address)
             coin_items.append({
                 'address': address,
                 'value': value,
                 'prevout_n': prev_n,
                 'prevout_hash': prev_h,
-                'height': utxo['height'],
-                'coinbase': utxo['coinbase'],
-                'islock': utxo['islock'],
-                'ps_rounds': utxo['ps_rounds'],
-                'is_ps_ks': utxo['is_ps_ks'],
+                'height': utxo.block_height,
+                'coinbase': utxo.is_coinbase_output(),
+                'islock': utxo.islock,
+                'ps_rounds': utxo.ps_rounds,
+                'is_ps_ks': utxo.is_ps_ks,
                 # append model fields
                 'ix': i,
                 'outpoint': outpoint,
                 'out_short': f'{prev_h[:16]}...:{prev_n}',
                 'is_frozen_addr': w.is_frozen_address(address),
-                'is_frozen_coin': w.is_frozen_coin(outpoint),
-                'label': w.get_label(prev_h),
+                'is_frozen_coin': w.is_frozen_coin(utxo),
+                'label': label,
                 'balance': self.parent.format_amount(value, whitespaces=True),
             })
         return coin_items
@@ -269,25 +319,32 @@ class UTXOModel(QAbstractItemModel, Logger):
         self.refresh(self.get_data_thread.res)
 
     @profiler
-    def refresh(self, coin_items):
-        if coin_items == self.coin_items:
+    def refresh(self, coin_items, force=False):
+        if not force and coin_items == self.coin_items:
             return
         col = self.view.header().sortIndicatorSection()
         order = self.view.header().sortIndicatorOrder()
         self.process_changes(self.sorted(coin_items, col, order))
         self.view.filter()
+        self.view.update_coincontrol_status_bar()
 
 
 class UTXOList(MyTreeView):
 
+    _spend_set: Optional[Set[str]]  # coins selected by the user to spend from
+    _utxo_dict: Dict[str, PartialTxInput]  # coin outpoint -> coin
+
     filter_columns = [UTXOColumns.ADDRESS, UTXOColumns.PS_ROUNDS,
                       UTXOColumns.KEYSTORE_TYPE, UTXOColumns.LABEL,
                       UTXOColumns.OUTPOINT]
+    stretch_column = UTXOColumns.LABEL
 
     def __init__(self, parent, model):
-        stretch_column = UTXOColumns.LABEL
         super().__init__(parent, self.create_menu,
-                         stretch_column=stretch_column, editable_columns=[])
+                         stretch_column=self.stretch_column,
+                         editable_columns=[])
+        self._spend_set = None
+        self._utxo_dict = {}
         self.cm = model
         self.setModel(model)
         self.wallet = self.parent.wallet
@@ -299,24 +356,23 @@ class UTXOList(MyTreeView):
         header.setSortIndicator(UTXOColumns.PS_ROUNDS, Qt.AscendingOrder)
         self.setSortingEnabled(True)
         for col in UTXOColumns:
-            if col == stretch_column:
+            if col == self.stretch_column:
                 header.setSectionResizeMode(col, QHeaderView.Stretch)
             elif col == UTXOColumns.PS_ROUNDS:
                 header.setSectionResizeMode(col, QHeaderView.Fixed)
             else:
                 header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-        self.show_ps = 0
-        self.show_ps_ks = 0
+        self.show_ps = PSStateFilter.ALL
+        self.show_ps_ks = KeystoreFilter.ALL
         self.ps_button = QComboBox(self)
         self.ps_button.currentIndexChanged.connect(self.toggle_ps)
-        for t in [_('All'), _('PrivateSend'),
-                  _('PS Other coins'), _('Regular')]:
-            self.ps_button.addItem(t)
+        for ps_state in PSStateFilter.__members__.values():
+            self.ps_button.addItem(ps_state.ui_text())
         self.ps_ks_button = QComboBox(self)
         self.ps_ks_button.currentIndexChanged.connect(self.toggle_ps_ks)
-        for t in [_('All'), _('PS Keystore'), _('Main')]:
-            self.ps_ks_button.addItem(t)
+        for keystore in KeystoreFilter.__members__.values():
+            self.ps_ks_button.addItem(keystore.ui_text())
 
     def get_toolbar_buttons(self):
         return (QLabel('    %s ' % _("Filter PS Type:")),
@@ -325,8 +381,8 @@ class UTXOList(MyTreeView):
                 self.ps_ks_button)
 
     def on_hide_toolbar(self):
-        self.show_ps = 0
-        self.show_ps_ks = 0
+        self.show_ps = PSStateFilter.ALL
+        self.show_ps_ks = KeystoreFilter.ALL
         self.update()
 
     def save_toolbar_state(self, state, config):
@@ -336,17 +392,80 @@ class UTXOList(MyTreeView):
         if state == self.show_ps:
             return
         self.ps_button.setCurrentIndex(state)
-        self.show_ps = state
+        self.show_ps = PSStateFilter(state)
         self.update()
 
     def toggle_ps_ks(self, state):
         if state == self.show_ps_ks:
             return
-        self.show_ps_ks = state
+        self.show_ps_ks = KeystoreFilter(state)
         self.update()
 
     def update(self):
+        # not calling maybe_defer_update() as it interferes with coincontrol status bar
         self.cm.get_data_thread.need_update.set()
+
+    def _filter_frozen_coins(self, coins: List[PartialTxInput]) -> List[PartialTxInput]:
+        coins = [utxo for utxo in coins
+                 if (not self.wallet.is_frozen_address(utxo.address) and
+                     not self.wallet.is_frozen_coin(utxo))]
+        return coins
+
+    def set_spend_list(self, coins: Optional[List[PartialTxInput]]):
+        if coins is not None:
+            coins = self._filter_frozen_coins(coins)
+            self._spend_set = {utxo.prevout.to_str() for utxo in coins}
+            self.parent.set_ps_cb_from_coins(coins)
+            self.parent.ps_cb.setEnabled(False)
+        else:
+            self._spend_set = None
+            self.parent.set_ps_cb_from_coins(None)
+            self.parent.ps_cb.setEnabled(True)
+        self.cm.refresh(self.cm.coin_items, force=True)
+
+    def get_spend_list(self) -> Optional[Sequence[PartialTxInput]]:
+        if self._spend_set is None:
+            return None
+        utxos = [self._utxo_dict[x] for x in self._spend_set]
+        return copy.deepcopy(utxos)  # copy so that side-effects don't affect utxo_dict
+
+    def _maybe_reset_spend_list(self, current_wallet_utxos: Sequence[PartialTxInput]) -> None:
+        if self._spend_set is None:
+            return
+        # if we spent one of the selected UTXOs, just reset selection
+        utxo_set = {utxo.prevout.to_str() for utxo in current_wallet_utxos}
+        if not all([prevout_str in utxo_set for prevout_str in self._spend_set]):
+            self._spend_set = None
+            self.parent.set_ps_cb_from_coins(None)
+            self.parent.ps_cb.setEnabled(True)
+
+    def update_coincontrol_status_bar(self):
+        if self._spend_set is not None:
+            coins = [self._utxo_dict[x] for x in self._spend_set]
+            coins = self._filter_frozen_coins(coins)
+            amount = sum(x.value_sats() for x in coins)
+            amount_str = self.parent.format_amount_and_units(amount)
+            num_outputs_str = _("{} outputs available ({} total)")\
+                .format(len(coins), len(self._utxo_dict))
+            self.parent.set_coincontrol_msg(_("Coin control active") +
+                                            f': {num_outputs_str},'
+                                            f' {amount_str}')
+        else:
+            self.parent.set_coincontrol_msg(None)
+
+    def add_copy_menu(self, menu: QMenu, idx) -> QMenu:
+        cc = menu.addMenu(_("Copy"))
+        for column in UTXOColumns:
+            column_title = UTXOHeaders[column]
+            col_idx = idx.sibling(idx.row(), column)
+            clipboard_data = self.cm.data(col_idx, self.ROLE_CLIPBOARD_DATA)
+            if clipboard_data is None:
+                clipboard_data = self.cm.data(col_idx, Qt.DisplayRole)
+            clipboard_data = str(clipboard_data.value()).strip()
+            cc.addAction(column_title,
+                         lambda text=clipboard_data, title=column_title:
+                         self.place_text_on_clipboard(text, title=title))
+        return cc
 
     def create_menu(self, position):
         w = self.wallet
@@ -360,17 +479,26 @@ class UTXOList(MyTreeView):
         for idx in selected:
             if not idx.isValid():
                 return
-            coins.append(idx.internalPointer())
-        menu.addAction(_("Spend"), lambda: self.parent.spend_coins(coins))
-        if len(coins) == 1:
-            coin_item = coins[0]
-            ps_rounds = coin_item['ps_rounds']
-            address = coin_item['address']
-            txid = coin_item['prevout_hash']
+            coin_item = idx.internalPointer()
+            if not coin_item:
+                return
             outpoint = coin_item['outpoint']
+            coins.append(self._utxo_dict[outpoint])
+        if len(coins) == 0:
+            menu.addAction(_("Spend (select none)"),
+                           lambda: self.set_spend_list(coins))
+        else:
+            menu.addAction(_("Spend"), lambda: self.set_spend_list(coins))
+
+        if len(coins) == 1:
+            utxo = coins[0]
+            ps_rounds = utxo.ps_rounds
+            address = utxo.address
+            txid = utxo.prevout.txid.hex()
+            outpoint = utxo.prevout.to_str()
             if (ps_rounds is not None
                     and (ps_rounds == PSCoinRounds.OTHER or ps_rounds >= 0)):
-                coin_val = coin_item['value']
+                coin_val = utxo.value_sats()
                 mwin = self.parent
                 if coin_val >= psman.min_new_denoms_from_coins_val:
 
@@ -389,25 +517,13 @@ class UTXOList(MyTreeView):
             if tx:
                 # Prefer None if empty
                 # (None hides the Description: field in the window)
-                label = w.get_label(txid) or None
-                menu.addAction(_("Details"),
-                               lambda: self.parent.show_transaction(tx, label))
+                label = w.get_label_for_txid(txid)
+                menu.addAction(_("Details"), lambda: self.parent.show_transaction(tx, tx_desc=label))
             # "Copy ..."
             idx = self.indexAt(position)
             if not idx.isValid():
                 return
-            col = idx.column()
-            hd = self.cm.headerData
-            column_title = hd(col, None, Qt.DisplayRole)
-            if col != UTXOColumns.OUTPOINT:
-                copy_text = str(self.cm.data(idx, Qt.DisplayRole).value())
-            else:
-                copy_text = outpoint
-            if col == UTXOColumns.AMOUNT:
-                copy_text = copy_text.strip()
-            clipboard = self.parent.app.clipboard()
-            menu.addAction(_("Copy {}").format(column_title),
-                           lambda: clipboard.setText(copy_text))
+            self.add_copy_menu(menu, idx)
 
             if ps_rounds is not None:
                 menu.exec_(self.viewport().mapToGlobal(position))
@@ -415,15 +531,15 @@ class UTXOList(MyTreeView):
 
             # "Freeze coin"
             set_frozen_state_c = self.parent.set_frozen_state_of_coins
-            if not w.is_frozen_coin(outpoint):
+            if not w.is_frozen_coin(utxo):
                 menu.addAction(_("Freeze Coin"),
-                               lambda: set_frozen_state_c([outpoint], True))
+                               lambda: set_frozen_state_c([utxo], True))
             else:
                 menu.addSeparator()
                 menu.addAction(_("Coin is frozen"),
                                lambda: None).setEnabled(False)
                 menu.addAction(_("Unfreeze Coin"),
-                               lambda: set_frozen_state_c([outpoint], False))
+                               lambda: set_frozen_state_c([utxo], False))
                 menu.addSeparator()
             # "Freeze address"
             set_frozen_state_a = self.parent.set_frozen_state_of_addresses
@@ -437,19 +553,18 @@ class UTXOList(MyTreeView):
                 menu.addAction(_("Unfreeze Address"),
                                lambda: set_frozen_state_a([address], False))
                 menu.addSeparator()
-        else:
+        elif len(coins) > 1:  # multiple items selected
             # multiple items selected
-            ps_rounds = set([coin_item['ps_rounds'] for coin_item in coins])
+            ps_rounds = set([utxo.ps_rounds for utxo in coins])
             if ps_rounds != {None}:
                 menu.exec_(self.viewport().mapToGlobal(position))
                 return
 
             menu.addSeparator()
-            addrs = set([coin_item['address'] for coin_item in coins])
-            is_coin_frozen = [w.is_frozen_coin(coin_item['outpoint'])
-                              for coin_item in coins]
-            is_addr_frozen = [w.is_frozen_address(coin_item['address'])
-                              for coin_item in coins]
+            addrs = set([utxo.address for utxo in coins])
+            is_coin_frozen = [w.is_frozen_coin(utxo) for utxo in coins]
+            is_addr_frozen = [w.is_frozen_address(utxo.address)
+                              for utxo in coins]
 
             set_frozen_state_c = self.parent.set_frozen_state_of_coins
             if not all(is_coin_frozen):

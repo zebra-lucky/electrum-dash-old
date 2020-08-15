@@ -13,6 +13,7 @@ SEED_PREFIX      = '01'      # Standard wallet
 def seed_prefix(seed_type):
     if seed_type == 'standard':
         return SEED_PREFIX
+    raise Exception(f"unknown seed_type: {seed_type}")
 
 
 VERSION_PATTERN = re.compile('^([^A-Za-z]+).*')  # simpliified PEP440 versions

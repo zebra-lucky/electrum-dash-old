@@ -188,7 +188,7 @@ class ShowPSKsSeedDlg(WindowModalDialog):
                                                    _('Seed'))))
         self.setMinimumWidth(600)
         vbox = QVBoxLayout(self)
-        title =  _('Your wallet generation seed is:')
+        title = _('Your wallet generation seed is:')
         slayout = SeedLayout(title=title, seed=seed, msg=True,
                              passphrase=passphrase)
         vbox.addLayout(slayout)

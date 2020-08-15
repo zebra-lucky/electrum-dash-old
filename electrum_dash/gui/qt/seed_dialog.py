@@ -24,13 +24,13 @@
 # SOFTWARE.
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap, QPalette
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QVBoxLayout, QCheckBox, QHBoxLayout, QLineEdit,
                              QLabel, QCompleter, QDialog, QStyledItemDelegate)
 
 from electrum_dash.i18n import _
 from electrum_dash.mnemonic import Mnemonic, seed_type
-import electrum_dash.old_mnemonic
+from electrum_dash import old_mnemonic
 
 from .util import (Buttons, OkButton, WWLabel, ButtonsTextEdit, icon_path,
                    EnterButton, CloseButton, WindowModalDialog, ColorScheme)
@@ -152,9 +152,9 @@ class SeedLayout(QVBoxLayout):
 
     def initialize_completer(self):
         bip39_english_list = Mnemonic('en').wordlist
-        old_list = electrum_dash.old_mnemonic.words
+        old_list = old_mnemonic.wordlist
         only_old_list = set(old_list) - set(bip39_english_list)
-        self.wordlist = bip39_english_list + list(only_old_list)  # concat both lists
+        self.wordlist = list(bip39_english_list) + list(only_old_list)  # concat both lists
         self.wordlist.sort()
 
         class CompleterDelegate(QStyledItemDelegate):
