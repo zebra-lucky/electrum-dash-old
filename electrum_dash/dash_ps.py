@@ -4371,6 +4371,9 @@ class PSManager(Logger):
             if denom[2] >= self.mix_rounds:
                 continue
 
+            if not self.is_ps_ks(denom[0]) and self.is_hw_ks:
+                continue  # skip denoms on hw keystore
+
             if denom_value is None:
                 denom_value = denom[1]
             elif denom[1] != denom_value:  # skip other denom values
