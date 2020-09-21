@@ -6,6 +6,7 @@ from typing import NamedTuple, Any, Optional, Dict, Union, List, Tuple, TYPE_CHE
 from electrum_dash.util import bfh, bh2u, versiontuple, UserCancelled, UserFacingException
 from electrum_dash.bip32 import BIP32Node
 from electrum_dash import constants
+from electrum_dash.dash_tx import to_varbytes, serialize_extra_payload
 from electrum_dash.i18n import _
 from electrum_dash.plugin import Device, runs_in_hwd_thread
 from electrum_dash.transaction import Transaction, PartialTransaction, PartialTxInput, PartialTxOutput
@@ -447,6 +448,11 @@ class SafeTPlugin(HW_PluginBase):
             o = t._add_bin_outputs()
             o.amount = out.value
             o.script_pubkey = out.scriptpubkey
+        if t.version > 2:
+            tx_type = tx.tx_type
+            if tx_type:
+                t.extra_data = to_varbytes(serialize_extra_payload(tx))
+                t.version |= tx_type << 16
         return t
 
     # This function is called from the TREZOR libraries (via tx_api)
