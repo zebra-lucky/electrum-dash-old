@@ -1,4 +1,9 @@
 {
+    "electrumx-testnet.dash.org": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.4"
+    },
     "dword.ga": {
         "pruning": "-",
         "s": "51002",
