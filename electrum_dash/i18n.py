@@ -56,6 +56,7 @@ languages = {
     'en_UK': _('English'),
     'es_ES': _('Spanish'),
     'fa_IR': _('Persian'),
+    'fil_PH': _('Filipino'),
     'fr_FR': _('French'),
     'hu_HU': _('Hungarian'),
     'hy_AM': _('Armenian'),
