@@ -4,16 +4,17 @@ set -e
 
 PROJECT_ROOT="$(dirname "$(readlink -e "$0")")/../../.."
 CONTRIB="$PROJECT_ROOT/contrib"
+CONTRIB_APPIMAGE="$CONTRIB/build-linux/appimage"
 DISTDIR="$PROJECT_ROOT/dist"
 BUILDDIR="/var/build/appimage"
 APPDIR="$BUILDDIR/electrum-dash.AppDir"
 CACHEDIR="$BUILDDIR/.cache/appimage"
 
 # pinned versions
-PYTHON_VERSION=3.6.8
 PKG2APPIMAGE_COMMIT="eb8f3acdd9f11ab19b78f5cb15daa772367daf15"
-LIBSECP_VERSION="b408c6a8b287003d1ade5709e6f7bc3c7f1d5be7"
 SQUASHFSKIT_COMMIT="ae0d656efa2d0df2fcac795b6823b44462f19386"
+
+export GCC_STRIP_BINARIES="1"
 
 pushd $PROJECT_ROOT
 source $CONTRIB/dash/travis/electrum_dash_version_env.sh
@@ -23,7 +24,7 @@ APPIMAGE="$DISTDIR/Dash-Electrum-$VERSION-x86_64.AppImage"
 
 . "$CONTRIB"/build_tools_util.sh
 
-rm -rf "$BUILDDIR"
+rm -rf "$CACHEDIR"
 mkdir -p "$APPDIR" "$CACHEDIR" "$DISTDIR"
 
 # potential leftover from setuptools that might make pip put garbage in binary
@@ -37,10 +38,11 @@ verify_hash "$CACHEDIR/functions.sh" "78b7ee5a04ffb84ee1c93f0cb2900123773bc6709e
 download_if_not_exist "$CACHEDIR/appimagetool" "https://github.com/AppImage/AppImageKit/releases/download/12/appimagetool-x86_64.AppImage"
 verify_hash "$CACHEDIR/appimagetool" "d918b4df547b388ef253f3c9e7f6529ca81a885395c31f619d9aaf7030499a13"
 
+info "Building squashfskit"
 git clone "https://github.com/squashfskit/squashfskit.git" "$BUILDDIR/squashfskit"
 (
     cd "$BUILDDIR/squashfskit"
-    git checkout "$SQUASHFSKIT_COMMIT"
+    git checkout "${SQUASHFSKIT_COMMIT}^{commit}"
     make -C squashfs-tools mksquashfs || fail "Could not build squashfskit"
 )
 MKSQUASHFS="$BUILDDIR/squashfskit/squashfs-tools/mksquashfs"
@@ -50,7 +52,7 @@ appdir_python() {
   env \
     PYTHONNOUSERSITE=1 \
     LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH+:$LD_LIBRARY_PATH}" \
-    "$APPDIR/usr/bin/python3.6" "$@"
+    "$APPDIR/usr/bin/python3.7" "$@"
 }
 
 python='appdir_python'
@@ -60,12 +62,19 @@ info "installing pip."
 "$python" -m ensurepip
 
 
-info "installing electrum-dash and its dependencies."
+info "Installing build dependencies."
 mkdir -p "$CACHEDIR/pip_cache"
-"$python" -m pip install --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements.txt"
-"$python" -m pip install --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-binaries.txt"
-"$python" -m pip install --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-hw.txt"
-"$python" -m pip install --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" "$PROJECT_ROOT"
+"$python" -m pip install --no-dependencies --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-appimage-build.txt"
+
+info "installing electrum and its dependencies."
+"$python" -m pip install --no-dependencies --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements.txt"
+"$python" -m pip install --no-dependencies --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-binaries.txt"
+"$python" -m pip install --no-dependencies --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-hw.txt"
+"$python" -m pip install --no-dependencies --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" x11_hash==1.4
+"$python" -m pip install --no-dependencies --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" "$PROJECT_ROOT"
+
+# was only needed during build time, not runtime
+"$python" -m pip uninstall -y Cython
 
 
 info "copying zbar"
@@ -78,7 +87,7 @@ cp "$PROJECT_ROOT/electrum_dash/gui/icons/electrum-dash.png" "$APPDIR/electrum-d
 
 
 # add launcher
-cp "$CONTRIB/dash/travis/apprun.sh" "$APPDIR/AppRun"
+cp "$CONTRIB_APPIMAGE/apprun.sh" "$APPDIR/AppRun"
 
 info "finalizing AppDir."
 (
@@ -91,28 +100,30 @@ info "finalizing AppDir."
     move_lib
 
     # apply global appimage blacklist to exclude stuff
-    # move usr/include out of the way to preserve usr/include/python3.6m.
+    # move usr/include out of the way to preserve usr/include/python3.7m.
     mv usr/include usr/include.tmp
     delete_blacklisted
     mv usr/include.tmp usr/include
 ) || fail "Could not finalize AppDir"
 
-# We copy some libraries here that are on the AppImage excludelist
 info "Copying additional libraries"
 (
-    # On some systems it can cause problems to use the system libusb
+    # On some systems it can cause problems to use the system libusb (on AppImage excludelist)
     cp -f /usr/lib/x86_64-linux-gnu/libusb-1.0.so "$APPDIR/usr/lib/libusb-1.0.so" || fail "Could not copy libusb"
+    # some distros lack libxkbcommon-x11
+    cp -f /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 "$APPDIR"/usr/lib/x86_64-linux-gnu || fail "Could not copy libxkbcommon-x11"
 )
 
 info "stripping binaries from debug symbols."
 # "-R .note.gnu.build-id" also strips the build id
+# "-R .comment" also strips the GCC version information
 strip_binaries()
 {
   chmod u+w -R "$APPDIR"
   {
-    printf '%s\0' "$APPDIR/usr/bin/python3.6"
+    printf '%s\0' "$APPDIR/usr/bin/python3.7"
     find "$APPDIR" -type f -regex '.*\.so\(\.[0-9.]+\)?$' -print0
-  } | xargs -0 --no-run-if-empty --verbose -n1 strip -R .note.gnu.build-id
+  } | xargs -0 --no-run-if-empty --verbose strip -R .note.gnu.build-id -R .comment
 }
 strip_binaries
 
@@ -125,11 +136,11 @@ remove_emptydirs
 
 info "removing some unneeded stuff to decrease binary size."
 rm -rf "$APPDIR"/usr/{share,include}
-PYDIR="$APPDIR"/usr/lib/python3.6
+PYDIR="$APPDIR"/usr/lib/python3.7
 rm -rf "$PYDIR"/{test,ensurepip,lib2to3,idlelib,turtledemo}
 rm -rf "$PYDIR"/{ctypes,sqlite3,tkinter,unittest}/test
 rm -rf "$PYDIR"/distutils/{command,tests}
-rm -rf "$PYDIR"/config-3.6m-x86_64-linux-gnu
+rm -rf "$PYDIR"/config-3.7m-x86_64-linux-gnu
 rm -rf "$PYDIR"/site-packages/{opt,pip,setuptools,wheel}
 rm -rf "$PYDIR"/site-packages/Cryptodome/SelfTest
 rm -rf "$PYDIR"/site-packages/{psutil,qrcode,websocket}/tests
@@ -148,9 +159,12 @@ rm -rf "$PYDIR"/site-packages/PyQt5/Qt.so
 
 # these are deleted as they were not deterministic; and are not needed anyway
 find "$APPDIR" -path '*/__pycache__*' -delete
-rm "$APPDIR"/usr/lib/libsecp256k1.a
+# note that *.dist-info is needed by certain packages.
+# e.g. see https://gitlab.com/python-devs/importlib_metadata/issues/71
+for f in "$PYDIR"/site-packages/importlib_metadata-*.dist-info; do mv "$f" "$(echo "$f" | sed s/\.dist-info/\.dist-info2/)"; done
 rm -rf "$PYDIR"/site-packages/*.dist-info/
 rm -rf "$PYDIR"/site-packages/*.egg-info/
+for f in "$PYDIR"/site-packages/importlib_metadata-*.dist-info2; do mv "$f" "$(echo "$f" | sed s/\.dist-info2/\.dist-info/)"; done
 
 
 find -exec touch -h -d '2000-11-11T11:11:11+00:00' {} +

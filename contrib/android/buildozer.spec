@@ -74,13 +74,13 @@ fullscreen = False
 android.permissions = INTERNET, CAMERA, WRITE_EXTERNAL_STORAGE
 
 # (int) Android API to use
-android.api = 28
+android.api = 29
 
 # (int) Minimum API required. You will need to set the android.ndk_api to be as low as this value.
 android.minapi = 21
 
 # (str) Android NDK version to use
-android.ndk = 19c
+android.ndk = 21d
 
 # (int) Android NDK API to use (optional). This is the minimum API your app will support.
 android.ndk_api = 21
@@ -89,13 +89,15 @@ android.ndk_api = 21
 android.private_storage = True
 
 # (str) Android NDK directory (if empty, it will be automatically downloaded.)
-android.ndk_path = /opt/android/android-ndk
+android.ndk_path = /opt/android-ndk
 
 # (str) Android SDK directory (if empty, it will be automatically downloaded.)
-android.sdk_path = /opt/android/android-sdk
+android.sdk_path = /opt/android-sdk
 
 # (str) ANT directory (if empty, it will be automatically downloaded.)
-android.ant_path = /opt/android/apache-ant
+android.ant_path = /opt/apache-ant
+
+android.skip_update = True
 
 # (str) Android entry point, default is ok for Kivy-based app
 #android.entrypoint = org.renpy.android.PythonActivity

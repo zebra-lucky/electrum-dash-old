@@ -14,7 +14,8 @@ mkdir -p electrum-dash/dist
 docker run --rm \
     -v $(pwd):/opt \
     -w /opt/electrum-dash \
-    -t zebralucky/electrum-dash-winebuild:LinuxPy36 /opt/build_linux.sh
+    -t zebralucky/electrum-dash-winebuild:Linux40x \
+    /opt/electrum-dash/contrib/build-linux/sdist/build.sh
 
 
 sudo find . -name '*.po' -delete
@@ -23,10 +24,11 @@ sudo find . -name '*.pot' -delete
 
 docker run --rm \
     -v $(pwd):/opt \
-    -w /opt/electrum-dash/contrib/dash/travis \
-    -t zebralucky/electrum-dash-winebuild:LinuxAppImage ./build_appimage.sh
+    -w /opt/electrum-dash/contrib/build-linux/appimage \
+    -t zebralucky/electrum-dash-winebuild:AppImage40x ./build.sh
 
 
+BUILD_DIR=/root/build
 TOR_PROXY_VERSION=0.4.2.6
 TOR_PROXY_PATH=https://github.com/zebra-lucky/tor-proxy/releases/download
 TOR_DIST=electrum-dash/dist/tor-proxy-setup.exe
@@ -40,7 +42,7 @@ shasum -a256 -s -c sha256.txt
 
 export WINEARCH=win32
 export WINEPREFIX=/root/.wine-32
-export PYHOME=$WINEPREFIX/drive_c/Python36
+export PYHOME=$WINEPREFIX/drive_c/Python37
 
 
 ZBARW_PATH=https://github.com/zebra-lucky/zbarw/releases/download/20180620
@@ -63,15 +65,17 @@ docker run --rm \
     -e WINEARCH=$WINEARCH \
     -e WINEPREFIX=$WINEPREFIX \
     -e PYHOME=$PYHOME \
-    -v $(pwd):/opt \
+    -e BUILD_DIR=$BUILD_DIR \
+    -v $(pwd):$BUILD_DIR \
     -v $(pwd)/electrum-dash/:$WINEPREFIX/drive_c/electrum-dash \
-    -w /opt/electrum-dash \
-    -t zebralucky/electrum-dash-winebuild:WinePy36 /opt/build_wine.sh
+    -w $BUILD_DIR/electrum-dash \
+    -t zebralucky/electrum-dash-winebuild:Wine40x \
+    $BUILD_DIR/electrum-dash/contrib/build-wine/build.sh
 
 
 export WINEARCH=win64
 export WINEPREFIX=/root/.wine-64
-export PYHOME=$WINEPREFIX/drive_c/Python36
+export PYHOME=$WINEPREFIX/drive_c/Python37
 
 
 ZBARW_FILE=zbarw-zbarcam-0.10-win64.zip
@@ -98,7 +102,9 @@ docker run --rm \
     -e WINEARCH=$WINEARCH \
     -e WINEPREFIX=$WINEPREFIX \
     -e PYHOME=$PYHOME \
-    -v $(pwd):/opt \
+    -e BUILD_DIR=$BUILD_DIR \
+    -v $(pwd):$BUILD_DIR \
     -v $(pwd)/electrum-dash/:$WINEPREFIX/drive_c/electrum-dash \
-    -w /opt/electrum-dash \
-    -t zebralucky/electrum-dash-winebuild:WinePy36 /opt/build_wine.sh
+    -w $BUILD_DIR/electrum-dash \
+    -t zebralucky/electrum-dash-winebuild:Wine40x \
+    $BUILD_DIR/electrum-dash/contrib/build-wine/build.sh

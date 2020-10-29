@@ -32,14 +32,6 @@ else
 fi
 
 
-source contrib/dash/travis/electrum_dash_version_env.sh
-if [[ -n $IS_RELEASE ]]; then
-    echo electrum-dash version is $DASH_ELECTRUM_VERSION, release build
-else
-    echo electrum-dash version is $DASH_ELECTRUM_VERSION
-fi
-mkdir -p dist
-
 BUILD_DIST_DIR=build/electrum-dash/dist
 BUILD_BIN_DIR=build/electrum-dash/bin
 NAME=Dash-Electrum
@@ -49,6 +41,18 @@ APK_NAME=Electrum_DASH
 APK_TNAME=Electrum_DASH_Testnet
 UAPK_TAIL=release-unsigned.apk
 APK_TAIL=release.apk
+export APP_ANDROID_ARCH=armeabi-v7a
+export APP_ANDROID_ARCH=arm64-v8a
+
+
+source contrib/dash/travis/electrum_dash_version_env.sh
+if [[ -n $IS_RELEASE ]]; then
+    echo electrum-dash version is $DASH_ELECTRUM_VERSION, release build
+else
+    echo electrum-dash version is $DASH_ELECTRUM_VERSION
+fi
+mkdir -p dist
+
 
 if [[ "$OSTYPE" == "linux-gnu" ]]; then
     # Build sdist/AppImage/Windows
@@ -130,7 +134,7 @@ if [[ "$OSTYPE" == "linux-gnu" ]]; then
         mkdir -p build && cp contrib/dash/travis/* ./build/
         export ELECTRUM_MAINNET=true
         ./build/travis-build-linux-apk.sh
-        cp ${BUILD_BIN_DIR}/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+        cp ${BUILD_BIN_DIR}/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL \
             dist/
     fi
 
@@ -139,7 +143,7 @@ if [[ "$OSTYPE" == "linux-gnu" ]]; then
     mkdir -p build && cp contrib/dash/travis/* ./build/
     export ELECTRUM_MAINNET=false
     ./build/travis-build-linux-apk.sh
-    cp ${BUILD_BIN_DIR}/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+    cp ${BUILD_BIN_DIR}/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL \
         dist/
 
     sudo rm -rf build
@@ -155,14 +159,14 @@ if [[ "$OSTYPE" == "linux-gnu" ]]; then
             -keystore ~/.jks/keystore \
             -storepass:env JKS_STOREPASS \
             -keypass:env JKS_KEYPASS \
-            dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+            dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL \
             electrum.dash.org
 
         zipalign -v 4 \
-            dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
-            dist/${NAME}-$DASH_ELECTRUM_APK_VERSION-$APK_TAIL \
+            dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL \
+            dist/${NAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$APK_TAIL \
 
-        rm dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL
+        rm dist/${APK_NAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL
     fi
 
     # Sign testnet apk
@@ -173,14 +177,14 @@ if [[ "$OSTYPE" == "linux-gnu" ]]; then
         -keystore ~/.jks/keystore \
         -storepass:env JKS_STOREPASS \
         -keypass:env JKS_KEYPASS \
-        dist/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
+        dist/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL \
         electrum.dash.org
 
     zipalign -v 4 \
-        dist/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL \
-        dist/${TNAME}-$DASH_ELECTRUM_APK_VERSION-$APK_TAIL \
+        dist/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL \
+        dist/${TNAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$APK_TAIL \
 
-    rm dist/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$UAPK_TAIL
+    rm dist/${APK_TNAME}-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$UAPK_TAIL
 else
     # Build macOS
     sudo rm -rf build

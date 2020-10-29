@@ -1,8 +1,8 @@
 #!/bin/bash
 set -ev
 
-export PY36BINDIR=/Library/Frameworks/Python.framework/Versions/3.6/bin/
-export PATH=$PATH:$PY36BINDIR
+export PY37BINDIR=/Library/Frameworks/Python.framework/Versions/3.7/bin/
+export PATH=$PATH:$PY37BINDIR
 source ./contrib/dash/travis/electrum_dash_version_env.sh;
 echo osx build version is $DASH_ELECTRUM_VERSION
 
@@ -34,14 +34,16 @@ if [[ -n $TRAVIS_TAG ]]; then
 fi
 
 
-$PIP_CMD install --no-warn-script-location \
+$PIP_CMD install --no-dependencies -I \
     -r contrib/deterministic-build/requirements.txt
-$PIP_CMD install --no-warn-script-location \
+$PIP_CMD install --no-dependencies -I \
     -r contrib/deterministic-build/requirements-hw.txt
-$PIP_CMD install --no-warn-script-location \
+$PIP_CMD install --no-dependencies -I \
     -r contrib/deterministic-build/requirements-binaries.txt
-$PIP_CMD install --no-warn-script-location x11_hash>=1.4
-$PIP_CMD install --no-warn-script-location PyInstaller==3.6 --no-use-pep517
+$PIP_CMD install --no-dependencies -I x11_hash>=1.4
+
+$PIP_CMD install --no-dependencies -I \
+    -r contrib/deterministic-build/requirements-mac-build.txt
 
 pushd electrum_dash
 git clone https://github.com/zebra-lucky/electrum-dash-locale/ locale-repo
@@ -51,7 +53,7 @@ find locale -name '*.po' -delete
 find locale -name '*.pot' -delete
 popd
 
-cp contrib/dash/osx.spec .
+cp contrib/osx/osx.spec .
 cp contrib/dash/pyi_runtimehook.py .
 cp contrib/dash/pyi_tctl_runtimehook.py .
 
