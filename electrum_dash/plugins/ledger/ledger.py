@@ -46,6 +46,7 @@ try:
     BTCHIP_DEBUG = False
 except ImportError:
     BTCHIP = False
+    btchip = object  # to test whithout btchip modules (see btchip_dash class)
 
 MSG_NEEDS_FW_UPDATE_GENERIC = _('Firmware version too old. Please update at') + \
                       ' https://www.ledgerwallet.com'
