@@ -1,19 +1,21 @@
-import colorama
+from decimal import Decimal
 import getpass
+from datetime import datetime
 import logging
 import time
+import colorama
 from colorama import Fore, Style
-from datetime import datetime
-from decimal import Decimal
 
+from electrum_dash import util
 from electrum_dash import WalletStorage, Wallet
-from electrum_dash.dash_ps import filter_log_line, PSLogSubCat
-from electrum_dash.dash_tx import SPEC_TX_NAMES
+from electrum_dash.wallet_db import WalletDB
 from electrum_dash.util import format_satoshis
-from electrum_dash.bitcoin import is_address, COIN, TYPE_ADDRESS
-from electrum_dash.transaction import TxOutput
+from electrum_dash.bitcoin import is_address, COIN
+from electrum_dash.transaction import PartialTxOutput
 from electrum_dash.network import TxBroadcastError, BestEffortRequestFailed
 from electrum_dash.logging import console_stderr_handler
+from electrum_dash.dash_ps import filter_log_line, PSLogSubCat
+from electrum_dash.dash_tx import SPEC_TX_NAMES
 
 _ = lambda x:x  # i18n
 
@@ -45,6 +47,10 @@ class ElectrumGui:
             password = getpass.getpass('Password:', stream=None)
             storage.decrypt(password)
 
+        db = WalletDB(storage.read(), manual_upgrades=False)
+        if db.upgrade_done:
+            storage.backup_old_version()
+
         if getattr(storage, 'backup_message', None):
             print(f'{storage.backup_message}\n')
             input('Press Enter to continue...')
@@ -59,12 +65,11 @@ class ElectrumGui:
         self.str_amount = ""
         self.str_fee = ""
 
-        self.wallet = Wallet(storage)
+        self.wallet = Wallet(db, storage, config=config)
         self.wallet.start_network(self.network)
-        self.wallet.psman.config = config
         self.contacts = self.wallet.contacts
 
-        self.network.register_callback(self.on_network, ['wallet_updated', 'network_updated', 'banner'])
+        util.register_callback(self.on_network, ['wallet_updated', 'network_updated', 'banner'])
         self.commands = [_("[h] - displays this help text"), \
                          _("[i] - display transaction history"), \
                          _("[o] - enter payment order"), \
@@ -117,7 +122,6 @@ class ElectrumGui:
     def print_history(self):
         messages = []
 
-        hist_list = reversed(self.wallet.get_history(config=self.config))
         def_dip2 = not self.wallet.psman.unsupported
         show_dip2 = self.config.get('show_dip2_tx_type', def_dip2)
         if show_dip2:
@@ -135,33 +139,32 @@ class ElectrumGui:
                           "%" + "%d" % (width[1] + wdelta) + "s" +
                           "%" + "%d" % (width[2] + wdelta) + "s" +
                           "%" + "%d" % (width[3] + wdelta) + "s")
-        for (tx_hash, tx_type, tx_mined_status, delta, balance,
-             islock, group_txid, group_data) in hist_list:
-            if tx_mined_status.conf:
-                timestamp = tx_mined_status.timestamp
+        for hist_item in reversed(self.wallet.get_history(config=self.config)):
+            if hist_item.tx_mined_status.conf:
+                timestamp = hist_item.tx_mined_status.timestamp
                 try:
                     dttm = datetime.fromtimestamp(timestamp)
                     time_str = dttm.isoformat(' ')[:-3]
                 except Exception:
                     time_str = "unknown"
-            elif islock:
-                dttm = datetime.fromtimestamp(islock)
+            elif hist_item.islock:
+                dttm = datetime.fromtimestamp(hist_item.islock)
                 time_str = dttm.isoformat(' ')[:-3]
             else:
                 time_str = 'unconfirmed'
 
-            label = self.wallet.get_label(tx_hash)
+            label = self.wallet.get_label_for_txid(hist_item.txid)
             if show_dip2:
+                tx_type = hist_item.tx_type
                 tx_type_name = SPEC_TX_NAMES.get(tx_type, str(tx_type))
                 msg = format_str % (time_str, tx_type_name, label,
-                                    format_satoshis(delta, whitespaces=True),
-                                    format_satoshis(balance, whitespaces=True))
-                messages.append(msg)
+                                    format_satoshis(hist_item.delta, whitespaces=True),
+                                    format_satoshis(hist_item.balance, whitespaces=True))
             else:
                 msg = format_str % (time_str, label,
-                                    format_satoshis(delta, whitespaces=True),
-                                    format_satoshis(balance, whitespaces=True))
-                messages.append(msg)
+                                    format_satoshis(hist_item.delta, whitespaces=True),
+                                    format_satoshis(hist_item.balance, whitespaces=True))
+            messages.append(msg)
         if show_dip2:
             self.print_list(messages[::-1],
                             format_str % (_("Date"), 'Type',
@@ -201,7 +204,7 @@ class ElectrumGui:
         w = self.wallet
         addrs = w.get_addresses() + w.psman.get_addresses()
         messages = map(lambda addr: "%30s    %30s       " %
-                                    (addr, self.wallet.labels.get(addr,"")),
+                                    (addr, self.wallet.get_label(addr)),
                        addrs)
         self.print_list(messages, "%19s  %25s "%("Address", "Label"))
 
@@ -263,14 +266,15 @@ class ElectrumGui:
             if c == "n": return
 
         try:
-            tx = self.wallet.mktx([TxOutput(TYPE_ADDRESS, self.str_recipient, amount)],
-                                  password, self.config, fee)
+            tx = self.wallet.mktx(outputs=[PartialTxOutput.from_address_and_value(self.str_recipient, amount)],
+                                  password=password,
+                                  fee=fee)
         except Exception as e:
-            print(str(e))
+            print(repr(e))
             return
 
         if self.str_description:
-            self.wallet.labels[tx.txid()] = self.str_description
+            self.wallet.set_label(tx.txid(), self.str_description)
 
         print(_("Please wait..."))
         try:

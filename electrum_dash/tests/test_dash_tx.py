@@ -1,7 +1,10 @@
+import asyncio
+from pprint import pprint
+
 from electrum_dash import transaction
 from electrum_dash.dash_tx import DashTxError, TxOutPoint
 from electrum_dash.transaction import BCDataStream
-from electrum_dash.util import bfh, bh2u
+from electrum_dash.util import bfh, bh2u, create_and_start_event_loop
 from electrum_dash.commands import Commands
 
 from . import SequentialTestCase
@@ -31,6 +34,14 @@ CB_TX = (
     '88f65889fd3ac0201be87aa227462b5643e8bb2ec1d7a82a')
 
 
+CB_TX_D = {
+    'height': 264132,
+    'merkleRootMNList': '76629a6e42fb519188f65889fd3ac020'
+                        '1be87aa227462b5643e8bb2ec1d7a82a',
+    'merkleRootQuorums': '',
+    'version': 1}
+
+
 CB_TX_V2 = (
     '0300050001000000000000000000000000000000000000000000000000000000000000'
     '0000ffffffff1303c407040e2f5032506f6f6c2d74444153482fffffffff0448d6a73d'
@@ -44,7 +55,7 @@ CB_TX_V2 = (
     '89fd3ac0201be87aa227462b5643e8bb2ec1d7a82a')
 
 
-CB_TX_V2_EP_FOR_JSON = {
+CB_TX_V2_D = {
     'height': 264132,
     'merkleRootMNList': ('76629a6e42fb519188f65889fd3ac0201be87aa2'
                          '27462b5643e8bb2ec1d7a82a'),
@@ -78,6 +89,30 @@ PRO_REG_TX = (
     '97400d3196109c8cd31b94732caf6937d63de81d9a5be4db5beb83f9aa')
 
 
+PRO_REG_TX_D = {
+    'KeyIdOwner': '2b3edeed6842db1f59cf35de1ab5721094f049d0',
+    'KeyIdVoting': '2b3edeed6842db1f59cf35de1ab5721094f049d0',
+    'PubKeyOperator': '00ab986c589053b3f3bd720724e75e18'
+                      '581afdca54bce80d14750b1bcf920215'
+                      '8fe6c596ce8391815265747bd4a2009e',
+    'collateralOutpoint': {
+        'hash': 'dea3f051e4606f1b6547df8c8d6fb856'
+                '9273baeed47849c388bc21a3a0afe14d',
+        'index': 1},
+    'inputsHash': '54d046585434668b4ee664c597864248'
+                  'b8a6aac33a7b2f4fcd1cc1b5da474a8a',
+    'ipAddress': '18.202.52.170',
+    'mode': 0,
+    'operatorReward': 0,
+    'payloadSig': '1fc1617ae83406c92a9132f14f9fff1487f2890f401e776f'
+                  'dddd639bc5055c456268cf7497400d3196109c8cd31b9473'
+                  '2caf6937d63de81d9a5be4db5beb83f9aa',
+    'port': 29999,
+    'scriptPayout': '76a9149bf5948b901a1e3e54e42c6e10496a17cd4067e088ac',
+    'type': 0,
+    'version': 1}
+
+
 PRO_UP_SERV_TX = (
     '03000200010931c6b0ad7ce07f3c8aefeeb78e246a4fe6872bbf08ab6e4eb6a7b69acd'
     '64a6010000006b483045022100a2feb698c43c752738fabea281b7e9e5a3aa648a4c54'
@@ -91,6 +126,22 @@ PRO_UP_SERV_TX = (
     '97cf7b546a67723d4a8ec5353a82f962a96ec3cea328343b647aace2897d6eddd0b8c8'
     'ee0f2e56f6733aed2e9f0006caafa6fc21c18a013c619d6e37af8d2f0985e3b769abc3'
     '8ffa60e46c365a38d9fa0d44fd62')
+
+
+PRO_UP_SERV_TX_D = {
+    'inputsHash': 'efcfe3d578914bb48c6bd71b3459d384'
+                  'e4237446d521c9e2c6b6fcf019b5aafc',
+    'ipAddress': '95.183.53.128',
+    'payloadSig': '99443fe14f644cfa47086e8897cf7b546a67723d4a8ec5353a'
+                  '82f962a96ec3cea328343b647aace2897d6eddd0b8c8ee0f2e'
+                  '56f6733aed2e9f0006caafa6fc21c18a013c619d6e37af8d2f'
+                  '0985e3b769abc38ffa60e46c365a38d9fa0d44fd62',
+    'port': 10001,
+    'proTxHash': '3c6dca244f49f19d3f09889753ffff1f'
+                 'ec5bb8f9f5bd5bc09dabd999da21198f',
+    'scriptOperatorPayout': '76a91421851058431a7d722e8'
+                            'e8dd9509e7f2b8e7042ec88ac',
+    'version': 1}
 
 
 PRO_UP_REG_TX = (
@@ -108,6 +159,22 @@ PRO_UP_REG_TX = (
     '18b30e1ae9bb654787144d16856676efff180889f05b5c9121a483b4ae3f0ea0ff3faf')
 
 
+PRO_UP_REG_TX_D = {
+    'KeyIdVoting': 'b9e198fa7a745913c9278ec993d4472a95dac425',
+    'PubKeyOperator': '1061eb559a64427ad239830742ef59591cdbbdffda7d3f'
+                      '5e7a2d95b9607ad80e389191e44c59ea5987b85e6d0e3eb527',
+    'inputsHash': '0eb0067e6ccdd2acb96e727911370221'
+                  '8f3f0ab6f2287e14c11c5be6f2051d5a',
+    'mode': 0,
+    'payloadSig': '20cb00124d838b02207097048cb668244cd79df825eb2d4d21'
+                  '1fd2c4604c18b30e1ae9bb654787144d16856676efff180889'
+                  'f05b5c9121a483b4ae3f0ea0ff3faf',
+    'proTxHash': 'aeb817f94b8e699b58130a53d2fbe98d'
+                 '5519c2abe3b15e6f36c9abeb32e4dcce',
+    'scriptPayout': '76a914eebbacffff3a55437803e0efb68a7d591e0409d188ac',
+    'version': 1}
+
+
 PRO_UP_REV_TX = (
     '030004000100366cd80169116da28e387413e8e3660a7aedd65002b320d0bd165eea8e'
     'ba52000000006a4730440220043a639f4554842f38253c75d066e70098ef02b141d5ff'
@@ -120,6 +187,19 @@ PRO_UP_REV_TX = (
     'e4acb8cbe3671abc7911e8c3954856c4da7e5fd242f2e4f5546f08d90849245bc593d1'
     '605654e1a99cd0a79e9729799742c48d4920044666ad25a85fd093559c43e4900e634c'
     '371b9b8d89ba')
+
+
+PRO_UP_REV_TX_D = {
+    'inputsHash': 'eb073521b60306717f1d4feb3e9022f8'
+                  '86b97bf981137684716a7d3d7e45b7fe',
+    'payloadSig': '83f4bb5530f7c5954e8b1ad50a74a9e1d65dcdcbe4acb8cbe3'
+                  '671abc7911e8c3954856c4da7e5fd242f2e4f5546f08d90849'
+                  '245bc593d1605654e1a99cd0a79e9729799742c48d49200446'
+                  '66ad25a85fd093559c43e4900e634c371b9b8d89ba',
+    'proTxHash': 'b67ffbbd095de31ea38446754b6bf251'
+                 '287936d2881d58b7c4efae0b54c75e9f',
+    'reason': 0,
+    'version': 1}
 
 
 SUB_TX_REGISTER = (
@@ -135,6 +215,17 @@ SUB_TX_REGISTER = (
     'ea38446754e8abfeffffff01570b0000000000001976a91490c5ce9d')
 
 
+SUB_TX_REGISTER_D = {
+    'payloadSig': '8bc992a88ac00000000a40100b67ffbbd095de31ea38446754'
+                  'e8abfeffffff01570b0000000000001976a91490c5ce9d8bc9'
+                  '92a88ac00000000a40100b67ffbbd095de31ea38446754e8ab'
+                  'feffffff01570b0000000000001976a91490c5ce9d',
+    'pubKey': '8e7042ec88acefcfe3d578914bb48c6bd71b3459d384e42374'
+              'e8abfeffffff01570b0000000000001976a91490c5ce9d',
+    'userName': 'abc',
+    'version': 1}
+
+
 SUB_TX_TOPUP = (
     '03000900010931c6b0ad7ce07f3c8aefeeb78e246a4fe6872bbf08ab6e4eb6a7b69acd'
     '64a6010000006b483045022100a2feb698c43c752738fabea281b7e9e5a3aa648a4c54'
@@ -143,6 +234,12 @@ SUB_TX_TOPUP = (
     '3d0103f761cc69a211feffffff0189fa433e000000001976a914551ab8ca96a9142217'
     '4d22769c3a4f90b2dcd0de88ac00000000220100d384e42374e8abfeffffff01570b00'
     '0000a40100b67ffbbd095de31ea3844675')
+
+
+SUB_TX_TOPUP_D = {
+    'regTxHash': 'd384e42374e8abfeffffff01570b0000'
+                 '00a40100b67ffbbd095de31ea3844675',
+    'version': 1}
 
 
 SUB_TX_RESET_KEY = (
@@ -160,6 +257,21 @@ SUB_TX_RESET_KEY = (
     '0673412bc6e8e0e358f3fb7bdbe9a667b3d0103f761cabcdefab')
 
 
+SUB_TX_RESET_KEY_D = {
+    'creditFee': 1000,
+    'hashPrevSubTx': 'af3e98e9601210293360bf2a2e810673'
+                     '412bc6e8e0e358f3fb7bdbe9a667b3d0',
+    'newPubKey': '601210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9'
+                 'a667b3d0103f761caf3e98e9601210293360bf2a2e810673',
+    'payloadSig': '412bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf3e98e96012102'
+                  '93360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f76'
+                  '1caf3e98e9601210293360bf2a2e810673412bc6e8e0e358f3fb7bd'
+                  'be9a667b3d0103f761cabcdefab',
+    'regTxHash': 'd384e42374e8abfeffffff01570b0000'
+                 '00a40100b67ffbbd095de31ea3844675',
+    'version': 1}
+
+
 SUB_TX_CLOSE_ACCOUNT = (
     '03000b00010931c6b0ad7ce07f3c8aefeeb78e246a4fe6872bbf08ab6e4eb6a7b69acd'
     '64a6010000006b483045022100a2feb698c43c752738fabea281b7e9e5a3aa648a4c54'
@@ -172,6 +284,19 @@ SUB_TX_CLOSE_ACCOUNT = (
     '67b3d0103f761caf3e98e9601210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9'
     'a667b3d0103f761caf3e98e9601210293360bf2a2e810673412bc6e8e0e358f3fb7bdb'
     'e9a667b3d0103f761cabcdefab')
+
+
+SUB_TX_CLOSE_ACCOUNT_D = {
+    'creditFee': 1000,
+    'hashPrevSubTx': 'af3e98e9601210293360bf2a2e810673'
+                     '412bc6e8e0e358f3fb7bdbe9a12bc6e8',
+    'payloadSig': 'a62bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf3e98e9601210293'
+                  '360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf'
+                  '3e98e9601210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a66'
+                  '7b3d0103f761cabcdefab',
+    'regTxHash': 'd384e42374e8abfeffffff01570b0000'
+                 '00a40100b67ffbbd095de31ea3844675',
+    'version': 1}
 
 
 UNKNOWN_SPEC_TX = (
@@ -242,309 +367,287 @@ class TestDashTx(SequentialTestCase):
 
 class TestDashSpecTxSerialization(SequentialTestCase):
 
+    def setUp(self):
+        super().setUp()
+        self.asyncio_loop, self._stop_loop, self._loop_thread = create_and_start_event_loop()
+
+    def tearDown(self):
+        super().tearDown()
+        self.asyncio_loop.call_soon_threadsafe(self._stop_loop.set_result, 1)
+        self._loop_thread.join(timeout=1)
+
     def test_dash_tx_v2(self):
         tx = transaction.Transaction(V2_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 2
         assert deser['tx_type'] == 0
-        assert deser['extra_payload'] == b''
+        assert deser['extra_payload'] == ''
+        assert tx.extra_payload == b''
         ser = tx.serialize()
         assert ser == V2_TX
 
     def test_dash_tx_cb_tx(self):
         tx = transaction.Transaction(CB_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 5
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == CB_TX_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
-        assert extra.height == 264132
+        assert extra.version == CB_TX_D['version']
+        assert extra.height == CB_TX_D['height']
         assert len(extra.merkleRootMNList) == 32
-        assert extra.merkleRootMNList == bfh(
-            '76629a6e42fb519188f65889fd3ac0201be87aa227462b5643e8bb2ec1d7a82a')
+        assert extra.merkleRootMNList == bfh(CB_TX_D['merkleRootMNList'])
         ser = tx.serialize()
         assert ser == CB_TX
 
     def test_dash_tx_cb_tx_v2(self):
         tx = transaction.Transaction(CB_TX_V2)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 5
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == CB_TX_V2_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 2
-        assert extra.height == 264132
+        assert extra.version == CB_TX_V2_D['version']
+        assert extra.height == CB_TX_V2_D['height']
         assert len(extra.merkleRootMNList) == 32
-        assert extra.merkleRootMNList == bfh(
-            '76629a6e42fb519188f65889fd3ac0201be87aa227462b5643e8bb2ec1d7a82a')
+        assert extra.merkleRootMNList == bfh(CB_TX_V2_D['merkleRootMNList'])
         assert len(extra.merkleRootQuorums) == 32
-        assert extra.merkleRootQuorums == bfh(
-            '76629a6e42fb519188f65889fd3ac0201be87aa227462b5643e8bb2ec1d7a82a')
+        assert extra.merkleRootQuorums == bfh(CB_TX_V2_D['merkleRootQuorums'])
         ser = tx.serialize()
         assert ser == CB_TX_V2
 
     def test_dash_tx_pro_reg_tx(self):
         tx = transaction.Transaction(PRO_REG_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 1
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == PRO_REG_TX_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
-        assert extra.type == 0
-        assert extra.mode == 0
+        assert extra.version == PRO_REG_TX_D['version']
+        assert extra.type == PRO_REG_TX_D['type']
+        assert extra.mode == PRO_REG_TX_D['mode']
         assert len(extra.collateralOutpoint.hash) == 32
-        assert extra.collateralOutpoint.hash == bfh(
-            '4de1afa0a321bc88c34978d4eeba739256b86f8d8cdf47651b6f60e451f0a3de')
-        assert extra.collateralOutpoint.index == 1
-        assert extra.ipAddress == '18.202.52.170'
-        assert extra.port == 29999
+        assert extra.collateralOutpoint.hash == \
+            bfh(PRO_REG_TX_D['collateralOutpoint']['hash'])[::-1]
+        assert extra.collateralOutpoint.index == \
+            PRO_REG_TX_D['collateralOutpoint']['index']
+        assert extra.ipAddress == PRO_REG_TX_D['ipAddress']
+        assert extra.port == PRO_REG_TX_D['port']
         assert len(extra.KeyIdOwner) == 20
-        assert extra.KeyIdOwner == bfh(
-            '2b3edeed6842db1f59cf35de1ab5721094f049d0')
+        assert extra.KeyIdOwner == bfh(PRO_REG_TX_D['KeyIdOwner'])
         assert len(extra.PubKeyOperator) == 48
-        assert extra.PubKeyOperator == bfh(
-            '00ab986c589053b3f3bd720724e75e18581afdca54bce80d14750b1bcf920215'
-            '8fe6c596ce8391815265747bd4a2009e')
+        assert extra.PubKeyOperator == bfh(PRO_REG_TX_D['PubKeyOperator'])
         assert len(extra.KeyIdVoting) == 20
-        assert extra.KeyIdVoting == bfh(
-            '2b3edeed6842db1f59cf35de1ab5721094f049d0')
-        assert extra.operatorReward == 0
-        assert extra.scriptPayout == bfh(
-            '76a9149bf5948b901a1e3e54e42c6e10496a17cd4067e088ac')
+        assert extra.KeyIdVoting == bfh(PRO_REG_TX_D['KeyIdVoting'])
+        assert extra.operatorReward == PRO_REG_TX_D['operatorReward']
+        assert extra.scriptPayout == bfh(PRO_REG_TX_D['scriptPayout'])
         assert len(extra.inputsHash) == 32
-        assert extra.inputsHash == bfh(
-            '54d046585434668b4ee664c597864248b8a6aac33a7b2f4fcd1cc1b5da474a8a')
-        assert extra.payloadSig == bfh(
-            '1fc1617ae83406c92a9132f14f9fff1487f2890f401e776fdddd639bc505'
-            '5c456268cf7497400d3196109c8cd31b94732caf6937d63de81d9a5be4db'
-            '5beb83f9aa')
+        assert extra.inputsHash == bfh(PRO_REG_TX_D['inputsHash'])
+        assert extra.payloadSig == bfh(PRO_REG_TX_D['payloadSig'])
         ser = tx.serialize()
         assert ser == PRO_REG_TX
 
     def test_dash_tx_pro_up_serv_tx(self):
         tx = transaction.Transaction(PRO_UP_SERV_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 2
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == PRO_UP_SERV_TX_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
+        assert extra.version == PRO_UP_SERV_TX_D['version']
         assert len(extra.proTxHash) == 32
-        assert extra.proTxHash == bfh(
-            '3c6dca244f49f19d3f09889753ffff1fec5bb8f9f5bd5bc09dabd999da21198f')
-        assert extra.ipAddress == '95.183.53.128'
-        assert extra.port == 10001
-        assert extra.scriptOperatorPayout == bfh(
-            '76a91421851058431a7d722e8e8dd9509e7f2b8e7042ec88ac')
+        assert extra.proTxHash == bfh(PRO_UP_SERV_TX_D['proTxHash'])
+        assert extra.ipAddress == PRO_UP_SERV_TX_D['ipAddress']
+        assert extra.port == PRO_UP_SERV_TX_D['port']
+        assert extra.scriptOperatorPayout == \
+            bfh(PRO_UP_SERV_TX_D['scriptOperatorPayout'])
         assert len(extra.inputsHash) == 32
-        assert extra.inputsHash == bfh(
-            'efcfe3d578914bb48c6bd71b3459d384e4237446d521c9e2c6'
-            'b6fcf019b5aafc')
+        assert extra.inputsHash == bfh(PRO_UP_SERV_TX_D['inputsHash'])
         assert len(extra.payloadSig) == 96
-        assert extra.payloadSig == bfh(
-            '99443fe14f644cfa47086e8897cf7b546a67723d4a8ec5353a82f962a96e'
-            'c3cea328343b647aace2897d6eddd0b8c8ee0f2e56f6733aed2e9f0006ca'
-            'afa6fc21c18a013c619d6e37af8d2f0985e3b769abc38ffa60e46c365a38'
-            'd9fa0d44fd62')
+        assert extra.payloadSig == bfh(PRO_UP_SERV_TX_D['payloadSig'])
         ser = tx.serialize()
         assert ser == PRO_UP_SERV_TX
 
     def test_dash_tx_pro_up_reg_tx(self):
         tx = transaction.Transaction(PRO_UP_REG_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 3
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == PRO_UP_REG_TX_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
-        assert len(extra.proTxHash) == 32
-        assert extra.proTxHash == bfh(
-            'aeb817f94b8e699b58130a53d2fbe98d5519c2abe3b15e6f36c9abeb32e4dcce')
-        assert extra.mode == 0
+        assert extra.version == PRO_UP_REG_TX_D['version']
+        assert extra.proTxHash == bfh(PRO_UP_REG_TX_D['proTxHash'])
+        assert extra.mode == PRO_UP_REG_TX_D['mode']
         assert len(extra.PubKeyOperator) == 48
-        assert extra.PubKeyOperator == bfh(
-            '1061eb559a64427ad239830742ef59591cdbbdffda7d3f5e7a2d95b9607a'
-            'd80e389191e44c59ea5987b85e6d0e3eb527')
+        assert extra.PubKeyOperator == bfh(PRO_UP_REG_TX_D['PubKeyOperator'])
         assert len(extra.KeyIdVoting) == 20
-        assert extra.KeyIdVoting == bfh(
-            'b9e198fa7a745913c9278ec993d4472a95dac425')
-        assert extra.scriptPayout == bfh(
-            '76a914eebbacffff3a55437803e0efb68a7d591e0409d188ac')
+        assert extra.KeyIdVoting == bfh(PRO_UP_REG_TX_D['KeyIdVoting'])
+        assert extra.scriptPayout == bfh(PRO_UP_REG_TX_D['scriptPayout'])
         assert len(extra.inputsHash) == 32
-        assert extra.inputsHash == bfh(
-            '0eb0067e6ccdd2acb96e7279113702218f3f0ab6f2287e14c11c5be6f2051d5a')
-        assert extra.payloadSig == bfh(
-            '20cb00124d838b02207097048cb668244cd79df825eb2d4d211fd2c4604c1'
-            '8b30e1ae9bb654787144d16856676efff180889f05b5c9121a483b4ae3f0e'
-            'a0ff3faf')
+        assert extra.inputsHash == bfh(PRO_UP_REG_TX_D['inputsHash'])
+        assert extra.payloadSig == bfh(PRO_UP_REG_TX_D['payloadSig'])
         ser = tx.serialize()
         assert ser == PRO_UP_REG_TX
 
     def test_dash_tx_pro_up_rev_tx(self):
         tx = transaction.Transaction(PRO_UP_REV_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 4
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == PRO_UP_REV_TX_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
+        assert extra.version == PRO_UP_REV_TX_D['version']
         assert len(extra.proTxHash) == 32
-        assert extra.proTxHash == bfh(
-            'b67ffbbd095de31ea38446754b6bf251287936d2881d58b7c4efae0b54c75e9f')
-        assert extra.reason == 0
+        assert extra.proTxHash == bfh(PRO_UP_REV_TX_D['proTxHash'])
+        assert extra.reason == PRO_UP_REV_TX_D['reason']
         assert len(extra.inputsHash) == 32
-        assert extra.inputsHash == bfh(
-            'eb073521b60306717f1d4feb3e9022f886b97bf981137684716a7d3d7e45b7fe')
+        assert extra.inputsHash == bfh(PRO_UP_REV_TX_D['inputsHash'])
         assert len(extra.payloadSig) == 96
-        assert extra.payloadSig == bfh(
-            '83f4bb5530f7c5954e8b1ad50a74a9e1d65dcdcbe4acb8cbe3671abc7911'
-            'e8c3954856c4da7e5fd242f2e4f5546f08d90849245bc593d1605654e1a9'
-            '9cd0a79e9729799742c48d4920044666ad25a85fd093559c43e4900e634c'
-            '371b9b8d89ba')
+        assert extra.payloadSig == bfh(PRO_UP_REV_TX_D['payloadSig'])
         ser = tx.serialize()
         assert ser == PRO_UP_REV_TX
 
     def test_dash_tx_sub_tx_register(self):
         tx = transaction.Transaction(SUB_TX_REGISTER)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 8
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == SUB_TX_REGISTER_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
-        assert extra.userName == b'abc'
+        assert extra.version == SUB_TX_REGISTER_D['version']
+        assert extra.userName == SUB_TX_REGISTER_D['userName']
         assert len(extra.pubKey) == 48
-        assert extra.pubKey == bfh(
-            '8e7042ec88acefcfe3d578914bb48c6bd71b3459d384e42374e8abfeffff'
-            'ff01570b0000000000001976a91490c5ce9d')
+        assert extra.pubKey == bfh(SUB_TX_REGISTER_D['pubKey'])
         assert len(extra.payloadSig) == 96
-        assert extra.payloadSig == bfh(
-            '8bc992a88ac00000000a40100b67ffbbd095de31ea38446754e8abfeffff'
-            'ff01570b0000000000001976a91490c5ce9d8bc992a88ac00000000a4010'
-            '0b67ffbbd095de31ea38446754e8abfeffffff01570b0000000000001976'
-            'a91490c5ce9d')
+        assert extra.payloadSig == bfh(SUB_TX_REGISTER_D['payloadSig'])
         ser = tx.serialize()
         assert ser == SUB_TX_REGISTER
 
     def test_dash_tx_sub_tx_topup(self):
         tx = transaction.Transaction(SUB_TX_TOPUP)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 9
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == SUB_TX_TOPUP_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
+        assert extra.version == SUB_TX_TOPUP_D['version']
         assert len(extra.regTxHash) == 32
-        assert extra.regTxHash == bfh(
-            'd384e42374e8abfeffffff01570b000000a40100b67ffbbd095de31ea3844675')
+        assert extra.regTxHash == bfh(SUB_TX_TOPUP_D['regTxHash'])
         ser = tx.serialize()
         assert ser == SUB_TX_TOPUP
 
     def test_dash_tx_sub_tx_reset_key(self):
         tx = transaction.Transaction(SUB_TX_RESET_KEY)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 10
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == SUB_TX_RESET_KEY_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
+        assert extra.version == SUB_TX_RESET_KEY_D['version']
         assert len(extra.regTxHash) == 32
-        assert extra.regTxHash == bfh(
-            'd384e42374e8abfeffffff01570b000000a40100b67ffbbd095de31ea3844675')
+        assert extra.regTxHash == bfh(SUB_TX_RESET_KEY_D['regTxHash'])
         assert len(extra.hashPrevSubTx) == 32
-        assert extra.hashPrevSubTx == bfh(
-            'af3e98e9601210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0')
-        assert extra.creditFee == 1000
+        assert extra.hashPrevSubTx == bfh(SUB_TX_RESET_KEY_D['hashPrevSubTx'])
+        assert extra.creditFee == SUB_TX_RESET_KEY_D['creditFee']
         assert len(extra.newPubKey) == 48
-        assert extra.newPubKey == bfh(
-            '601210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f7'
-            '61caf3e98e9601210293360bf2a2e810673')
+        assert extra.newPubKey == bfh(SUB_TX_RESET_KEY_D['newPubKey'])
         assert len(extra.payloadSig) == 96
-        assert extra.payloadSig == bfh(
-            '412bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf3e98e9601210293360b'
-            'f2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf3e98e960'
-            '1210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f761'
-            'cabcdefab')
+        assert extra.payloadSig == bfh(SUB_TX_RESET_KEY_D['payloadSig'])
         ser = tx.serialize()
         assert ser == SUB_TX_RESET_KEY
 
     def test_dash_tx_sub_tx_close_account(self):
         tx = transaction.Transaction(SUB_TX_CLOSE_ACCOUNT)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 3
         assert deser['tx_type'] == 11
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == SUB_TX_CLOSE_ACCOUNT_D
+        extra = tx.extra_payload
         assert(str(extra))
-        assert extra.version == 1
+        assert extra.version == SUB_TX_CLOSE_ACCOUNT_D['version']
         assert len(extra.regTxHash) == 32
-        assert extra.regTxHash == bfh(
-            'd384e42374e8abfeffffff01570b000000a40100b67ffbbd095de31ea3844675')
+        assert extra.regTxHash == bfh(SUB_TX_CLOSE_ACCOUNT_D['regTxHash'])
         assert len(extra.hashPrevSubTx) == 32
-        assert extra.hashPrevSubTx == bfh(
-            'af3e98e9601210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a12bc6e8')
-        assert extra.creditFee == 1000
+        assert extra.hashPrevSubTx == \
+            bfh(SUB_TX_CLOSE_ACCOUNT_D['hashPrevSubTx'])
+        assert extra.creditFee == SUB_TX_CLOSE_ACCOUNT_D['creditFee']
         assert len(extra.payloadSig) == 96
-        assert extra.payloadSig == bfh(
-            'a62bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf3e98e9601210293360b'
-            'f2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f761caf3e98e960'
-            '1210293360bf2a2e810673412bc6e8e0e358f3fb7bdbe9a667b3d0103f761'
-            'cabcdefab')
+        assert extra.payloadSig == bfh(SUB_TX_CLOSE_ACCOUNT_D['payloadSig'])
         ser = tx.serialize()
         assert ser == SUB_TX_CLOSE_ACCOUNT
 
     def test_dash_tx_unknown_spec_tx(self):
         tx = transaction.Transaction(UNKNOWN_SPEC_TX)
         with self.assertRaises(DashTxError):
-            tx.deserialize()
+            tx.to_json()
 
     def test_dash_tx_wrong_spec_tx(self):
         tx = transaction.Transaction(WRONG_SPEC_TX)
-        deser = tx.deserialize()
+        deser = tx.to_json()
         assert deser['version'] == 12255234
         assert deser['tx_type'] == 0
-        extra = deser['extra_payload']
+        extra_dict = deser['extra_payload']
+        assert extra_dict == ''
+        extra = tx.extra_payload
         assert extra == b''
         ser = tx.serialize()
         assert ser == WRONG_SPEC_TX
 
     def test_deserialize_transaction_v2(self):
-        cmds = Commands(config=None, wallet=None, network=None)
-        deser = cmds.deserialize(V2_TX)
+        cmds = Commands(config=None)
+        deser = cmds._run('deserialize', (V2_TX, ))
         assert deser['extra_payload'] == ''
 
     def test_deserialize_transaction_cbtx(self):
-        cmds = Commands(config=None, wallet=None, network=None)
-        deser = cmds.deserialize(CB_TX_V2)
-        assert deser['extra_payload'] == CB_TX_V2_EP_FOR_JSON
+        cmds = Commands(config=None)
+        deser = cmds._run('deserialize', (CB_TX_V2, ))
+        assert deser['extra_payload'] == CB_TX_V2_D
 
     def test_deserialize_transaction_unknown_spec_tx(self):
-        cmds = Commands(config=None, wallet=None, network=None)
+        cmds = Commands(config=None)
         with self.assertRaises(DashTxError):
-            cmds.deserialize(UNKNOWN_SPEC_TX)
+            coro = cmds.deserialize(UNKNOWN_SPEC_TX)
+            fut = asyncio.run_coroutine_threadsafe(coro, asyncio.get_event_loop())
+            result = fut.result()
 
     def test_serialize_command_with_extra_payload(self):
-        cmds = Commands(config=None, wallet=None, network=None)
+        cmds = Commands(config=None)
         test_json_tx = {
             'inputs': [],
             'outputs': [],
         }
-        res = cmds.serialize(test_json_tx)
-        assert res == {'complete': True, 'final': True,
-                       'hex': '02000000000000000000'}
+        res = cmds._run('serialize', (test_json_tx, ))
+        assert res == '02000000000000000000'
 
         test_json_tx.update({'extra_payload': ''})
-        res = cmds.serialize(test_json_tx)
-        assert res == {'complete': True, 'final': True,
-                       'hex': '02000000000000000000'}
+        res = cmds._run('serialize', (test_json_tx, ))
+        assert res == '02000000000000000000'
 
         test_json_tx.update({'extra_payload': {'key': 'value'}})
-        res = cmds.serialize(test_json_tx)
+        res = cmds._run('serialize', (test_json_tx, ))
         assert res == {'error': 'Transactions with extra payload can not'
                                 ' be created from serialize command'}
 
         test_json_tx.update({'extra_payload': '0b0a'})
-        res = cmds.serialize(test_json_tx)
+        res = cmds._run('serialize', (test_json_tx, ))
         assert res == {'error': 'Transactions with extra payload can not'
                                 ' be created from serialize command'}

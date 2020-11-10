@@ -54,7 +54,7 @@ class OutputsList(QListWidget):
 
     def add_output(self, d):
         '''Add a valid output.'''
-        label = '%s:%s' % (d['prevout_hash'], d['prevout_n'])
+        label = d.to_str()
         self.outputs[label] = d
         item = QListWidgetItem(label)
         item.setFont(QFont(MONOSPACE_FONT))
@@ -86,7 +86,7 @@ class OperationTypeWizardPage(QWizardPage):
         self.setSubTitle(_('Select operation type and ownership properties.'))
 
         self.rb_import = QRadioButton(_('Import and register legacy '
-                                        'Masternode as DIP3 Masternode'))
+                                        'masternode.conf as DIP3 Masternode'))
         self.rb_create = QRadioButton(_('Create and register DIP3 Masternode'))
         self.rb_connect = QRadioButton(_('Connect to registered DIP3 '
                                          'Masternode'))
@@ -148,14 +148,10 @@ class ImportLegacyWizardPage(QWizardPage):
     def __init__(self, parent=None):
         super(ImportLegacyWizardPage, self).__init__(parent)
         self.parent = parent
-        self.setTitle(_('Import Legacy Masternode'))
-        self.setSubTitle(_('Select legacy Masternode to import.'))
+        self.setTitle(_('Import Legacy masternode.conf'))
+        self.setSubTitle(_('Select legacy masternode.conf to import.'))
 
-        legacy = self.parent.legacy
-        legacy.load()
-        lmns = sorted([lmn.dump() for lmn in legacy.masternodes],
-                      key=lambda x: x.get('alias', ''))
-
+        lmns = []
         self.lmns_cbox = SComboBox(self)
         self.lmns_dict = {}
         for i, lmn in enumerate(lmns):
@@ -264,12 +260,15 @@ class ImportLegacyWizardPage(QWizardPage):
         self.lmns_cbox.setFocus()
         first_alias_idx = self.lmns_cbox.findText(first_alias)
         self.lmns_cbox.setCurrentIndex(first_alias_idx)
+        self.update_lmn_data(self.lmns_cbox.currentText())
 
     def update_lmn_data(self, current):
         if not current:
             return
         self.alias = current
         lmn = self.lmns_dict.get(current)
+        if not lmn:
+            return
 
         addr = lmn.get('addr', {})
         ip = addr.get('ip')
@@ -297,13 +296,13 @@ class ImportLegacyWizardPage(QWizardPage):
             wallet = self.parent.wallet
             coins = wallet.get_utxos(domain=None, excluded_addresses=None,
                                      mature_only=True, confirmed_only=True)
-            coins = filter(lambda x: (x['prevout_hash'] == prevout_hash
-                                          and x['prevout_n'] == prevout_n),
+            coins = filter(lambda x: (x.prevout.txid.hex() == prevout_hash
+                                      and x.prevout.out_idx == prevout_n),
                            coins)
             coins = list(coins)
             if coins:
-                address = coins[0]['address']
-                value = coins[0]['value']
+                address = coins[0].address
+                value = coins[0].value_sats()
             else:
                 address = ''
                 value = 0
@@ -962,7 +961,6 @@ class CollateralWizardPage(QWizardPage):
     def __init__(self, parent=None):
         super(CollateralWizardPage, self).__init__(parent)
         self.parent = parent
-        self.legacy = parent.gui.masternode_manager
         self.setTitle('Select Collateral')
         self.setSubTitle('Select collateral output for Masternode.')
 
@@ -1074,7 +1072,8 @@ class CollateralWizardPage(QWizardPage):
                                  mature_only=True, confirmed_only=True)
         if not self.frozen_cb.isChecked():
             coins = [c for c in coins if not wallet.is_frozen_coin(c)]
-        coins = list(filter(lambda x: (x['value'] == (1000 * COIN)), coins))
+        coins = list(filter(lambda x: (x.value_sats() == (1000 * COIN)),
+                                       coins))
 
         if len(coins) > 0:
             self.outputs_list.add_outputs(coins)
@@ -1474,7 +1473,6 @@ class Dip3MasternodeWizard(QWizard):
     def __init__(self, parent, mn=None, start_id=None):
         super(Dip3MasternodeWizard, self).__init__(parent)
         self.gui = parent.gui
-        self.legacy = parent.gui.masternode_manager
         self.manager = parent.manager
         self.wallet = parent.wallet
 
@@ -1544,8 +1542,8 @@ class Dip3MasternodeWizard(QWizard):
         coins = self.wallet.get_utxos(domain=None, excluded_addresses=None,
                                       mature_only=True, confirmed_only=True)
 
-        coins = filter(lambda x: (x['prevout_hash'] == prevout_hash
-                                  and x['prevout_n'] == prevout_n),
+        coins = filter(lambda x: (x.prevout.txid.hex() == prevout_hash
+                                  and x.prevout.out_idx == prevout_n),
                        coins)
         coins = list(coins)
         if not coins:
@@ -1560,7 +1558,7 @@ class Dip3MasternodeWizard(QWizard):
         if not outpoint:
             raise ValidationError('No collateral outpoint specified')
 
-        if not value == 1000 * COIN or not value == c_vin['value']:
+        if not value == 1000 * COIN or not value == c_vin.value_sats():
             raise ValidationError('Wrong collateral value')
 
 

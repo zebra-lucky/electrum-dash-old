@@ -21,9 +21,9 @@
 # ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-import platform
 import sys
-import traceback
+import html
+from typing import TYPE_CHECKING, Optional, Set
 
 from PyQt5.QtCore import QObject
 import PyQt5.QtCore as QtCore
@@ -34,16 +34,22 @@ from electrum_dash.i18n import _
 from electrum_dash.base_crash_reporter import BaseCrashReporter
 from electrum_dash.logging import Logger
 from electrum_dash import constants
+from electrum_dash.network import Network
 
 from .util import MessageBoxMixin, read_QIcon, WaitingDialog
+
+if TYPE_CHECKING:
+    from electrum_dash.simple_config import SimpleConfig
+    from electrum_dash.wallet import Abstract_Wallet
 
 
 class Exception_Window(BaseCrashReporter, QWidget, MessageBoxMixin, Logger):
     _active_window = None
 
-    def __init__(self, main_window, exctype, value, tb):
+    def __init__(self, config: 'SimpleConfig', exctype, value, tb):
         BaseCrashReporter.__init__(self, exctype, value, tb)
-        self.main_window = main_window
+        self.network = Network.get_instance()
+        self.config = config
 
         QWidget.__init__(self)
         self.setWindowTitle('Dash Electrum - ' + _('An Error Occurred'))
@@ -111,13 +117,13 @@ class Exception_Window(BaseCrashReporter, QWidget, MessageBoxMixin, Logger):
             self.logger.error('There was a problem with the automatic reporting', exc_info=exc_info)
             self.show_critical(parent=self,
                                msg=(_('There was a problem with the automatic reporting:') + '<br/>' +
-                                    repr(e)[:120] + '<br/>' +
+                                    repr(e)[:120] + '<br/><br/>' +
                                     _("Please report this issue manually") +
                                     f' <a href="{constants.GIT_REPO_ISSUES_URL}">on GitHub</a>.'),
                                rich_text=True)
 
-        proxy = self.main_window.network.proxy
-        task = lambda: BaseCrashReporter.send_report(self, self.main_window.network.asyncio_loop, proxy)
+        proxy = self.network.proxy
+        task = lambda: BaseCrashReporter.send_report(self, self.network.asyncio_loop, proxy)
         msg = _('Sending crash report...')
         WaitingDialog(self, msg, task, on_success, on_failure)
 
@@ -126,8 +132,8 @@ class Exception_Window(BaseCrashReporter, QWidget, MessageBoxMixin, Logger):
         self.close()
 
     def show_never(self):
-        self.main_window._auto_crash_reports.setChecked(False)
-        self.main_window.auto_crash_reports(False)
+        self.config.set_key(BaseCrashReporter.config_key, False)
+        Exception_Hook.show_need_restart_msg(self)
         self.close()
 
     def closeEvent(self, event):
@@ -138,7 +144,15 @@ class Exception_Window(BaseCrashReporter, QWidget, MessageBoxMixin, Logger):
         return self.description_textfield.toPlainText()
 
     def get_wallet_type(self):
-        return self.main_window.wallet.wallet_type
+        wallet_types = Exception_Hook._INSTANCE.wallet_types_seen
+        return ",".join(wallet_types)
+
+    def _get_traceback_str(self) -> str:
+        # The msg_box that shows the report uses rich_text=True, so
+        # if traceback contains special HTML characters, e.g. '<',
+        # they need to be escaped to avoid formatting issues.
+        traceback_str = super()._get_traceback_str()
+        return html.escape(traceback_str)
 
 
 def _show_window(*args):
@@ -149,18 +163,32 @@ def _show_window(*args):
 class Exception_Hook(QObject, Logger):
     _report_exception = QtCore.pyqtSignal(object, object, object, object)
 
-    def __init__(self, main_window, *args, **kwargs):
-        QObject.__init__(self, *args, **kwargs)
+    _INSTANCE = None  # type: Optional[Exception_Hook]  # singleton
+
+    def __init__(self, *, config: 'SimpleConfig'):
+        QObject.__init__(self)
         Logger.__init__(self)
-        if not main_window.config.get(BaseCrashReporter.config_key, default=False):
-            if main_window._old_excepthook:
-                sys.excepthook = main_window._old_excepthook
-            return
-        self.main_window = main_window
-        main_window._old_excepthook = sys.excepthook
+        assert self._INSTANCE is None, "Exception_Hook is supposed to be a singleton"
+        self.config = config
+        self.wallet_types_seen = set()  # type: Set[str]
+
         sys.excepthook = self.handler
         self._report_exception.connect(_show_window)
 
+    @classmethod
+    def maybe_setup(cls, *, config: 'SimpleConfig', wallet: 'Abstract_Wallet') -> None:
+        if not config.get(BaseCrashReporter.config_key, default=False):
+            return
+        if not cls._INSTANCE:
+            cls._INSTANCE = Exception_Hook(config=config)
+        cls._INSTANCE.wallet_types_seen.add(wallet.wallet_type)
+
     def handler(self, *exc_info):
         self.logger.error('exception caught by crash reporter', exc_info=exc_info)
-        self._report_exception.emit(self.main_window, *exc_info)
+        self._report_exception.emit(self.config, *exc_info)
+
+    @classmethod
+    def show_need_restart_msg(cls, parent):
+        parent.show_warning(_('Please restart Dash Electrum to activate'
+                              ' new crash reporter settings'),
+                            title=_('Success'))

@@ -29,7 +29,6 @@ import ipaddress
 import logging
 import random
 import time
-from aiohttp_socks import open_connection
 from struct import pack, unpack
 from typing import Optional, Tuple
 
@@ -41,7 +40,8 @@ from .dash_msg import (SporkID, DashType, DashCmd, DashVersionMsg,
 from .ecc import ECPubkey
 from .interface import GracefulDisconnect
 from .logging import Logger
-from .util import log_exceptions, ignore_exceptions, SilentTaskGroup
+from .util import (log_exceptions, ignore_exceptions, SilentTaskGroup,
+                   MySocksProxy)
 from .version import ELECTRUM_VERSION
 
 
@@ -80,7 +80,7 @@ class DashPeer(Logger):
         assert dash_net.network.config.path
         self.dash_net = dash_net
         self.loop = dash_net.loop
-        self._set_proxy(proxy)
+        self.proxy = MySocksProxy.from_proxy_dict(proxy)
         self.sml_entry = sml_entry
         self.mix_session = mix_session
 
@@ -119,15 +119,6 @@ class DashPeer(Logger):
 
     def diagnostic_name(self):
         return f'{self.host}:{self.port}'
-
-    def _set_proxy(self, proxy: dict):
-        if proxy:
-            mode = proxy.get('mode')
-            user, password = proxy.get('user'), proxy.get('password')
-            host, port = proxy.get('host'), proxy.get('port')
-            self.socks_url = f'{mode}://{user}:{password}@{host}:{port}'
-        else:
-            self.socks_url = None
 
     def handle_disconnect(func):
         async def wrapper_func(self: 'DashPeer', *args, **kwargs):
@@ -169,15 +160,14 @@ class DashPeer(Logger):
 
     async def open(self):
         self.logger.info('open connection')
-        if self.socks_url is None:
+        if self.proxy is None:
             self.sr, self.sw = await asyncio.open_connection(host=self.host,
                                                              port=self.port,
                                                              limit=READ_LIMIT)
         else:
-            self.sr, self.sw = await open_connection(socks_url=self.socks_url,
-                                                     host=self.host,
-                                                     port=self.port,
-                                                     limit=READ_LIMIT)
+            self.sr, self.sw = \
+                await self.proxy.open_connection(host=self.host,
+                                                 port=self.port)
 
         self._is_open = True
         verack_received = False

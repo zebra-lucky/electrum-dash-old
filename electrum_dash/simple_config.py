@@ -3,15 +3,19 @@ import threading
 import time
 import os
 import stat
+import ssl
 from decimal import Decimal
-from typing import Union, Optional
+from typing import Union, Optional, Dict
 from numbers import Real
 
 from copy import deepcopy
+from aiorpcx import NetAddress
 
 from . import util
-from .util import (user_dir, make_dir,
-                   NoDynamicFeeEstimates, format_fee_satoshis, quantize_feerate)
+from . import constants
+from .util import base_units, base_unit_name_to_decimal_point, decimal_point_to_base_unit_name, UnknownBaseUnit, DECIMAL_POINT_DEFAULT
+from .util import format_satoshis, format_fee_satoshis
+from .util import user_dir, make_dir, NoDynamicFeeEstimates, quantize_feerate
 from .i18n import _
 from .logging import get_logger, Logger
 
@@ -24,22 +28,14 @@ FEERATE_MAX_DYNAMIC = 15000
 FEERATE_WARNING_HIGH_FEE = 10000
 FEERATE_FALLBACK_STATIC_FEE = 1000
 FEERATE_DEFAULT_RELAY = 1000
+FEERATE_MAX_RELAY = 10000
 FEERATE_STATIC_VALUES = [150, 300, 500, 1000,
                          1500, 2500, 3500, 5000, 7500, 10000]
 
+FEE_RATIO_HIGH_WARNING = 0.05  # warn user if fee/amount for on-chain tx is higher than this
 
-config = None
+
 _logger = get_logger(__name__)
-
-
-def get_config():
-    global config
-    return config
-
-
-def set_config(c):
-    global config
-    config = c
 
 
 FINAL_CONFIG_VERSION = 3
@@ -58,7 +54,6 @@ class SimpleConfig(Logger):
 
     def __init__(self, options=None, read_user_config_function=None,
                  read_user_dir_function=None):
-
         if options is None:
             options = {}
 
@@ -68,7 +63,7 @@ class SimpleConfig(Logger):
         # a thread-safe way.
         self.lock = threading.RLock()
 
-        self.mempool_fees = {}
+        self.mempool_fees = {}  # type: Dict[Union[float, int], int]
         self.fee_estimates = {}
         self.fee_estimates_last_updated = {}
         self.last_time_fee_estimates_requested = 0  # zero ensures immediate fees
@@ -95,6 +90,8 @@ class SimpleConfig(Logger):
             # avoid new config getting upgraded
             self.user_config = {'config_version': FINAL_CONFIG_VERSION}
 
+        self._not_modifiable_keys = set()
+
         # config "upgrade" - CLI options
         self.rename_config_keys(
             self.cmdline_options, {'auto_cycle': 'auto_connect'}, True)
@@ -103,8 +100,15 @@ class SimpleConfig(Logger):
         if self.requires_upgrade():
             self.upgrade()
 
-        # Make a singleton instance of 'self'
-        set_config(self)
+        self._check_dependent_keys()
+
+        # units and formatting
+        self.decimal_point = self.get('decimal_point', DECIMAL_POINT_DEFAULT)
+        try:
+            decimal_point_to_base_unit_name(self.decimal_point)
+        except UnknownBaseUnit:
+            self.decimal_point = DECIMAL_POINT_DEFAULT
+        self.num_zeros = int(self.get('num_zeros', 8))
 
     def electrum_path(self):
         # Read electrum_path from command line
@@ -166,6 +170,12 @@ class SimpleConfig(Logger):
             if out is None:
                 out = self.user_config.get(key, default)
         return out
+
+    def _check_dependent_keys(self) -> None:
+        if self.get('serverfingerprint'):
+            if not self.get('server'):
+                raise Exception("config key 'serverfingerprint' requires 'server' to also be set")
+            self.make_key_not_modifiable('server')
 
     def requires_upgrade(self):
         return self.get_config_version() < FINAL_CONFIG_VERSION
@@ -229,10 +239,16 @@ class SimpleConfig(Logger):
                                 .format(config_version, FINAL_CONFIG_VERSION))
         return config_version
 
-    def is_modifiable(self, key):
-        return key not in self.cmdline_options
+    def is_modifiable(self, key) -> bool:
+        return (key not in self.cmdline_options
+                and key not in self._not_modifiable_keys)
+
+    def make_key_not_modifiable(self, key) -> None:
+        self._not_modifiable_keys.add(key)
 
     def save_user_config(self):
+        if self.get('forget_config'):
+            return
         if not self.path:
             return
         path = os.path.join(self.path, "config")
@@ -246,17 +262,17 @@ class SimpleConfig(Logger):
             if os.path.exists(self.path):  # or maybe not?
                 raise
 
-    def get_wallet_path(self):
+    def get_wallet_path(self, *, use_gui_last_wallet=False):
         """Set the path of the wallet."""
 
         # command line -w option
         if self.get('wallet_path'):
             return os.path.join(self.get('cwd', ''), self.get('wallet_path'))
 
-        # path in config file
-        path = self.get('default_wallet_path')
-        if path and os.path.exists(path):
-            return path
+        if use_gui_last_wallet:
+            path = self.get('gui_last_wallet')
+            if path and os.path.exists(path):
+                return path
 
         # default path
         util.assert_datadir_available(self.path)
@@ -284,12 +300,6 @@ class SimpleConfig(Logger):
 
     def get_session_timeout(self):
         return self.get('session_timeout', 300)
-
-    def open_last_wallet(self):
-        if self.get('wallet_path') is None:
-            last_wallet = self.get('gui_last_wallet')
-            if last_wallet is not None and os.path.exists(last_wallet):
-                self.cmdline_options['default_wallet_path'] = last_wallet
 
     def save_last_wallet(self, wallet):
         if self.get('wallet_path') is None:
@@ -327,6 +337,8 @@ class SimpleConfig(Logger):
                 fee = int(fee)
         else:
             fee = self.fee_estimates.get(num_blocks)
+            if fee is not None:
+                fee = int(fee)
         return fee
 
     def fee_to_depth(self, target_fee: Real) -> int:
@@ -360,9 +372,10 @@ class SimpleConfig(Logger):
             return 0
         # add one sat/byte as currently that is
         # the max precision of the histogram
+        # (well, in case of ElectrumX at least. not for electrs)
         fee += 1
         # convert to sat/kbyte
-        return fee * 1000
+        return int(fee * 1000)
 
     def depth_target(self, slider_pos):
         slider_pos = max(slider_pos, 0)
@@ -407,7 +420,7 @@ class SimpleConfig(Logger):
         text is what we target: static fee / num blocks to confirm in / mempool depth
         tooltip is the corresponding estimate (e.g. num blocks for a static fee)
 
-        fee_rate is in duffs/kbyte
+        fee_rate is in duffs/kB
         """
         if fee_rate is None:
             rate_str = 'unknown'
@@ -499,7 +512,7 @@ class SimpleConfig(Logger):
             fee_rate = FEERATE_STATIC_VALUES[slider_pos]
         return fee_rate
 
-    def fee_per_kb(self, dyn: bool=None, mempool: bool=None, fee_level: float=None) -> Union[int, None]:
+    def fee_per_kb(self, dyn: bool=None, mempool: bool=None, fee_level: float=None) -> Optional[int]:
         """Returns sat/kvB fee to pay for a txn.
         Note: might return None.
 
@@ -521,12 +534,18 @@ class SimpleConfig(Logger):
                 fee_rate = self.eta_to_fee(self.get_fee_level())
         else:
             fee_rate = self.get('fee_per_kb', FEERATE_FALLBACK_STATIC_FEE)
+        if fee_rate is not None:
+            fee_rate = int(fee_rate)
         return fee_rate
 
-    def estimate_fee(self, size: Union[int, float, Decimal]) -> int:
+    def estimate_fee(self, size: Union[int, float, Decimal], *,
+                     allow_fallback_to_static_rates: bool = False) -> int:
         fee_per_kb = self.fee_per_kb()
         if fee_per_kb is None:
-            raise NoDynamicFeeEstimates()
+            if allow_fallback_to_static_rates:
+                fee_per_kb = FEERATE_FALLBACK_STATIC_FEE
+            else:
+                raise NoDynamicFeeEstimates()
         return self.estimate_fee_for_feerate(fee_per_kb, size)
 
     @classmethod
@@ -554,6 +573,56 @@ class SimpleConfig(Logger):
         if device == 'default':
             device = ''
         return device
+
+    def get_ssl_context(self):
+        ssl_keyfile = self.get('ssl_keyfile')
+        ssl_certfile = self.get('ssl_certfile')
+        if ssl_keyfile and ssl_certfile:
+            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_context.load_cert_chain(ssl_certfile, ssl_keyfile)
+            return ssl_context
+
+    def get_ssl_domain(self):
+        from .paymentrequest import check_ssl_config
+        if self.get('ssl_keyfile') and self.get('ssl_certfile'):
+            SSL_identity = check_ssl_config(self)
+        else:
+            SSL_identity = None
+        return SSL_identity
+
+    def get_netaddress(self, key: str) -> Optional[NetAddress]:
+        text = self.get(key)
+        if text:
+            try:
+                return NetAddress.from_string(text)
+            except:
+                pass
+
+    def format_amount(self, x, is_diff=False, whitespaces=False):
+        return format_satoshis(
+            x,
+            num_zeros=self.num_zeros,
+            decimal_point=self.decimal_point,
+            is_diff=is_diff,
+            whitespaces=whitespaces,
+        )
+
+    def format_amount_and_units(self, amount):
+        return self.format_amount(amount) + ' '+ self.get_base_unit()
+
+    def format_fee_rate(self, fee_rate):
+        return format_fee_satoshis(fee_rate, num_zeros=self.num_zeros) + ' duffs/kB'
+
+    def get_base_unit(self):
+        return decimal_point_to_base_unit_name(self.decimal_point)
+
+    def set_base_unit(self, unit):
+        assert unit in base_units.keys()
+        self.decimal_point = base_unit_name_to_decimal_point(unit)
+        self.set_key('decimal_point', self.decimal_point, True)
+
+    def get_decimal_point(self):
+        return self.decimal_point
 
 
 def read_user_config(path):

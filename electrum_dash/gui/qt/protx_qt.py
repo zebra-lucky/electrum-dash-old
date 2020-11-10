@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (QTabBar, QTabWidget, QWidget, QLabel, QPushButton,
                              QHBoxLayout, QVBoxLayout, QDialog, QGridLayout,
                              QTextEdit, QMenu)
 
+from electrum_dash import util
 from electrum_dash.dash_tx import SPEC_PRO_REG_TX
 from electrum_dash.protx import ProRegTxExc, ProTxManagerExc
 from electrum_dash.i18n import _
@@ -456,8 +457,8 @@ class Dip3TabWidget(QTabWidget):
             self.mn_list.register_callback(self.on_mn_list_info_updated,
                                            ['mn-list-info-updated'])
         if self.gui.network:
-            self.gui.network.register_callback(self.on_cb_network_updated,
-                                               ['network_updated'])
+            util.register_callback(self.on_cb_network_updated,
+                                   ['network_updated'])
         self.manager.register_callback(self.on_manager_alias_updated,
                                        ['manager-alias-updated'])
         self.alias_updated.connect(self.on_alias_updated)
@@ -470,7 +471,7 @@ class Dip3TabWidget(QTabWidget):
             self.mn_list.unregister_callback(self.on_mn_list_diff_updated)
             self.mn_list.unregister_callback(self.on_mn_list_info_updated)
         if self.gui.network:
-            self.gui.network.unregister_callback(self.on_cb_network_updated)
+            util.unregister_callback(self.on_cb_network_updated)
         self.manager.unregister_callback(self.on_manager_alias_updated)
 
     def get_stats(self):

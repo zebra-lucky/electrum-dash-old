@@ -24,12 +24,12 @@
 # SOFTWARE.
 from collections import defaultdict
 from math import floor, log10
-from typing import NamedTuple, List, Callable, Optional
+from typing import NamedTuple, List, Callable, Optional, Sequence, Union, Dict, Tuple
 from decimal import Decimal
 
-from .bitcoin import sha256, COIN, TYPE_ADDRESS, is_address
+from .bitcoin import sha256, COIN, is_address
 from .dash_ps import PS_DENOMS_VALS
-from .transaction import Transaction, TxOutput
+from .transaction import Transaction, TxOutput, PartialTransaction, PartialTxInput, PartialTxOutput
 from .util import NotEnoughFunds
 from .logging import Logger
 
@@ -45,12 +45,12 @@ class PRNG:
         self.sha = sha256(seed)
         self.pool = bytearray()
 
-    def get_bytes(self, n):
+    def get_bytes(self, n: int) -> bytes:
         while len(self.pool) < n:
             self.pool.extend(self.sha)
             self.sha = sha256(self.sha)
         result, self.pool = self.pool[:n], self.pool[n:]
-        return result
+        return bytes(result)
 
     def randint(self, start, end):
         # Returns random integer in [start, end)
@@ -74,21 +74,21 @@ class PRNG:
 
 class Bucket(NamedTuple):
     desc: str
-    weight: int         # as in BIP-141
-    value: int          # in satoshis
-    effective_value: int   # estimate of value left after subtracting fees. in satoshis
-    coins: List[dict]   # UTXOs
-    min_height: int     # min block height where a coin was confirmed
-    max_rounds: Optional[int]  # bucket has coins with ps_rounds <= max_rounds
+    weight: int                   # as in BIP-141
+    value: int                    # in satoshis
+    effective_value: int          # estimate of value left after subtracting fees. in satoshis
+    coins: List[PartialTxInput]   # UTXOs
+    min_height: int               # min block height where a coin was confirmed
+    max_rounds: Optional[int]     # bucket has coins with ps_rounds <= max_rounds
 
 
 class ScoredCandidate(NamedTuple):
     penalty: float
-    tx: Transaction
+    tx: PartialTransaction
     buckets: List[Bucket]
 
 
-def strip_unneeded(bkts, sufficient_funds):
+def strip_unneeded(bkts: List[Bucket], sufficient_funds) -> List[Bucket]:
     '''Remove buckets that are unnecessary in achieving the spend amount'''
     if sufficient_funds([], bucket_value_sum=0):
         # none of the buckets are needed
@@ -104,36 +104,35 @@ def strip_unneeded(bkts, sufficient_funds):
 
 class CoinChooserBase(Logger):
 
-    enable_output_value_rounding = False
-
-    def __init__(self):
+    def __init__(self, *, enable_output_value_rounding: bool):
         Logger.__init__(self)
+        self.enable_output_value_rounding = enable_output_value_rounding
 
-    def keys(self, coins):
+    def keys(self, coins: Sequence[PartialTxInput]) -> Sequence[str]:
         raise NotImplementedError
 
-    def bucketize_coins(self, coins, *, fee_estimator_vb):
+    def bucketize_coins(self, coins: Sequence[PartialTxInput], *, fee_estimator_vb):
         keys = self.keys(coins)
-        buckets = defaultdict(list)
+        buckets = defaultdict(list)  # type: Dict[str, List[PartialTxInput]]
         for key, coin in zip(keys, coins):
             buckets[key].append(coin)
         # fee_estimator returns fee to be paid, for given vbytes.
         # guess whether it is just returning a constant as follows.
         constant_fee = fee_estimator_vb(2000) == fee_estimator_vb(200)
 
-        def make_Bucket(desc, coins):
+        def make_Bucket(desc: str, coins: List[PartialTxInput]):
             weight = 0
             value = 0
             min_height = None
             max_rounds = None
             for coin in coins:
                 weight += Transaction.estimated_input_weight(coin)
-                value += coin['value']
+                value += coin.value_sats()
                 if min_height is None:
-                    min_height = coin['height']
+                    min_height = coin.block_height
                 else:
-                    min_height = min(coin['height'], min_height)
-                ps_rounds = coin['ps_rounds']
+                    min_height = min(coin.block_height, min_height)
+                ps_rounds = coin.ps_rounds
                 if ps_rounds is not None:
                     if max_rounds is None:
                         max_rounds = 0
@@ -143,6 +142,7 @@ class CoinChooserBase(Logger):
                         # do not spend ps_collateral/ps_other if possible
                         # and therefore set max_rounds to maximum
                         max_rounds = 1e9
+            assert min_height is not None
             # the fee estimator is typically either a constant or a linear function,
             # so the "function:" effective_value(bucket) will be homomorphic for addition
             # i.e. effective_value(b1) + effective_value(b2) = effective_value(b1 + b2)
@@ -163,10 +163,12 @@ class CoinChooserBase(Logger):
 
         return list(map(make_Bucket, buckets.keys(), buckets.values()))
 
-    def penalty_func(self, base_tx, *, tx_from_buckets) -> Callable[[List[Bucket]], ScoredCandidate]:
+    def penalty_func(self, base_tx, *,
+                     tx_from_buckets: Callable[[List[Bucket]], Tuple[PartialTransaction, List[PartialTxOutput]]]) \
+            -> Callable[[List[Bucket]], ScoredCandidate]:
         raise NotImplementedError
 
-    def _change_amounts(self, tx, count, fee_estimator_numchange) -> List[int]:
+    def _change_amounts(self, tx: PartialTransaction, count: int, fee_estimator_numchange) -> List[int]:
         # Break change up if bigger than max_change
         output_amounts = [o.value for o in tx.outputs()]
         # Don't split change of less than 0.02 BTC
@@ -220,7 +222,8 @@ class CoinChooserBase(Logger):
 
         return amounts
 
-    def _change_outputs(self, tx, change_addrs, fee_estimator_numchange, dust_threshold):
+    def _change_outputs(self, tx: PartialTransaction, change_addrs, fee_estimator_numchange,
+                        dust_threshold) -> List[PartialTxOutput]:
         amounts = self._change_amounts(tx, len(change_addrs), fee_estimator_numchange)
         assert min(amounts) >= 0
         assert len(change_addrs) >= len(amounts)
@@ -228,23 +231,24 @@ class CoinChooserBase(Logger):
         # If change is above dust threshold after accounting for the
         # size of the change output, add it to the transaction.
         amounts = [amount for amount in amounts if amount >= dust_threshold]
-        change = [TxOutput(TYPE_ADDRESS, addr, amount)
+        change = [PartialTxOutput.from_address_and_value(addr, amount)
                   for addr, amount in zip(change_addrs, amounts)]
         return change
 
-    def _construct_tx_from_selected_buckets(self, *, buckets, base_tx, change_addrs,
+    def _construct_tx_from_selected_buckets(self, *, buckets: Sequence[Bucket],
+                                            base_tx: PartialTransaction, change_addrs,
                                             fee_estimator_w, dust_threshold, base_weight,
-                                            tx_type=0, extra_payload=b''):
+                                            tx_type=0, extra_payload=b'') -> Tuple[PartialTransaction, List[PartialTxOutput]]:
         # make a copy of base_tx so it won't get mutated
-        tx = Transaction.from_io(base_tx.inputs()[:], base_tx.outputs()[:],
-                                 tx_type=tx_type, extra_payload=extra_payload)
+        tx = PartialTransaction.from_io(base_tx.inputs()[:], base_tx.outputs()[:],
+                                        tx_type=tx_type, extra_payload=extra_payload)
 
         tx.add_inputs([coin for b in buckets for coin in b.coins])
         tx_weight = self._get_tx_weight(buckets, base_weight=base_weight)
 
         # change is sent back to sending address unless specified
         if not change_addrs:
-            change_addrs = [tx.inputs()[0]['address']]
+            change_addrs = [tx.inputs()[0].address]
             # note: this is not necessarily the final "first input address"
             # because the inputs had not been sorted at this point
             assert is_address(change_addrs[0])
@@ -257,7 +261,7 @@ class CoinChooserBase(Logger):
 
         return tx, change
 
-    def _get_tx_weight(self, buckets, *, base_weight) -> int:
+    def _get_tx_weight(self, buckets: Sequence[Bucket], *, base_weight: int) -> int:
         """Given a collection of buckets, return the total weight of the
         resulting transaction.
         base_weight is the weight of the tx that includes the fixed (non-change)
@@ -267,8 +271,10 @@ class CoinChooserBase(Logger):
         total_weight = base_weight + sum(bucket.weight for bucket in buckets)
         return total_weight
 
-    def make_tx(self, coins, inputs, outputs, change_addrs, fee_estimator_vb,
-                dust_threshold, tx_type=0, extra_payload=b''):
+    def make_tx(self, *, coins: Sequence[PartialTxInput], inputs: List[PartialTxInput],
+                outputs: List[PartialTxOutput], change_addrs: Sequence[str],
+                fee_estimator_vb: Callable, dust_threshold: int,
+                tx_type=0, extra_payload=b'') -> PartialTransaction:
         """Select unspent coins to spend to pay outputs.  If the change is
         greater than dust_threshold (after adding the change output to
         the transaction) it is kept, otherwise none is sent and it is
@@ -280,15 +286,16 @@ class CoinChooserBase(Logger):
 
         Note: fee_estimator_vb expects virtual bytes
         """
+        assert outputs, 'tx outputs cannot be empty'
 
         # Deterministic randomness from coins
-        utxos = [c['prevout_hash'] + str(c['prevout_n']) for c in coins]
-        self.p = PRNG(''.join(sorted(utxos)))
+        utxos = [c.prevout.serialize_to_network() for c in coins]
+        self.p = PRNG(b''.join(sorted(utxos)))
 
         # Copy the outputs so when adding change we don't modify "outputs"
-        base_tx = Transaction.from_io(inputs[:], outputs[:],
-                                      tx_type=tx_type,
-                                      extra_payload=extra_payload)
+        base_tx = PartialTransaction.from_io(inputs[:], outputs[:],
+                                             tx_type=tx_type,
+                                             extra_payload=extra_payload)
         input_value = base_tx.input_value()
 
         # Weight of the transaction with no inputs and no change
@@ -341,17 +348,21 @@ class CoinChooserBase(Logger):
 
         return tx
 
-    def choose_buckets(self, buckets, sufficient_funds,
+    def choose_buckets(self, buckets: List[Bucket],
+                       sufficient_funds: Callable,
                        penalty_func: Callable[[List[Bucket]], ScoredCandidate]) -> ScoredCandidate:
         raise NotImplemented('To be subclassed')
 
 
 class CoinChooserRandom(CoinChooserBase):
 
-    def bucket_candidates_any(self, buckets, sufficient_funds):
+    def bucket_candidates_any(self, buckets: List[Bucket], sufficient_funds) -> List[List[Bucket]]:
         '''Returns a list of bucket sets.'''
         if not buckets:
-            raise NotEnoughFunds()
+            if sufficient_funds([], bucket_value_sum=0):
+                return [[]]
+            else:
+                raise NotEnoughFunds()
 
         candidates = set()
 
@@ -383,7 +394,8 @@ class CoinChooserRandom(CoinChooserBase):
         candidates = [[buckets[n] for n in c] for c in candidates]
         return [strip_unneeded(c, sufficient_funds) for c in candidates]
 
-    def bucket_candidates_prefer_confirmed(self, buckets, sufficient_funds):
+    def bucket_candidates_prefer_confirmed(self, buckets: List[Bucket],
+                                           sufficient_funds) -> List[List[Bucket]]:
         """Returns a list of bucket sets preferring confirmed coins.
 
         Any bucket can be:
@@ -460,13 +472,13 @@ class CoinChooserPrivacy(CoinChooserRandom):
     """
 
     def keys(self, coins):
-        return [coin['address'] for coin in coins]
+        return [coin.scriptpubkey.hex() for coin in coins]
 
     def penalty_func(self, base_tx, *, tx_from_buckets):
         min_change = min(o.value for o in base_tx.outputs()) * 0.75
         max_change = max(o.value for o in base_tx.outputs()) * 1.33
 
-        def penalty(buckets) -> ScoredCandidate:
+        def penalty(buckets: List[Bucket]) -> ScoredCandidate:
             # Penalize using many buckets (~inputs)
             badness = len(buckets) - 1
             tx, change_outputs = tx_from_buckets(buckets)
@@ -500,14 +512,14 @@ class CoinChooserPrivateSend:
 
     def make_tx(self, coins, outputs, fee_estimator_vb,
                 min_rounds, tx_type=0, extra_payload=b''):
-        base_tx = Transaction.from_io([], outputs[:], tx_type=tx_type,
-                                      extra_payload=extra_payload)
-        all_coins = list(filter(lambda x: x['ps_rounds'] is not None
-                                and x['ps_rounds'] >= min_rounds
-                                and x['value'] in PS_DENOMS_VALS, coins))
+        base_tx = PartialTransaction.from_io([], outputs[:], tx_type=tx_type,
+                                             extra_payload=extra_payload)
+        all_coins = list(filter(lambda x: x.ps_rounds is not None
+                                and x.ps_rounds >= min_rounds
+                                and x.value_sats() in PS_DENOMS_VALS, coins))
         if not all_coins:
             raise NotEnoughFunds()
-        max_rounds = max([c['ps_rounds'] for c in all_coins])
+        max_rounds = max([c.ps_rounds for c in all_coins])
         tx = None
         use_repeated_txids = False
         use_ps_rounds = min_rounds
@@ -530,13 +542,13 @@ class CoinChooserPrivateSend:
             return tx
 
     def select_coins(self, coins, max_rounds, use_repeated_txids):
-        coins = list(filter(lambda x: x['ps_rounds'] <= max_rounds, coins))
+        coins = list(filter(lambda x: x.ps_rounds <= max_rounds, coins))
         if use_repeated_txids:
             return coins
         selected = []
         used_txids = []
         for c in coins:
-            txid = c['prevout_hash']
+            txid = c.prevout.txid.hex()
             if txid in used_txids:
                 continue
             selected.append(c)
@@ -547,18 +559,18 @@ class CoinChooserPrivateSend:
                             use_repeated_txids):
         spent_amount = base_tx.output_value()
         selected = []
-        if sum([c['value'] for c in coins]) < spent_amount:
+        if sum([c.value_sats() for c in coins]) < spent_amount:
             return
-        coins = sorted(coins, key=lambda x: x['value'], reverse=True)
+        coins = sorted(coins, key=lambda x: x.value_sats(), reverse=True)
         skip_value = 0
         tx = backup_tx = None
         for c in coins:
-            if c['value'] == skip_value:
+            if c.value_sats() == skip_value:
                 continue
-            tx = Transaction.from_io(base_tx.inputs()[:],
-                                     base_tx.outputs()[:],
-                                     tx_type=base_tx.tx_type,
-                                     extra_payload=base_tx.extra_payload)
+            tx = PartialTransaction.from_io(base_tx.inputs()[:],
+                                            base_tx.outputs()[:],
+                                            tx_type=base_tx.tx_type,
+                                            extra_payload=base_tx.extra_payload)
             tx.add_inputs(selected + [c])
             input_value = tx.input_value()
             estimated_fee = fee_estimator_vb(tx.estimated_size())
@@ -567,12 +579,12 @@ class CoinChooserPrivateSend:
                 selected.append(c)
                 continue
             elif fee - estimated_fee >= PS_DENOMS_VALS[0]:
-                skip_value = c['value']
+                skip_value = c.value_sats()
                 backup_tx = tx
-                tx = Transaction.from_io(base_tx.inputs()[:],
-                                         base_tx.outputs()[:],
-                                         tx_type=base_tx.tx_type,
-                                         extra_payload=base_tx.extra_payload)
+                tx = PartialTransaction.from_io(base_tx.inputs()[:],
+                                                base_tx.outputs()[:],
+                                                tx_type=base_tx.tx_type,
+                                                extra_payload=base_tx.extra_payload)
                 tx.add_inputs(selected)
                 input_value = tx.input_value()
                 estimated_fee = fee_estimator_vb(tx.estimated_size())
@@ -605,8 +617,15 @@ def get_name(config):
 
 def get_coin_chooser(config):
     klass = COIN_CHOOSERS[get_name(config)]
-    coinchooser = klass()
-    coinchooser.enable_output_value_rounding = config.get('coin_chooser_output_rounding', False)
+    # upstream note: we enable enable_output_value_rounding by default as
+    #       - for sacrificing a few satoshis
+    #       + it gives better privacy for the user re change output
+    #       + it also helps the network as a whole as fees will become noisier
+    #         (trying to counter the heuristic that "whole integer sat/byte feerates" are common)
+    # local note: enable_output_value_rounding is disabled by default
+    coinchooser = klass(
+        enable_output_value_rounding=config.get('coin_chooser_output_rounding', False),
+    )
     return coinchooser
 
 

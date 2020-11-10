@@ -7,7 +7,7 @@ import base64
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QProgressBar,
-                             QHBoxLayout, QPushButton)
+                             QHBoxLayout, QPushButton, QDialog)
 
 from electrum_dash import version
 from electrum_dash import constants
@@ -15,9 +15,10 @@ from electrum_dash import ecc
 from electrum_dash.i18n import _
 from electrum_dash.util import make_aiohttp_session, versiontuple
 from electrum_dash.logging import Logger
+from electrum_dash.network import Network
 
 
-class UpdateCheck(QWidget, Logger):
+class UpdateCheck(QDialog, Logger):
     url = "https://raw.githubusercontent.com/akhavr/electrum-dash/master/.latest-version"
     download_url = "https://github.com/akhavr/electrum-dash/releases"
 
@@ -26,9 +27,8 @@ class UpdateCheck(QWidget, Logger):
         "XuKFPN7RDbrvNsPddPyUPzVqwdhvfB67cx",
     )
 
-    def __init__(self, main_window, latest_version=None):
-        self.main_window = main_window
-        QWidget.__init__(self)
+    def __init__(self, *, latest_version=None):
+        QDialog.__init__(self)
         self.setWindowTitle('Dash Electrum - ' + _('Update Check'))
         self.content = QVBoxLayout()
         self.content.setContentsMargins(*[10]*4)
@@ -54,7 +54,7 @@ class UpdateCheck(QWidget, Logger):
 
         self.update_view(latest_version)
 
-        self.update_check_thread = UpdateCheckThread(self.main_window)
+        self.update_check_thread = UpdateCheckThread()
         self.update_check_thread.checked.connect(self.on_version_retrieved)
         self.update_check_thread.failed.connect(self.on_retrieval_failed)
         self.update_check_thread.start()
@@ -98,13 +98,15 @@ class UpdateCheckThread(QThread, Logger):
     checked = pyqtSignal(object)
     failed = pyqtSignal()
 
-    def __init__(self, main_window):
+    def __init__(self):
         QThread.__init__(self)
         Logger.__init__(self)
-        self.main_window = main_window
+        self.network = Network.get_instance()
 
     async def get_update_info(self):
-        async with make_aiohttp_session(proxy=self.main_window.network.proxy) as session:
+        # note: Use long timeout here as it is not critical that we get a response fast,
+        #       and it's bad not to get an update notification just because we did not wait enough.
+        async with make_aiohttp_session(proxy=self.network.proxy, timeout=120) as session:
             async with session.get(UpdateCheck.url) as result:
                 signed_version_dict = await result.json(content_type=None)
                 # example signed_version_dict:
@@ -130,12 +132,11 @@ class UpdateCheckThread(QThread, Logger):
                 return version_num.strip()
 
     def run(self):
-        network = self.main_window.network
-        if not network:
+        if not self.network:
             self.failed.emit()
             return
         try:
-            update_info = asyncio.run_coroutine_threadsafe(self.get_update_info(), network.asyncio_loop).result()
+            update_info = asyncio.run_coroutine_threadsafe(self.get_update_info(), self.network.asyncio_loop).result()
         except Exception as e:
             self.logger.info(f"got exception: '{repr(e)}'")
             self.failed.emit()

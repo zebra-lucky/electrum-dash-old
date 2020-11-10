@@ -363,7 +363,7 @@ QLabel { /* Base Text Size & Color */
 /**********************/
 /* 5. Buttons, Spinners, Dropdown */
 
-QPushButton { /* Global Button Style */
+QPushButton, #blue_toolbutton { /* Global Button Style */
     background-color:qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: .01 #4ca5dc, stop: .1 #2c85cc, stop: .95 #2c85cc, stop: 1 #1D80B5);
     border:0;
     border-radius:3px;
@@ -373,20 +373,24 @@ QPushButton { /* Global Button Style */
     padding: 7px 25px;
 }
 
-QPushButton:hover {
+#blue_toolbutton {
+    padding: 5px 23px;
+}
+
+QPushButton:hover, #blue_toolbutton:hover {
     background-color:qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: .01 #4ca5dc, stop: .1 #4ca5dc, stop: .95 #4ca5dc, stop: 1 #1D80B5);
 }
 
-QPushButton:focus {
+QPushButton:focus, #blue_toolbutton:focus {
     border:none;
     outline:none;
 }
 
-QPushButton:pressed {
+QPushButton:pressed, #blue_toolbutton:pressed {
     border:1px solid #31363b;
 }
 
-QPushButton:disabled
+QPushButton:disabled, #blue_toolbutton:disabled
 {
     color: #ccc;
     background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #A1A1A1, stop: 1 #898989);

@@ -22,10 +22,12 @@
 # SOFTWARE.
 import os
 import threading
+import time
 from typing import Optional, Dict, Mapping, Sequence
 
 from . import util
 from .bitcoin import hash_encode, int_to_hex, rev_hex
+from .constants import CHUNK_SIZE
 from .crypto import sha256d
 from . import constants
 from .util import bfh, bh2u
@@ -89,7 +91,7 @@ def hash_raw_header(header: str) -> str:
 # key: blockhash hex at forkpoint
 # the chain at some key is the best chain that includes the given hash
 blockchains = {}  # type: Dict[str, Blockchain]
-blockchains_lock = threading.RLock()
+blockchains_lock = threading.RLock()  # lock order: take this last; so after Blockchain.lock
 
 
 def read_blockchains(config: 'SimpleConfig'):
@@ -163,6 +165,23 @@ _CHAINWORK_CACHE = {
 }  # type: Dict[str, int]
 
 
+def init_headers_file_for_best_chain():
+    b = get_best_chain()
+    filename = b.path()
+    len_checkpoints = len(constants.net.CHECKPOINTS)
+    length = HEADER_SIZE * len_checkpoints * CHUNK_SIZE
+    if not os.path.exists(filename) or os.path.getsize(filename) < length:
+        with open(filename, 'wb') as f:
+            for i in range(len_checkpoints):
+                for height, header_data in b.checkpoints[i][2]:
+                    f.seek(height*80)
+                    bin_header = util.bfh(header_data)
+                    f.write(bin_header)
+        util.ensure_sparse_file(filename)
+    with b.lock:
+        b.update_size()
+
+
 class Blockchain(Logger):
     """
     Manages blockchain headers and their verification
@@ -211,7 +230,7 @@ class Blockchain(Logger):
 
     def get_parent_heights(self) -> Mapping['Blockchain', int]:
         """Returns map: (parent chain -> height of last common block)"""
-        with blockchains_lock:
+        with self.lock, blockchains_lock:
             result = {self: self.height()}
             chain = self
             while True:
@@ -262,6 +281,7 @@ class Blockchain(Logger):
                           parent=parent,
                           forkpoint_hash=hash_header(header),
                           prev_hash=parent.get_hash(forkpoint-1))
+        self.assert_headers_file_available(parent.path())
         open(self.path(), 'w+').close()
         self.save_header(header)
         # put into global dict. note that in some cases
@@ -305,7 +325,7 @@ class Blockchain(Logger):
 
     def verify_chunk(self, index: int, data: bytes) -> None:
         num = len(data) // HEADER_SIZE
-        start_height = index * 2016
+        start_height = index * CHUNK_SIZE
         prev_hash = self.get_hash(start_height - 1)
         chunk_headers = {'empty': True}
         for i in range(num):
@@ -315,7 +335,7 @@ class Blockchain(Logger):
             except MissingHeader:
                 expected_header_hash = None
             raw_header = data[i*HEADER_SIZE : (i+1)*HEADER_SIZE]
-            height = index * 2016 + i
+            height = index * CHUNK_SIZE + i
             header = deserialize_header(raw_header, height)
             target = self.get_target(height, chunk_headers)
             self.verify_header(header, prev_hash, target, expected_header_hash)
@@ -350,7 +370,7 @@ class Blockchain(Logger):
             main_chain.save_chunk(index, chunk)
             return
 
-        delta_height = (index * 2016 - self.forkpoint)
+        delta_height = (index * CHUNK_SIZE - self.forkpoint)
         delta_bytes = delta_height * HEADER_SIZE
         # if this chunk contains our forkpoint, only save the part after forkpoint
         # (the part before is the responsibility of the parent)
@@ -484,10 +504,24 @@ class Blockchain(Logger):
         height = self.height()
         return self.read_header(height)
 
+    def is_tip_stale(self) -> bool:
+        STALE_DELAY = 8 * 60 * 60  # in seconds
+        header = self.header_at_tip()
+        if not header:
+            return True
+        # note: We check the timestamp only in the latest header.
+        #       The Bitcoin consensus has a lot of leeway here:
+        #       - needs to be greater than the median of the timestamps of the past 11 blocks, and
+        #       - up to at most 2 hours into the future compared to local clock
+        #       so there is ~2 hours of leeway in either direction
+        if header['timestamp'] + STALE_DELAY < time.time():
+            return True
+        return False
+
     def get_hash(self, height: int) -> str:
         def is_height_checkpoint():
             within_cp_range = height <= constants.net.max_checkpoint()
-            at_chunk_boundary = (height+1) % 2016 == 0
+            at_chunk_boundary = (height+1) % CHUNK_SIZE == 0
             return within_cp_range and at_chunk_boundary
 
         if height == -1:
@@ -495,7 +529,7 @@ class Blockchain(Logger):
         elif height == 0:
             return constants.net.GENESIS
         elif is_height_checkpoint():
-            index = height // 2016
+            index = height // CHUNK_SIZE
             h, t, extra_headers = self.checkpoints[index]
             return h
         else:
@@ -525,9 +559,9 @@ class Blockchain(Logger):
         while count_blocks <= DGW_PAST_BLOCKS:
             reading_h = height - count_blocks
             reading_header = self.read_header(reading_h)
-            if not reading_header and not chunk_empty \
-                and min_height <= reading_h <= max_height:
-                    reading_header = chunk_headers[reading_h]
+            if (not reading_header and not chunk_empty
+                    and min_height <= reading_h <= max_height):
+                reading_header = chunk_headers[reading_h]
             if not reading_header:
                 raise MissingHeader()
             reading_time = reading_header.get('timestamp')
@@ -536,9 +570,8 @@ class Blockchain(Logger):
             if count_blocks == 1:
                 past_target_avg = reading_target
                 last_time = reading_time
-            past_target_avg = \
-                (past_target_avg * count_blocks + reading_target) // \
-                    (count_blocks + 1)
+            past_target_avg = (past_target_avg * count_blocks +
+                               reading_target) // (count_blocks + 1)
 
             count_blocks +=1
 
@@ -584,7 +617,7 @@ class Blockchain(Logger):
 
     def chainwork_of_header_at_height(self, height: int) -> int:
         """work done by single header at given height"""
-        chunk_idx = height // 2016 - 1
+        chunk_idx = height // CHUNK_SIZE - 1
         target = self.get_target(chunk_idx)
         work = ((2 ** 256 - target - 1) // (target + 1)) + 1
         return work
@@ -597,23 +630,23 @@ class Blockchain(Logger):
             # On testnet/regtest, difficulty works somewhat different.
             # It's out of scope to properly implement that.
             return height
-        last_retarget = height // 2016 * 2016 - 1
+        last_retarget = height // CHUNK_SIZE * CHUNK_SIZE - 1
         cached_height = last_retarget
         while _CHAINWORK_CACHE.get(self.get_hash(cached_height)) is None:
             if cached_height <= -1:
                 break
-            cached_height -= 2016
+            cached_height -= CHUNK_SIZE
         assert cached_height >= -1, cached_height
         running_total = _CHAINWORK_CACHE[self.get_hash(cached_height)]
         while cached_height < last_retarget:
-            cached_height += 2016
+            cached_height += CHUNK_SIZE
             work_in_single_header = self.chainwork_of_header_at_height(cached_height)
-            work_in_chunk = 2016 * work_in_single_header
+            work_in_chunk = CHUNK_SIZE * work_in_single_header
             running_total += work_in_chunk
             _CHAINWORK_CACHE[self.get_hash(cached_height)] = running_total
-        cached_height += 2016
+        cached_height += CHUNK_SIZE
         work_in_single_header = self.chainwork_of_header_at_height(cached_height)
-        work_in_last_partial_chunk = (height % 2016 + 1) * work_in_single_header
+        work_in_last_partial_chunk = (height % CHUNK_SIZE + 1) * work_in_single_header
         return running_total + work_in_last_partial_chunk
 
     def can_connect(self, header: dict, check_height: bool=True) -> bool:
@@ -654,9 +687,9 @@ class Blockchain(Logger):
     def get_checkpoints(self):
         # for each chunk, store the hash of the last block and the target after the chunk
         cp = []
-        n = self.height() // 2016
+        n = self.height() // CHUNK_SIZE
         for index in range(n):
-            height = (index + 1) * 2016 - 1
+            height = (index + 1) * CHUNK_SIZE - 1
             h = self.get_hash(height)
             target = self.get_target(height)
             if len(h.strip('0')) == 0:
@@ -678,6 +711,7 @@ class Blockchain(Logger):
 
 
 def check_header(header: dict) -> Optional[Blockchain]:
+    """Returns any Blockchain that contains header, or None."""
     if type(header) is not dict:
         return None
     with blockchains_lock: chains = list(blockchains.values())
@@ -688,8 +722,20 @@ def check_header(header: dict) -> Optional[Blockchain]:
 
 
 def can_connect(header: dict) -> Optional[Blockchain]:
+    """Returns the Blockchain that has a tip that directly links up
+    with header, or None.
+    """
     with blockchains_lock: chains = list(blockchains.values())
     for b in chains:
         if b.can_connect(header):
             return b
     return None
+
+
+def get_chains_that_contain_header(height: int, header_hash: str) -> Sequence[Blockchain]:
+    """Returns a list of Blockchains that contain header, best chain first."""
+    with blockchains_lock: chains = list(blockchains.values())
+    chains = [chain for chain in chains
+              if chain.check_hash(height=height, header_hash=header_hash)]
+    chains = sorted(chains, key=lambda x: x.get_chainwork(), reverse=True)
+    return chains

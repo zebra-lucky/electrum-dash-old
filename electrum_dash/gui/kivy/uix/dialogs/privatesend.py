@@ -775,7 +775,6 @@ class PSMixingTab(BoxLayout):
             msg = psman.create_sm_denoms_data(no_denoms_txt=True)
             self.app.show_error(msg)
         else:
-            do_create = False
             if psman.check_enough_sm_denoms(denoms_by_vals):
                 q = psman.create_sm_denoms_data(enough_txt=True)
             else:

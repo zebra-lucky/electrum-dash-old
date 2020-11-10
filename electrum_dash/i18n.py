@@ -30,6 +30,9 @@ LOCALE_DIR = os.path.join(os.path.dirname(__file__), 'locale')
 language = gettext.translation('electrum', LOCALE_DIR, fallback=True)
 
 
+# note: f-strings cannot be translated! see https://stackoverflow.com/q/49797658
+#       So this does not work:   _(f"My name: {name}")
+#       instead use .format:     _("My name: {}").format(name)
 def _(x):
     global language
     return language.gettext(x)
@@ -53,6 +56,7 @@ languages = {
     'en_UK': _('English'),
     'es_ES': _('Spanish'),
     'fa_IR': _('Persian'),
+    'fil_PH': _('Filipino'),
     'fr_FR': _('French'),
     'hu_HU': _('Hungarian'),
     'hy_AM': _('Armenian'),

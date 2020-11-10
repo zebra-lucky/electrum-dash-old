@@ -2,14 +2,26 @@ import unittest
 from unittest import mock
 from decimal import Decimal
 
+from electrum_dash.util import create_and_start_event_loop
 from electrum_dash.commands import Commands, eval_bool
-from electrum_dash import storage
+from electrum_dash import storage, wallet
 from electrum_dash.wallet import restore_wallet_from_text
+from electrum_dash.simple_config import SimpleConfig
 
-from . import TestCaseForTestnet
+from . import TestCaseForTestnet, ElectrumTestCase
 
 
-class TestCommands(unittest.TestCase):
+class TestCommands(ElectrumTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.asyncio_loop, self._stop_loop, self._loop_thread = create_and_start_event_loop()
+        self.config = SimpleConfig({'electrum_path': self.electrum_path})
+
+    def tearDown(self):
+        super().tearDown()
+        self.asyncio_loop.call_soon_threadsafe(self._stop_loop.set_result, 1)
+        self._loop_thread.join(timeout=1)
 
     def test_setconfig_non_auth_number(self):
         self.assertEqual(7777, Commands._setconfig_normalize_value('rpcport', "7777"))
@@ -46,83 +58,154 @@ class TestCommands(unittest.TestCase):
         self.assertTrue(eval_bool("1"))
 
     def test_convert_xkey(self):
-        cmds = Commands(config=None, wallet=None, network=None)
+        cmds = Commands(config=self.config)
         xpubs = {
             ("xpub6CCWFbvCbqF92kGwm9nV7t7RvVoQUKaq5USMdyVP6jvv1NgN52KAX6NNYCeE8Ca7JQC4K5tZcnQrubQcjJ6iixfPs4pwAQJAQgTt6hBjg11", "standard"),
         }
         for xkey1, xtype1 in xpubs:
             for xkey2, xtype2 in xpubs:
-                self.assertEqual(xkey2, cmds.convert_xkey(xkey1, xtype2))
+                self.assertEqual(xkey2, cmds._run('convert_xkey', (xkey1, xtype2)))
 
         xprvs = {
             ("xprv9yD9r6PJmTgqpGCUf8FUkkAhNTxv4rryiFWkqb5mYQPw8aMDXUzuyJ3tgv5vUqYkdK1E6Q5jKxPss4HkMBYV4q8AfG8t7rxgyS4xQX4ndAm", "standard"),
         }
         for xkey1, xtype1 in xprvs:
             for xkey2, xtype2 in xprvs:
-                self.assertEqual(xkey2, cmds.convert_xkey(xkey1, xtype2))
+                self.assertEqual(xkey2, cmds._run('convert_xkey', (xkey1, xtype2)))
 
-    @mock.patch.object(storage.WalletStorage, '_write')
-    def test_encrypt_decrypt(self, mock_write):
+    @mock.patch.object(wallet.Abstract_Wallet, 'save_db')
+    def test_encrypt_decrypt(self, mock_save_db):
         wallet = restore_wallet_from_text('p2pkh:XJvTzLoBy3jPMZFSTzK6KqTiNR3n5xbreSScEy7u9C8fEf1GZG3X',
-                                          path='if_this_exists_mocking_failed_648151893')['wallet']
-        cmds = Commands(config=None, wallet=wallet, network=None)
+                                          path='if_this_exists_mocking_failed_648151893',
+                                          config=self.config)['wallet']
+        cmds = Commands(config=self.config)
         cleartext = "asdasd this is the message"
         pubkey = "021f110909ded653828a254515b58498a6bafc96799fb0851554463ed44ca7d9da"
-        ciphertext = cmds.encrypt(pubkey, cleartext)
-        self.assertEqual(cleartext, cmds.decrypt(pubkey, ciphertext))
+        ciphertext = cmds._run('encrypt', (pubkey, cleartext))
+        self.assertEqual(cleartext, cmds._run('decrypt', (pubkey, ciphertext), wallet=wallet))
 
-    @mock.patch.object(storage.WalletStorage, '_write')
-    def test_export_private_key_imported(self, mock_write):
+    @mock.patch.object(wallet.Abstract_Wallet, 'save_db')
+    def test_export_private_key_imported(self, mock_save_db):
         wallet = restore_wallet_from_text('p2pkh:XGx8LpkmLRv9RiMvpYx965BCaQKQbeMVVqgAh7B5SQVdosQiKJ4i p2pkh:XEn9o6oayjsRmoEQwDbvkrWVvjRNqPj3xNskJJPAKraJTrWuutwd',
-                                          path='if_this_exists_mocking_failed_648151893')['wallet']
-        cmds = Commands(config=None, wallet=wallet, network=None)
+                                          path='if_this_exists_mocking_failed_648151893',
+                                          config=self.config)['wallet']
+        cmds = Commands(config=self.config)
         # single address tests
         with self.assertRaises(Exception):
-            cmds.getprivatekeys("asdasd")  # invalid addr, though might raise "not in wallet"
+            cmds._run('getprivatekeys', ("asdasd",), wallet=wallet)  # invalid addr, though might raise "not in wallet"
         with self.assertRaises(Exception):
-            cmds.getprivatekeys("XdDHzW6aTeuQsraNXeEsPy5gAv1nUz7Y7Q")  # not in wallet
+            cmds._run('getprivatekeys', ("XdDHzW6aTeuQsraNXeEsPy5gAv1nUz7Y7Q",), wallet=wallet)  # not in wallet
         self.assertEqual("p2pkh:XEn9o6oayjsRmoEQwDbvkrWVvjRNqPj3xNskJJPAKraJTrWuutwd",
-                         cmds.getprivatekeys("Xci5KnMVkHrqBQk9cU4jwmzJfgaTPopHbz"))
+                         cmds._run('getprivatekeys', ("Xci5KnMVkHrqBQk9cU4jwmzJfgaTPopHbz",), wallet=wallet))
         # list of addresses tests
         with self.assertRaises(Exception):
-            cmds.getprivatekeys(['XmQ3Tn67Fgs7bwNXthtiEnBFh7ZeDG3aw2', 'asd'])
+            cmds._run('getprivatekeys', (['XmQ3Tn67Fgs7bwNXthtiEnBFh7ZeDG3aw2', 'asd'], ), wallet=wallet)
         self.assertEqual(['p2pkh:XGx8LpkmLRv9RiMvpYx965BCaQKQbeMVVqgAh7B5SQVdosQiKJ4i', 'p2pkh:XEn9o6oayjsRmoEQwDbvkrWVvjRNqPj3xNskJJPAKraJTrWuutwd'],
-                         cmds.getprivatekeys(['XmQ3Tn67Fgs7bwNXthtiEnBFh7ZeDG3aw2', 'Xci5KnMVkHrqBQk9cU4jwmzJfgaTPopHbz']))
+                         cmds._run('getprivatekeys', (['XmQ3Tn67Fgs7bwNXthtiEnBFh7ZeDG3aw2', 'Xci5KnMVkHrqBQk9cU4jwmzJfgaTPopHbz'], ), wallet=wallet))
 
-    @mock.patch.object(storage.WalletStorage, '_write')
-    def test_export_private_key_deterministic(self, mock_write):
+    @mock.patch.object(wallet.Abstract_Wallet, 'save_db')
+    def test_export_private_key_deterministic(self, mock_save_db):
         wallet = restore_wallet_from_text('hint shock chair puzzle shock traffic drastic note dinosaur mention suggest sweet',
                                           gap_limit=2,
-                                          path='if_this_exists_mocking_failed_648151893')['wallet']
-        cmds = Commands(config=None, wallet=wallet, network=None)
+                                          path='if_this_exists_mocking_failed_648151893',
+                                          config=self.config)['wallet']
+        cmds = Commands(config=self.config)
         # single address tests
         with self.assertRaises(Exception):
-            cmds.getprivatekeys("asdasd")  # invalid addr, though might raise "not in wallet"
+            cmds._run('getprivatekeys', ("asdasd",), wallet=wallet)  # invalid addr, though might raise "not in wallet"
         with self.assertRaises(Exception):
-            cmds.getprivatekeys("XdDHzW6aTeuQsraNXeEsPy5gAv1nUz7Y7Q")  # not in wallet
+            cmds._run('getprivatekeys', ("XdDHzW6aTeuQsraNXeEsPy5gAv1nUz7Y7Q",), wallet=wallet)  # not in wallet
         self.assertEqual("p2pkh:XE5VEmWKQRK5N7kQMfw6KqoRp3ExKWgaeCKsxsmDFBxJJBgdQdTH",
-                         cmds.getprivatekeys("XvmHzyQe8QWbvv17wc1PPMyJgaomknSp7W"))
+                         cmds._run('getprivatekeys', ("XvmHzyQe8QWbvv17wc1PPMyJgaomknSp7W",), wallet=wallet))
         # list of addresses tests
         with self.assertRaises(Exception):
-            cmds.getprivatekeys(['XvmHzyQe8QWbvv17wc1PPMyJgaomknSp7W', 'asd'])
+            cmds._run('getprivatekeys', (['XvmHzyQe8QWbvv17wc1PPMyJgaomknSp7W', 'asd'],), wallet=wallet)
         self.assertEqual(['p2pkh:XE5VEmWKQRK5N7kQMfw6KqoRp3ExKWgaeCKsxsmDFBxJJBgdQdTH', 'p2pkh:XGtpLmVGmaRnfvRvd4qxSeE7PqJoi9FUfkgPKD24PeoJsZCh1EXg'],
-                         cmds.getprivatekeys(['XvmHzyQe8QWbvv17wc1PPMyJgaomknSp7W', 'XoEUKPPiPETff1S4oQmo4HGR1rYrRAX6uT']))
+                         cmds._run('getprivatekeys', (['XvmHzyQe8QWbvv17wc1PPMyJgaomknSp7W', 'XoEUKPPiPETff1S4oQmo4HGR1rYrRAX6uT'], ), wallet=wallet))
 
 
 class TestCommandsTestnet(TestCaseForTestnet):
 
+    def setUp(self):
+        super().setUp()
+        self.asyncio_loop, self._stop_loop, self._loop_thread = create_and_start_event_loop()
+        self.config = SimpleConfig({'electrum_path': self.electrum_path})
+
+    def tearDown(self):
+        super().tearDown()
+        self.asyncio_loop.call_soon_threadsafe(self._stop_loop.set_result, 1)
+        self._loop_thread.join(timeout=1)
+
     def test_convert_xkey(self):
-        cmds = Commands(config=None, wallet=None, network=None)
+        cmds = Commands(config=self.config)
         xpubs = {
             ("tpubD8p5qNfjczgTGbh9qgNxsbFgyhv8GgfVkmp3L88qtRm5ibUYiDVCrn6WYfnGey5XVVw6Bc5QNQUZW5B4jFQsHjmaenvkFUgWtKtgj5AdPm9", "standard"),
         }
         for xkey1, xtype1 in xpubs:
             for xkey2, xtype2 in xpubs:
-                self.assertEqual(xkey2, cmds.convert_xkey(xkey1, xtype2))
+                self.assertEqual(xkey2, cmds._run('convert_xkey', (xkey1, xtype2)))
 
         xprvs = {
             ("tprv8c83gxdVUcznP8fMx2iNUBbaQgQC7MUbBUDG3c6YU9xgt7Dn5pfcgHUeNZTAvuYmNgVHjyTzYzGWwJr7GvKCm2FkPaaJipyipbfJeB3tdPW", "standard"),
         }
         for xkey1, xtype1 in xprvs:
             for xkey2, xtype2 in xprvs:
-                self.assertEqual(xkey2, cmds.convert_xkey(xkey1, xtype2))
+                self.assertEqual(xkey2, cmds._run('convert_xkey', (xkey1, xtype2)))
+
+    def test_serialize(self):
+        cmds = Commands(config=self.config)
+        jsontx = {
+            "inputs": [
+                {
+                    "prevout_hash": "9d221a69ca3997cbeaf5624d723e7dc5f829b1023078c177d37bdae95f37c539",
+                    "prevout_n": 1,
+                    "value": 1000000,
+                    "privkey": "p2pkh:cVDXzzQg6RoCTfiKpe8MBvmm5d5cJc6JLuFApsFDKwWa6F5TVHpD"
+                }
+            ],
+            "outputs": [
+                {
+                    "address": "yVMyvBvALMa12EJaqhEwu4tJ5h4tWcn9Yz",
+                    "value": 990000
+                }
+            ]
+        }
+        self.assertEqual("020000000139c5375fe9da7bd377c1783002b129f8c57d3e724d62f5eacb9739ca691a229d010000006a4730440220724a67810148fdc9474a71fafd116065d918c494dbabd4ad979a597045e9291c0220728fc15a0422cdb2624d6642fdd2e3c817131c5563309c8a6ac7a02846a082000121021f110909ded653828a254515b58498a6bafc96799fb0851554463ed44ca7d9dafeffffff01301b0f00000000001976a9146333e61a83cf112553c2f93629dbc9bba70b594f88ac00000000",
+                         cmds._run('serialize', (jsontx,)))
+
+    def test_serialize_custom_nsequence(self):
+        cmds = Commands(config=self.config)
+        jsontx = {
+            "inputs": [
+                {
+                    "prevout_hash": "9d221a69ca3997cbeaf5624d723e7dc5f829b1023078c177d37bdae95f37c539",
+                    "prevout_n": 1,
+                    "value": 1000000,
+                    "privkey": "p2pkh:cVDXzzQg6RoCTfiKpe8MBvmm5d5cJc6JLuFApsFDKwWa6F5TVHpD",
+                    "nsequence": 0xfffffffd
+                }
+            ],
+            "outputs": [
+                {
+                    "address": "yVMyvBvALMa12EJaqhEwu4tJ5h4tWcn9Yz",
+                    "value": 990000
+                }
+            ]
+        }
+        print(cmds._run('serialize', (jsontx,)))
+        self.assertEqual("020000000139c5375fe9da7bd377c1783002b129f8c57d3e724d62f5eacb9739ca691a229d010000006a4730440220100ca9083e11fb3adfc201591c8de7d6c8f6da70cddf090416ed4e7d54a1277702200c86304c89a187075d4992eb4741794f28aef08c1d025a009fb52d9ada8039860121021f110909ded653828a254515b58498a6bafc96799fb0851554463ed44ca7d9dafdffffff01301b0f00000000001976a9146333e61a83cf112553c2f93629dbc9bba70b594f88ac00000000",
+                         cmds._run('serialize', (jsontx,)))
+
+    @mock.patch.object(wallet.Abstract_Wallet, 'save_db')
+    def test_getprivatekeyforpath(self, mock_save_db):
+        wallet = restore_wallet_from_text('hint shock chair puzzle shock traffic drastic note dinosaur mention suggest sweet',
+                                          gap_limit=2,
+                                          path='if_this_exists_mocking_failed_648151893',
+                                          config=self.config)['wallet']
+        cmds = Commands(config=self.config)
+        self.assertEqual("p2pkh:cRVRdGfHrP9zb3cNTT1HGoG9JPcZfvjBMqUa2vTDMGDnKG1dNu24",
+                         cmds._run('getprivatekeyforpath', ([0, 10000],), wallet=wallet))
+        self.assertEqual("p2pkh:cRVRdGfHrP9zb3cNTT1HGoG9JPcZfvjBMqUa2vTDMGDnKG1dNu24",
+                         cmds._run('getprivatekeyforpath', ("m/0/10000",), wallet=wallet))
+        self.assertEqual("p2pkh:cS2exaULytoQ9CR89QHJDMg82NWKZ6f8rFboU7LGbHhdUMXxpPcd",
+                         cmds._run('getprivatekeyforpath', ("m/5h/100000/88h/7",), wallet=wallet))

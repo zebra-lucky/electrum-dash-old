@@ -33,7 +33,7 @@ import threading
 from collections import namedtuple, defaultdict
 from struct import pack
 
-from . import constants
+from . import constants, util
 from .constants import CHUNK_SIZE
 from .crypto import sha256d
 from .dash_msg import DashSMLEntry, DashQFCommitMsg
@@ -401,13 +401,11 @@ class MNList(Logger):
 
     def start(self):
         # network
-        self.network.register_callback(self.on_protx_diff, ['protx-diff'])
-        self.network.register_callback(self.on_protx_info, ['protx-info'])
-        self.network.register_callback(self.on_network_status, ['status'])
-        self.network.register_callback(self.on_network_updated,
-                                       ['network_updated'])
-        self.network.register_callback(self.on_wallet_updated,
-                                       ['wallet_updated'])
+        util.register_callback(self.on_protx_diff, ['protx-diff'])
+        util.register_callback(self.on_protx_info, ['protx-info'])
+        util.register_callback(self.on_network_status, ['status'])
+        util.register_callback(self.on_network_updated, ['network_updated'])
+        util.register_callback(self.on_wallet_updated, ['wallet_updated'])
         # dash_net
         self.dash_net.register_callback(self.on_dash_net_updated,
                                         ['dash-net-updated'])
@@ -417,11 +415,11 @@ class MNList(Logger):
 
     def stop(self):
         # network
-        self.network.unregister_callback(self.on_protx_diff)
-        self.network.unregister_callback(self.on_protx_info)
-        self.network.unregister_callback(self.on_network_updated)
-        self.network.unregister_callback(self.on_network_status)
-        self.network.unregister_callback(self.on_wallet_updated)
+        util.unregister_callback(self.on_protx_diff)
+        util.unregister_callback(self.on_protx_info)
+        util.unregister_callback(self.on_network_updated)
+        util.unregister_callback(self.on_network_status)
+        util.unregister_callback(self.on_wallet_updated)
         # dash_net
         self.dash_net.unregister_callback(self.on_dash_net_updated)
         self.dash_net.unregister_callback(self.on_mnlistdiff)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
 # Electrum - lightweight Bitcoin client
-# Copyright (C) 2015 Thomas Voegtlin
+# Copyright (C) 2019 The Electrum Developers
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation files
@@ -22,53 +22,144 @@
 # ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-import os
-import ast
-import json
-import copy
 import threading
-import time
-from collections import defaultdict
-from typing import Dict, Optional
+import copy
+import json
 
-from . import util, bitcoin
-from .util import profiler, WalletFileException, multisig_type, TxMinedInfo
-from .keystore import bip44_derivation
-from .transaction import Transaction
+from . import util
 from .logging import Logger
 
-# seed_version is now used for the version of the wallet file
+JsonDBJsonEncoder = util.MyEncoder
 
-OLD_SEED_VERSION = 4        # electrum versions < 2.0
-NEW_SEED_VERSION = 11       # electrum versions >= 2.0
-FINAL_SEED_VERSION = 18     # electrum >= 2.7 will set this to prevent
-                            # old versions from overwriting new format
+def modifier(func):
+    def wrapper(self, *args, **kwargs):
+        with self.lock:
+            self._modified = True
+            return func(self, *args, **kwargs)
+    return wrapper
+
+def locked(func):
+    def wrapper(self, *args, **kwargs):
+        with self.lock:
+            return func(self, *args, **kwargs)
+    return wrapper
 
 
-class JsonDBJsonEncoder(util.MyEncoder):
-    def default(self, obj):
-        if isinstance(obj, Transaction):
-            return str(obj)
-        return super().default(obj)
+class StoredObject:
+
+    db = None
+
+    def __setattr__(self, key, value):
+        if self.db:
+            self.db.set_modified(True)
+        object.__setattr__(self, key, value)
+
+    def set_db(self, db):
+        self.db = db
+
+    def to_json(self):
+        d = dict(vars(self))
+        d.pop('db', None)
+        # don't expose/store private stuff
+        d = {k: v for k, v in d.items()
+             if not k.startswith('_')}
+        return d
+
+
+_RaiseKeyError = object() # singleton for no-default behavior
+
+class StoredDict(dict):
+
+    def __init__(self, data, db, path):
+        self.db = db
+        self.lock = self.db.lock if self.db else threading.RLock()
+        self.path = path
+        # recursively convert dicts to StoredDict
+        for k, v in list(data.items()):
+            self.__setitem__(k, v)
+
+    def convert_key(self, key):
+        """Convert int keys to str keys, as only those are allowed in json."""
+        # NOTE: this is evil. really hard to keep in mind and reason about. :(
+        #       e.g.: imagine setting int keys everywhere, and then iterating over the dict:
+        #             suddenly the keys are str...
+        return str(int(key)) if isinstance(key, int) else key
+
+    @locked
+    def __setitem__(self, key, v):
+        key = self.convert_key(key)
+        is_new = key not in self
+        # early return to prevent unnecessary disk writes
+        if not is_new and self[key] == v:
+            return
+        # recursively set db and path
+        if isinstance(v, StoredDict):
+            v.db = self.db
+            v.path = self.path + [key]
+            for k, vv in v.items():
+                v[k] = vv
+        # recursively convert dict to StoredDict.
+        # _convert_dict is called breadth-first
+        elif isinstance(v, dict):
+            if self.db:
+                v = self.db._convert_dict(self.path, key, v)
+            if not self.db or self.db._should_convert_to_stored_dict(key):
+                v = StoredDict(v, self.db, self.path + [key])
+        # convert_value is called depth-first
+        if isinstance(v, dict) or isinstance(v, str):
+            if self.db:
+                v = self.db._convert_value(self.path, key, v)
+        # set parent of StoredObject
+        if isinstance(v, StoredObject):
+            v.set_db(self.db)
+        # set item
+        dict.__setitem__(self, key, v)
+        if self.db:
+            self.db.set_modified(True)
+
+    @locked
+    def __delitem__(self, key):
+        key = self.convert_key(key)
+        dict.__delitem__(self, key)
+        if self.db:
+            self.db.set_modified(True)
+
+    @locked
+    def __getitem__(self, key):
+        key = self.convert_key(key)
+        return dict.__getitem__(self, key)
+
+    @locked
+    def __contains__(self, key):
+        key = self.convert_key(key)
+        return dict.__contains__(self, key)
+
+    @locked
+    def pop(self, key, v=_RaiseKeyError):
+        key = self.convert_key(key)
+        if v is _RaiseKeyError:
+            r = dict.pop(self, key)
+        else:
+            r = dict.pop(self, key, v)
+        if self.db:
+            self.db.set_modified(True)
+        return r
+
+    @locked
+    def get(self, key, default=None):
+        key = self.convert_key(key)
+        return dict.get(self, key, default)
+
+
 
 
 class JsonDB(Logger):
 
-    def __init__(self, raw, *, manual_upgrades):
+    def __init__(self, data):
         Logger.__init__(self)
         self.lock = threading.RLock()
-        self.data = {}
+        self.data = data
         self._modified = False
-        self.manual_upgrades = manual_upgrades
-        self.upgrade_done = False
-        self._called_after_upgrade_tasks = False
-        if raw:  # loading existing db
-            self.load_data(raw)
-        else:  # creating new db
-            self.put('seed_version', FINAL_SEED_VERSION)
-            self._after_upgrade_tasks()
-        self._addr_to_addr_index = {}  # address -> (is_change, index)
-        self._ps_ks_addr_to_addr_index = {}  # address -> (is_change, index)
 
     def set_modified(self, b):
         with self.lock:
@@ -77,26 +168,11 @@ class JsonDB(Logger):
     def modified(self):
         return self._modified
 
-    def modifier(func):
-        def wrapper(self, *args, **kwargs):
-            with self.lock:
-                self._modified = True
-                return func(self, *args, **kwargs)
-        return wrapper
-
-    def locked(func):
-        def wrapper(self, *args, **kwargs):
-            with self.lock:
-                return func(self, *args, **kwargs)
-        return wrapper
-
     @locked
     def get(self, key, default=None):
         v = self.data.get(key)
         if v is None:
             v = default
-        else:
-            v = copy.deepcopy(v)
         return v
 
     @modifier
@@ -116,1087 +192,9 @@ class JsonDB(Logger):
             return True
         return False
 
-    def commit(self):
-        pass
-
     @locked
     def dump(self):
         return json.dumps(self.data, indent=4, sort_keys=True, cls=JsonDBJsonEncoder)
 
-    def load_data(self, s):
-        try:
-            self.data = json.loads(s)
-        except:
-            try:
-                d = ast.literal_eval(s)
-                labels = d.get('labels', {})
-            except Exception as e:
-                raise IOError("Cannot read wallet file")
-            self.data = {}
-            for key, value in d.items():
-                try:
-                    json.dumps(key)
-                    json.dumps(value)
-                except:
-                    self.logger.info(f'Failed to convert label to json format: {key}')
-                    continue
-                self.data[key] = value
-        if not isinstance(self.data, dict):
-            raise WalletFileException("Malformed wallet file (not dict)")
-
-        if not self.manual_upgrades and self.requires_split():
-            raise WalletFileException("This wallet has multiple accounts and must be split")
-
-        if not self.requires_upgrade():
-            self._after_upgrade_tasks()
-        elif not self.manual_upgrades:
-            self.upgrade()
-
-    def requires_split(self):
-        d = self.get('accounts', {})
-        return len(d) > 1
-
-    def split_accounts(self):
-        result = []
-        # backward compatibility with old wallets
-        d = self.get('accounts', {})
-        if len(d) < 2:
-            return
-        wallet_type = self.get('wallet_type')
-        if wallet_type == 'old':
-            assert len(d) == 2
-            data1 = copy.deepcopy(self.data)
-            data1['accounts'] = {'0': d['0']}
-            data1['suffix'] = 'deterministic'
-            data2 = copy.deepcopy(self.data)
-            data2['accounts'] = {'/x': d['/x']}
-            data2['seed'] = None
-            data2['seed_version'] = None
-            data2['master_public_key'] = None
-            data2['wallet_type'] = 'imported'
-            data2['suffix'] = 'imported'
-            result = [data1, data2]
-
-        elif wallet_type in ['bip44', 'trezor', 'keepkey', 'ledger', 'btchip',
-                             'digitalbitbox', 'safe_t', 'hideez']:
-            mpk = self.get('master_public_keys')
-            for k in d.keys():
-                i = int(k)
-                x = d[k]
-                if x.get("pending"):
-                    continue
-                xpub = mpk["x/%d'"%i]
-                new_data = copy.deepcopy(self.data)
-                # save account, derivation and xpub at index 0
-                new_data['accounts'] = {'0': x}
-                new_data['master_public_keys'] = {"x/0'": xpub}
-                new_data['derivation'] = bip44_derivation(k)
-                new_data['suffix'] = k
-                result.append(new_data)
-        else:
-            raise WalletFileException("This wallet has multiple accounts and must be split")
-        return result
-
-    def requires_upgrade(self):
-        return self.get_seed_version() < FINAL_SEED_VERSION
-
-    @profiler
-    def upgrade(self):
-        self.logger.info('upgrading wallet format')
-        if self._called_after_upgrade_tasks:
-            # we need strict ordering between upgrade() and after_upgrade_tasks()
-            raise Exception("'after_upgrade_tasks' must NOT be called before 'upgrade'")
-        self._convert_imported()
-        self._convert_wallet_type()
-        self._convert_account()
-        self._convert_version_13_b()
-        self._convert_version_14()
-        self._convert_version_15()
-        self._convert_version_16()
-        self._convert_version_17()
-        self._convert_version_18()
-        self.put('seed_version', FINAL_SEED_VERSION)  # just to be sure
-        self.upgrade_done = True
-
-        self._after_upgrade_tasks()
-
-    def _after_upgrade_tasks(self):
-        self._called_after_upgrade_tasks = True
-        self._load_transactions()
-
-    def _convert_wallet_type(self):
-        if not self._is_upgrade_method_needed(0, 13):
-            return
-
-        wallet_type = self.get('wallet_type')
-        if wallet_type == 'btchip': wallet_type = 'ledger'
-        if self.get('keystore') or self.get('x1/') or wallet_type=='imported':
-            return False
-        assert not self.requires_split()
-        seed_version = self.get_seed_version()
-        seed = self.get('seed')
-        xpubs = self.get('master_public_keys')
-        xprvs = self.get('master_private_keys', {})
-        mpk = self.get('master_public_key')
-        keypairs = self.get('keypairs')
-        key_type = self.get('key_type')
-        if seed_version == OLD_SEED_VERSION or wallet_type == 'old':
-            d = {
-                'type': 'old',
-                'seed': seed,
-                'mpk': mpk,
-            }
-            self.put('wallet_type', 'standard')
-            self.put('keystore', d)
-
-        elif key_type == 'imported':
-            d = {
-                'type': 'imported',
-                'keypairs': keypairs,
-            }
-            self.put('wallet_type', 'standard')
-            self.put('keystore', d)
-
-        elif wallet_type in ['xpub', 'standard']:
-            xpub = xpubs["x/"]
-            xprv = xprvs.get("x/")
-            d = {
-                'type': 'bip32',
-                'xpub': xpub,
-                'xprv': xprv,
-                'seed': seed,
-            }
-            self.put('wallet_type', 'standard')
-            self.put('keystore', d)
-
-        elif wallet_type in ['bip44']:
-            xpub = xpubs["x/0'"]
-            xprv = xprvs.get("x/0'")
-            d = {
-                'type': 'bip32',
-                'xpub': xpub,
-                'xprv': xprv,
-            }
-            self.put('wallet_type', 'standard')
-            self.put('keystore', d)
-
-        elif wallet_type in ['trezor', 'keepkey', 'ledger', 'digitalbitbox',
-                             'safe_t', 'hideez']:
-            xpub = xpubs["x/0'"]
-            derivation = self.get('derivation', bip44_derivation(0))
-            d = {
-                'type': 'hardware',
-                'hw_type': wallet_type,
-                'xpub': xpub,
-                'derivation': derivation,
-            }
-            self.put('wallet_type', 'standard')
-            self.put('keystore', d)
-
-        elif multisig_type(wallet_type):
-            for key in xpubs.keys():
-                d = {
-                    'type': 'bip32',
-                    'xpub': xpubs[key],
-                    'xprv': xprvs.get(key),
-                }
-                if key == 'x1/' and seed:
-                    d['seed'] = seed
-                self.put(key, d)
-        else:
-            raise WalletFileException('Unable to tell wallet type. Is this even a wallet file?')
-        # remove junk
-        self.put('master_public_key', None)
-        self.put('master_public_keys', None)
-        self.put('master_private_keys', None)
-        self.put('derivation', None)
-        self.put('seed', None)
-        self.put('keypairs', None)
-        self.put('key_type', None)
-
-    def _convert_version_13_b(self):
-        # version 13 is ambiguous, and has an earlier and a later structure
-        if not self._is_upgrade_method_needed(0, 13):
-            return
-
-        if self.get('wallet_type') == 'standard':
-            if self.get('keystore').get('type') == 'imported':
-                pubkeys = self.get('keystore').get('keypairs').keys()
-                d = {'change': []}
-                receiving_addresses = []
-                for pubkey in pubkeys:
-                    addr = bitcoin.pubkey_to_address('p2pkh', pubkey)
-                    receiving_addresses.append(addr)
-                d['receiving'] = receiving_addresses
-                self.put('addresses', d)
-                self.put('pubkeys', None)
-
-        self.put('seed_version', 13)
-
-    def _convert_version_14(self):
-        # convert imported wallets for 3.0
-        if not self._is_upgrade_method_needed(13, 13):
-            return
-
-        if self.get('wallet_type') =='imported':
-            addresses = self.get('addresses')
-            if type(addresses) is list:
-                addresses = dict([(x, None) for x in addresses])
-                self.put('addresses', addresses)
-        elif self.get('wallet_type') == 'standard':
-            if self.get('keystore').get('type')=='imported':
-                addresses = set(self.get('addresses').get('receiving'))
-                pubkeys = self.get('keystore').get('keypairs').keys()
-                assert len(addresses) == len(pubkeys)
-                d = {}
-                for pubkey in pubkeys:
-                    addr = bitcoin.pubkey_to_address('p2pkh', pubkey)
-                    assert addr in addresses
-                    d[addr] = {
-                        'pubkey': pubkey,
-                        'redeem_script': None,
-                        'type': 'p2pkh'
-                    }
-                self.put('addresses', d)
-                self.put('pubkeys', None)
-                self.put('wallet_type', 'imported')
-        self.put('seed_version', 14)
-
-    def _convert_version_15(self):
-        if not self._is_upgrade_method_needed(14, 14):
-            return
-        self.put('seed_version', 15)
-
-    def _convert_version_16(self):
-        # fixes issue #3193 for Imported_Wallets with addresses
-        # also, previous versions allowed importing any garbage as an address
-        #       which we now try to remove, see pr #3191
-        if not self._is_upgrade_method_needed(15, 15):
-            return
-
-        def remove_address(addr):
-            def remove_from_dict(dict_name):
-                d = self.get(dict_name, None)
-                if d is not None:
-                    d.pop(addr, None)
-                    self.put(dict_name, d)
-
-            def remove_from_list(list_name):
-                lst = self.get(list_name, None)
-                if lst is not None:
-                    s = set(lst)
-                    s -= {addr}
-                    self.put(list_name, list(s))
-
-            # note: we don't remove 'addr' from self.get('addresses')
-            remove_from_dict('addr_history')
-            remove_from_dict('labels')
-            remove_from_dict('payment_requests')
-            remove_from_list('frozen_addresses')
-
-        if self.get('wallet_type') == 'imported':
-            addresses = self.get('addresses')
-            assert isinstance(addresses, dict)
-            addresses_new = dict()
-            for address, details in addresses.items():
-                if not bitcoin.is_address(address):
-                    remove_address(address)
-                    continue
-                if details is None:
-                    addresses_new[address] = {}
-                else:
-                    addresses_new[address] = details
-            self.put('addresses', addresses_new)
-
-        self.put('seed_version', 16)
-
-    def _convert_version_17(self):
-        # delete pruned_txo; construct spent_outpoints
-        if not self._is_upgrade_method_needed(16, 16):
-            return
-
-        self.put('pruned_txo', None)
-
-        transactions = self.get('transactions', {})  # txid -> raw_tx
-        spent_outpoints = defaultdict(dict)
-        for txid, raw_tx in transactions.items():
-            tx = Transaction(raw_tx)
-            for txin in tx.inputs():
-                if txin['type'] == 'coinbase':
-                    continue
-                prevout_hash = txin['prevout_hash']
-                prevout_n = txin['prevout_n']
-                spent_outpoints[prevout_hash][str(prevout_n)] = txid
-        self.put('spent_outpoints', spent_outpoints)
-
-        self.put('seed_version', 17)
-
-    def _convert_version_18(self):
-        # delete verified_tx3 as its structure changed
-        if not self._is_upgrade_method_needed(17, 17):
-            return
-        self.put('verified_tx3', None)
-        self.put('seed_version', 18)
-
-    # def _convert_version_19(self):
-    #     TODO for "next" upgrade:
-    #       - move "pw_hash_version" from keystore to storage
-    #     pass
-
-    def _convert_imported(self):
-        if not self._is_upgrade_method_needed(0, 13):
-            return
-
-        # '/x' is the internal ID for imported accounts
-        d = self.get('accounts', {}).get('/x', {}).get('imported',{})
-        if not d:
-            return False
-        addresses = []
-        keypairs = {}
-        for addr, v in d.items():
-            pubkey, privkey = v
-            if privkey:
-                keypairs[pubkey] = privkey
-            else:
-                addresses.append(addr)
-        if addresses and keypairs:
-            raise WalletFileException('mixed addresses and privkeys')
-        elif addresses:
-            self.put('addresses', addresses)
-            self.put('accounts', None)
-        elif keypairs:
-            self.put('wallet_type', 'standard')
-            self.put('key_type', 'imported')
-            self.put('keypairs', keypairs)
-            self.put('accounts', None)
-        else:
-            raise WalletFileException('no addresses or privkeys')
-
-    def _convert_account(self):
-        if not self._is_upgrade_method_needed(0, 13):
-            return
-        self.put('accounts', None)
-
-    def _is_upgrade_method_needed(self, min_version, max_version):
-        assert min_version <= max_version
-        cur_version = self.get_seed_version()
-        if cur_version > max_version:
-            return False
-        elif cur_version < min_version:
-            raise WalletFileException(
-                'storage upgrade: unexpected version {} (should be {}-{})'
-                .format(cur_version, min_version, max_version))
-        else:
-            return True
-
-    @locked
-    def get_seed_version(self):
-        seed_version = self.get('seed_version')
-        if not seed_version:
-            seed_version = OLD_SEED_VERSION if len(self.get('master_public_key','')) == 128 else NEW_SEED_VERSION
-        if seed_version > FINAL_SEED_VERSION:
-            raise WalletFileException('This version of Dash Electrum is too old to open this wallet.\n'
-                                      '(highest supported storage version: {}, version of this file: {})'
-                                      .format(FINAL_SEED_VERSION, seed_version))
-        if seed_version >=12:
-            return seed_version
-        if seed_version not in [OLD_SEED_VERSION, NEW_SEED_VERSION]:
-            self._raise_unsupported_version(seed_version)
-        return seed_version
-
-    def _raise_unsupported_version(self, seed_version):
-        msg = "Your wallet has an unsupported seed version."
-        if seed_version in [5, 7, 8, 9, 10, 14]:
-            msg += "\n\nTo open this wallet, try 'git checkout seed_v%d'"%seed_version
-        if seed_version == 6:
-            # version 1.9.8 created v6 wallets when an incorrect seed was entered in the restore dialog
-            msg += '\n\nThis file was created because of a bug in version 1.9.8.'
-            if self.get('master_public_keys') is None and self.get('master_private_keys') is None and self.get('imported_keys') is None:
-                # pbkdf2 (at that time an additional dependency) was not included with the binaries, and wallet creation aborted.
-                msg += "\nIt does not contain any keys, and can safely be removed."
-            else:
-                # creation was complete if electrum was run from source
-                msg += "\nPlease open this file with Dash Electrum 1.9.8, and move your coins to a new wallet."
-        raise WalletFileException(msg)
-
-    @locked
-    def get_txi(self, tx_hash):
-        return list(self.txi.get(tx_hash, {}).keys())
-
-    @locked
-    def get_txo(self, tx_hash):
-        return list(self.txo.get(tx_hash, {}).keys())
-
-    @locked
-    def get_txi_addr(self, tx_hash, address):
-        return self.txi.get(tx_hash, {}).get(address, [])
-
-    @locked
-    def get_txo_addr(self, tx_hash, address):
-        return self.txo.get(tx_hash, {}).get(address, [])
-
-    @modifier
-    def add_txi_addr(self, tx_hash, addr, ser, v):
-        if tx_hash not in self.txi:
-            self.txi[tx_hash] = {}
-        d = self.txi[tx_hash]
-        if addr not in d:
-            # note that as this is a set, we can ignore "duplicates"
-            d[addr] = set()
-        d[addr].add((ser, v))
-
-    @modifier
-    def add_txo_addr(self, tx_hash, addr, n, v, is_coinbase):
-        if tx_hash not in self.txo:
-            self.txo[tx_hash] = {}
-        d = self.txo[tx_hash]
-        if addr not in d:
-            # note that as this is a set, we can ignore "duplicates"
-            d[addr] = set()
-        d[addr].add((n, v, is_coinbase))
-
-    @locked
-    def list_txi(self):
-        return list(self.txi.keys())
-
-    @locked
-    def list_txo(self):
-        return list(self.txo.keys())
-
-    @modifier
-    def remove_txi(self, tx_hash):
-        self.txi.pop(tx_hash, None)
-
-    @modifier
-    def remove_txo(self, tx_hash):
-        self.txo.pop(tx_hash, None)
-
-    @locked
-    def list_spent_outpoints(self):
-        return [(h, n)
-                for h in self.spent_outpoints.keys()
-                for n in self.get_spent_outpoints(h)
-        ]
-
-    @locked
-    def get_spent_outpoints(self, prevout_hash):
-        return list(self.spent_outpoints.get(prevout_hash, {}).keys())
-
-    @locked
-    def get_spent_outpoint(self, prevout_hash, prevout_n):
-        prevout_n = str(prevout_n)
-        return self.spent_outpoints.get(prevout_hash, {}).get(prevout_n)
-
-    @modifier
-    def remove_spent_outpoint(self, prevout_hash, prevout_n):
-        prevout_n = str(prevout_n)
-        self.spent_outpoints[prevout_hash].pop(prevout_n, None)
-        if not self.spent_outpoints[prevout_hash]:
-            self.spent_outpoints.pop(prevout_hash)
-
-    @modifier
-    def set_spent_outpoint(self, prevout_hash, prevout_n, tx_hash):
-        prevout_n = str(prevout_n)
-        if prevout_hash not in self.spent_outpoints:
-            self.spent_outpoints[prevout_hash] = {}
-        self.spent_outpoints[prevout_hash][prevout_n] = tx_hash
-
-    @modifier
-    def add_transaction(self, tx_hash: str, tx: Transaction) -> None:
-        assert isinstance(tx, Transaction)
-        self.transactions[tx_hash] = tx
-
-    @modifier
-    def remove_transaction(self, tx_hash) -> Optional[Transaction]:
-        return self.transactions.pop(tx_hash, None)
-
-    @locked
-    def get_transaction(self, tx_hash: str) -> Optional[Transaction]:
-        return self.transactions.get(tx_hash)
-
-    @locked
-    def list_transactions(self):
-        return list(self.transactions.keys())
-
-    @locked
-    def get_history(self):
-        return list(self.history.keys()) + list(self.ps_ks_hist.keys())
-
-    def is_addr_in_history(self, addr):
-        # does not mean history is non-empty!
-        return addr in self.history or addr in self.ps_ks_hist
-
-    @locked
-    def get_addr_history(self, addr):
-        if self.get_address_index(addr, ps_ks=True):
-            return self.ps_ks_hist.get(addr, [])
-        elif self.get_address_index(addr):
-            return self.history.get(addr, [])
-        else:
-            return []
-
-    @modifier
-    def set_addr_history(self, addr, hist):
-        if self.get_address_index(addr, ps_ks=True):
-            self.ps_ks_hist[addr] = hist
-        else:
-            self.history[addr] = hist
-
-    @modifier
-    def remove_addr_history(self, addr):
-        if self.get_address_index(addr, ps_ks=True):
-            self.ps_ks_hist.pop(addr, None)
-        else:
-            self.history.pop(addr, None)
-
-    @modifier
-    def add_islock(self, txid):
-        '''Stores new islock as {txid: (height, timestamp)}'''
-        timestamp = int(time.time())
-        self.islocks[txid] = (0, timestamp)
-
-    @modifier
-    def process_and_clear_islocks(self, local_height):
-        '''Clear islocks confirmed by 24 blocks.
-        Set height on islocks with verified txs'''
-        clear_txids = []
-        for txid, (height, timestamp) in self.islocks.items():
-            mined_info = self.get_verified_tx(txid)
-            if not mined_info:
-                if height > 0:  # clear islock height if tx becomes unverified
-                    self.islocks[txid] = (0, timestamp)
-                continue
-
-            conf = max(local_height - mined_info.height + 1, 0)
-            if conf >= 24:
-                clear_txids.append(txid)
-            elif height <= 0:  # set islock height to verified tx height
-                self.islocks[txid] = (mined_info.height, timestamp)
-
-        for txid in clear_txids:
-            self.islocks.pop(txid, None)
-
-    @locked
-    def get_islock(self, tx_hash):
-        '''Return timestamp of islock createion or None if not found'''
-        islock = self.islocks.get(tx_hash)
-        return islock[1] if islock else None
-
-    @modifier
-    def add_ps_tx(self, txid, tx_type, completed):
-        self.ps_txs[txid] = (int(tx_type), completed)
-
-    @modifier
-    def pop_ps_tx(self, txid):
-        self.ps_txs.pop(txid, (0, False))
-
-    @locked
-    def get_ps_tx(self, txid):
-        return self.ps_txs.get(txid, (0, False))
-
-    @locked
-    def get_ps_txs(self):
-        return self.ps_txs
-
-    @modifier
-    def add_ps_tx_removed(self, txid, tx_type, completed):
-        self.ps_txs_removed[txid] = (tx_type, completed)
-
-    @modifier
-    def pop_ps_tx_removed(self, txid):
-        self.ps_txs_removed.pop(txid, (0, False))
-
-    @locked
-    def get_ps_tx_removed(self, txid):
-        return self.ps_txs_removed.get(txid, (0, False))
-
-    @locked
-    def get_ps_txs_removed(self):
-        return self.ps_txs_removed
-
-    @locked
-    def get_ps_data(self, key, default_val=None):
-        return self.ps_data.get(key, default_val)
-
-    @modifier
-    def set_ps_data(self, key, val):
-        self.ps_data[key] = val
-
-    @modifier
-    def update_ps_data(self, key, data_dict):
-        if self.ps_data.get(key) is None:
-            self.ps_data[key] = {}
-        assert type(self.ps_data[key]) == dict
-        self.ps_data[key].update(data_dict)
-
-    @modifier
-    def pop_ps_data(self, key, data_dict_key):
-        assert type(self.ps_data[key]) == dict
-        return self.ps_data[key].pop(data_dict_key, None)
-
-    @modifier
-    def add_ps_collateral(self, outpoint, ps_collateral):
-        self.ps_collaterals[outpoint] = ps_collateral
-
-    @modifier
-    def pop_ps_collateral(self, outpoint):
-        return self.ps_collaterals.pop(outpoint, None)
-
-    @locked
-    def get_ps_collateral(self, outpoint=None):
-        cnt = len(self.ps_collaterals)
-        if outpoint is not None:
-            return self.ps_collaterals.get(outpoint)
-        elif cnt == 0:
-            return None, None
-        elif cnt == 1:
-            outpoint = list(self.ps_collaterals.keys())[0]
-            ps_collateral = self.ps_collaterals.get(outpoint)
-            return outpoint, ps_collateral
-        else:
-            raise Exception('ps_collateral has multiple values')
-
-    @locked
-    def get_ps_collaterals(self, outpoint=None):
-        return self.ps_collaterals
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _add_ps_spending_collateral(self, outpoint, uuid):
-        self.ps_spending_collaterals[outpoint] = uuid
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _pop_ps_spending_collateral(self, outpoint):
-        return self.ps_spending_collaterals.pop(outpoint, None)
-
-    @locked
-    def get_ps_spending_collateral(self, outpoint):
-        return self.ps_spending_collaterals.get(outpoint)
-
-    @locked
-    def get_ps_spending_collaterals(self):
-        return self.ps_spending_collaterals
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _add_ps_reserved(self, addr, data):
-        if addr in self.ps_reserved:
-            raise WalletFileException(f'Address {addr} already in ps_reserved')
-        self.ps_reserved[addr] = data
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _pop_ps_reserved(self, addr):
-        return self.ps_reserved.pop(addr, None)
-
-    @locked
-    def get_ps_reserved(self, addr=None):
-        if addr is None:
-            return self.ps_reserved
-        else:
-            return self.ps_reserved.get(addr)
-
-    @locked
-    def select_ps_reserved(self, for_change=False, data=None):
-        imp_addrs = getattr(self, 'imported_addresses', None)
-        imp_addrs = list(imp_addrs.keys()) if imp_addrs else []
-        if for_change:
-            w_addrs = imp_addrs if imp_addrs else self.change_addresses
-            sub_addrs = w_addrs + self.ps_ks_change_addrs
-        else:
-            w_addrs = imp_addrs if imp_addrs else self.receiving_addresses
-            sub_addrs = w_addrs + self.ps_ks_receiving_addrs
-        res = []
-        for addr, addr_data in self.ps_reserved.items():
-            if addr not in sub_addrs:
-                continue
-            if addr_data != data:
-                continue
-            res.append(addr)
-        return res
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _add_ps_denom(self, outpoint, denom):
-        self.ps_denoms[outpoint] = denom
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _pop_ps_denom(self, outpoint):
-        return self.ps_denoms.pop(outpoint, None)
-
-    @locked
-    def get_ps_denom(self, outpoint):
-        return self.ps_denoms.get(outpoint)
-
-    @locked
-    def get_ps_denoms(self, min_rounds=None, max_rounds=None):
-        if min_rounds is None and max_rounds is None:
-            return self.ps_denoms
-        if min_rounds is None:
-            min_rounds = 0
-        if max_rounds is None:
-            max_rounds = 1e9
-        return {k: v for k, v in self.ps_denoms.items()
-                if max_rounds >= v[2] >= min_rounds}
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _add_ps_spending_denom(self, outpoint, uuid):
-        self.ps_spending_denoms[outpoint] = uuid
-
-    @modifier  # do not use directly, use PSManager method of the same name
-    def _pop_ps_spending_denom(self, outpoint):
-        return self.ps_spending_denoms.pop(outpoint, None)
-
-    @locked
-    def get_ps_spending_denom(self, outpoint):
-        return self.ps_spending_denoms.get(outpoint)
-
-    @locked
-    def get_ps_spending_denoms(self):
-        return self.ps_spending_denoms
-
-    @modifier
-    def add_ps_spent_denom(self, outpoint, spent):
-        self.ps_spent_denoms[outpoint] = spent
-
-    @modifier
-    def pop_ps_spent_denom(self, outpoint):
-        return self.ps_spent_denoms.pop(outpoint, None)
-
-    @locked
-    def get_ps_spent_denom(self, outpoint):
-        return self.ps_spent_denoms.get(outpoint)
-
-    @locked
-    def get_ps_spent_denoms(self):
-        return self.ps_spent_denoms
-
-    @modifier
-    def add_ps_other(self, outpoint, unknown):
-        self.ps_others[outpoint] = unknown
-
-    @modifier
-    def pop_ps_other(self, outpoint):
-        return self.ps_others.pop(outpoint, None)
-
-    @locked
-    def get_ps_other(self, outpoint):
-        return self.ps_others.get(outpoint)
-
-    @locked
-    def get_ps_others(self):
-        return self.ps_others
-
-    @modifier
-    def add_ps_spent_other(self, outpoint, spent):
-        self.ps_spent_others[outpoint] = spent
-
-    @modifier
-    def pop_ps_spent_other(self, outpoint):
-        return self.ps_spent_others.pop(outpoint, None)
-
-    @locked
-    def get_ps_spent_other(self, outpoint):
-        return self.ps_spent_others.get(outpoint)
-
-    @locked
-    def get_ps_spent_others(self):
-        return self.ps_spent_others
-
-    @modifier
-    def add_ps_spent_collateral(self, outpoint, spent_collateral):
-        self.ps_spent_collaterals[outpoint] = spent_collateral
-
-    @modifier
-    def pop_ps_spent_collateral(self, outpoint):
-        return self.ps_spent_collaterals.pop(outpoint, None)
-
-    @locked
-    def get_ps_spent_collateral(self, outpoint):
-        return self.ps_spent_collaterals.get(outpoint)
-
-    @locked
-    def get_ps_spent_collaterals(self):
-        return self.ps_spent_collaterals
-
-    @locked
-    def get_ps_addresses(self, min_rounds=None):
-        '''
-        Return addresses used for PS operations or saved to ps_reserved.
-
-        Limited by min_rounds (<0 for ps[_spent]_collaterals, ps_spent_denoms,
-        ps_reserved, 0 for created denominations, 1 for 1 mix, and so forth).
-        '''
-        ps_addr_list = []
-        denoms = self.get_ps_denoms(min_rounds=min_rounds).values()
-        if denoms:
-            ps_addr_list.extend(map(lambda x: x[0], denoms))
-
-        if min_rounds is not None and min_rounds >= 0:
-            return set(ps_addr_list)
-
-        spent_denoms = self.get_ps_spent_denoms().values()
-        if spent_denoms:
-            ps_addr_list.extend(map(lambda x: x[0], spent_denoms))
-
-        collaterals = self.get_ps_collaterals().values()
-        if collaterals:
-            ps_addr_list.extend(map(lambda x: x[0], collaterals))
-
-        spent_collaterals = self.get_ps_spent_collaterals().values()
-        if spent_collaterals:
-            ps_addr_list.extend(map(lambda x: x[0], spent_collaterals))
-
-        others = self.get_ps_others().values()
-        if others:
-            ps_addr_list.extend(map(lambda x: x[0], others))
-
-        spent_others = self.get_ps_spent_others().values()
-        if spent_others:
-            ps_addr_list.extend(map(lambda x: x[0], spent_others))
-
-        ps_addr_list.extend(self.ps_reserved.keys())
-        return set(ps_addr_list)
-
-    @locked
-    def get_unspent_ps_addresses(self):
-        ps_addr_list = []
-        collaterals = self.get_ps_collaterals().values()
-        if collaterals:
-            ps_addr_list.extend(map(lambda x: x[0], collaterals))
-        denoms = self.get_ps_denoms().values()
-        if denoms:
-            ps_addr_list.extend(map(lambda x: x[0], denoms))
-        others = self.get_ps_others().values()
-        if others:
-            ps_addr_list.extend(map(lambda x: x[0], others))
-        ps_addr_list.extend(self.ps_reserved.keys())
-        return set(ps_addr_list)
-
-    @locked
-    def list_verified_tx(self):
-        return list(self.verified_tx.keys())
-
-    @locked
-    def get_verified_tx(self, txid):
-        if txid not in self.verified_tx:
-            return None
-        height, timestamp, txpos, header_hash = self.verified_tx[txid]
-        return TxMinedInfo(height=height,
-                           conf=None,
-                           timestamp=timestamp,
-                           txpos=txpos,
-                           header_hash=header_hash)
-
-    @modifier
-    def add_verified_tx(self, txid, info):
-        self.verified_tx[txid] = (info.height, info.timestamp, info.txpos, info.header_hash)
-
-    @modifier
-    def remove_verified_tx(self, txid):
-        self.verified_tx.pop(txid, None)
-
-    def is_in_verified_tx(self, txid):
-        return txid in self.verified_tx
-
-    @modifier
-    def update_tx_fees(self, d):
-        return self.tx_fees.update(d)
-
-    @locked
-    def get_tx_fee(self, txid):
-        return self.tx_fees.get(txid)
-
-    @modifier
-    def remove_tx_fee(self, txid):
-        self.tx_fees.pop(txid, None)
-
-    @locked
-    def get_data_ref(self, name):
-        # Warning: interacts un-intuitively with 'put': certain parts
-        # of 'data' will have pointers saved as separate variables.
-        if name not in self.data:
-            self.data[name] = {}
-        return self.data[name]
-
-    @locked
-    def num_change_addresses(self, ps_ks=False):
-        if ps_ks:
-            return len(self.ps_ks_change_addrs)
-        else:
-            return len(self.change_addresses)
-
-    @locked
-    def num_receiving_addresses(self, ps_ks=False):
-        if ps_ks:
-            return len(self.ps_ks_receiving_addrs)
-        else:
-            return len(self.receiving_addresses)
-
-    @locked
-    def get_change_addresses(self, *, slice_start=None, slice_stop=None,
-                             ps_ks=False):
-        # note: slicing makes a shallow copy
-        if ps_ks:
-            return self.ps_ks_change_addrs[slice_start:slice_stop]
-        else:
-            return self.change_addresses[slice_start:slice_stop]
-
-    @locked
-    def get_receiving_addresses(self, *, slice_start=None, slice_stop=None,
-                                ps_ks=False):
-        # note: slicing makes a shallow copy
-        if ps_ks:
-            return self.ps_ks_receiving_addrs[slice_start:slice_stop]
-        else:
-            return self.receiving_addresses[slice_start:slice_stop]
-
-    @modifier
-    def add_change_address(self, addr, ps_ks=False):
-        if ps_ks:
-            self._ps_ks_addr_to_addr_index[addr] = \
-                (True, len(self.ps_ks_change_addrs))
-            self.ps_ks_change_addrs.append(addr)
-        else:
-            self._addr_to_addr_index[addr] = \
-                (True, len(self.change_addresses))
-            self.change_addresses.append(addr)
-
-    @modifier
-    def add_receiving_address(self, addr, ps_ks=False):
-        if ps_ks:
-            self._ps_ks_addr_to_addr_index[addr] = \
-                (False, len(self.ps_ks_receiving_addrs))
-            self.ps_ks_receiving_addrs.append(addr)
-        else:
-            self._addr_to_addr_index[addr] = \
-                (False, len(self.receiving_addresses))
-            self.receiving_addresses.append(addr)
-
-    @locked
-    def get_address_index(self, address, ps_ks=False):
-        if ps_ks:
-            return self._ps_ks_addr_to_addr_index.get(address)
-        else:
-            return self._addr_to_addr_index.get(address)
-
-    @modifier
-    def add_imported_address(self, addr, d):
-        self.imported_addresses[addr] = d
-
-    @modifier
-    def remove_imported_address(self, addr):
-        self.imported_addresses.pop(addr)
-
-    @locked
-    def has_imported_address(self, addr):
-        return addr in self.imported_addresses
-
-    @locked
-    def get_imported_addresses(self):
-        return list(sorted(self.imported_addresses.keys()))
-
-    @locked
-    def get_imported_address(self, addr):
-        return self.imported_addresses.get(addr)
-
-    def load_addresses(self, wallet_type):
-        """ called from Abstract_Wallet.__init__ """
-        if wallet_type == 'imported':
-            self.imported_addresses = self.get_data_ref('addresses')
-        else:
-            self.get_data_ref('addresses')
-            for name in ['receiving', 'change']:
-                if name not in self.data['addresses']:
-                    self.data['addresses'][name] = []
-            self.change_addresses = self.data['addresses']['change']
-            self.receiving_addresses = self.data['addresses']['receiving']
-            self._addr_to_addr_index = {}  # key: address, value: (is_change, index)
-            for i, addr in enumerate(self.receiving_addresses):
-                self._addr_to_addr_index[addr] = (False, i)
-            for i, addr in enumerate(self.change_addresses):
-                self._addr_to_addr_index[addr] = (True, i)
-
-        # load ps_keystore addresses
-        self.get_data_ref('ps_ks_addrs')
-        for name in ['receiving', 'change']:
-            if name not in self.data['ps_ks_addrs']:
-                self.data['ps_ks_addrs'][name] = []
-        self.ps_ks_change_addrs = self.data['ps_ks_addrs']['change']
-        self.ps_ks_receiving_addrs = self.data['ps_ks_addrs']['receiving']
-        self._ps_ks_addr_to_addr_index = {}  # address -> (is_change, index)
-        for i, addr in enumerate(self.ps_ks_receiving_addrs):
-            self._ps_ks_addr_to_addr_index[addr] = (False, i)
-        for i, addr in enumerate(self.ps_ks_change_addrs):
-            self._ps_ks_addr_to_addr_index[addr] = (True, i)
-
-    @profiler
-    def _load_transactions(self):
-        # references in self.data
-        self.txi = self.get_data_ref('txi')  # txid -> address -> list of (prev_outpoint, value)
-        self.txo = self.get_data_ref('txo')  # txid -> address -> list of (output_index, value, is_coinbase)
-        self.transactions = self.get_data_ref('transactions')   # type: Dict[str, Transaction]
-        self.spent_outpoints = self.get_data_ref('spent_outpoints')
-        self.history = self.get_data_ref('addr_history')  # address -> list of (txid, height)
-        self.ps_ks_hist = self.get_data_ref('ps_ks_addr_hist')  # address -> list of (txid, height)
-        self.verified_tx = self.get_data_ref('verified_tx3')  # txid -> (height, timestamp, txpos, header_hash)
-        self.islocks = self.get_data_ref('islocks')  # txid -> (height, timestamp)
-        self.ps_txs = self.get_data_ref('ps_txs')  # txid -> (tx_type, completed)
-        self.ps_txs_removed = self.get_data_ref('ps_txs_removed')  # txid -> (tx_type, completed)
-        self.ps_data = self.get_data_ref('ps_data')
-        self.ps_reserved = self.get_data_ref('ps_reserved')  # addr -> data
-        self.ps_collaterals = self.get_data_ref('ps_collaterals')  # outpoint -> (addr, val)
-        self.ps_spending_collaterals = self.get_data_ref('ps_spending_collaterals')  # outpoint -> uuid
-        self.ps_denoms = self.get_data_ref('ps_denoms')  # outpoint -> (addr, val, round_n)
-        self.ps_spending_denoms = self.get_data_ref('ps_spending_denoms')  # outpoint -> uuid
-        self.ps_spent_denoms = self.get_data_ref('ps_spent_denoms')  # outpoint -> (addr, val, round_n)
-        self.ps_others = self.get_data_ref('ps_others')  # outpoint -> (addr, val)
-        self.ps_spent_others = self.get_data_ref('ps_spent_others')  # outpoint -> (addr, val)
-        self.ps_spent_collaterals = self.get_data_ref('ps_spent_collaterals')  # outpoint -> (addr, val)
-        self.tx_fees = self.get_data_ref('tx_fees')
-        # convert raw hex transactions to Transaction objects
-        for tx_hash, raw_tx in self.transactions.items():
-            self.transactions[tx_hash] = Transaction(raw_tx)
-        # convert list to set
-        for t in self.txi, self.txo:
-            for d in t.values():
-                for addr, lst in d.items():
-                    d[addr] = set([tuple(x) for x in lst])
-        # remove unreferenced tx
-        for tx_hash in list(self.transactions.keys()):
-            if not self.get_txi(tx_hash) and not self.get_txo(tx_hash):
-                self.logger.info(f"removing unreferenced tx: {tx_hash}")
-                self.transactions.pop(tx_hash)
-        # remove unreferenced outpoints
-        for prevout_hash in self.spent_outpoints.keys():
-            d = self.spent_outpoints[prevout_hash]
-            for prevout_n, spending_txid in list(d.items()):
-                if spending_txid not in self.transactions:
-                    self.logger.info("removing unreferenced spent outpoint")
-                    d.pop(prevout_n)
-
-    @modifier
-    def clear_history(self):
-        self.txi.clear()
-        self.txo.clear()
-        self.spent_outpoints.clear()
-        self.transactions.clear()
-        self.history.clear()
-        self.ps_ks_hist.clear()
-        self.verified_tx.clear()
-        self.tx_fees.clear()
-        self.clear_ps_data()
-
-    @modifier
-    def clear_ps_data(self):
-        self.ps_data['pay_collateral_wfl'] = {}
-        self.ps_data['new_collateral_wfl'] = {}
-        self.ps_data['new_denoms_wfl'] = {}
-        self.ps_data['denominate_workflows'] = {}
-        self.ps_txs.clear()
-        self.ps_txs_removed.clear()
-        self.ps_reserved.clear()
-        self.ps_collaterals.clear()
-        self.ps_spending_collaterals.clear()
-        self.ps_spent_collaterals.clear()
-        self.ps_denoms.clear()
-        self.ps_spending_denoms.clear()
-        self.ps_spent_denoms.clear()
-        self.ps_others.clear()
-        self.ps_spent_others.clear()
+    def _should_convert_to_stored_dict(self, key) -> bool:
+        return True

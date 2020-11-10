@@ -29,6 +29,7 @@ import json
 
 from .logging import get_logger
 from .util import inv_dict
+from . import bitcoin
 
 
 _logger = get_logger(__name__)
@@ -58,6 +59,7 @@ def read_json_gz(filename, default):
 
 GIT_REPO_URL = "https://github.com/akhavr/electrum-dash"
 GIT_REPO_ISSUES_URL = f"{GIT_REPO_URL}/issues"
+BIP39_WALLET_FORMATS = read_json('bip39_wallet_formats.json', [])
 
 
 CHUNK_SIZE = 2016
@@ -68,6 +70,10 @@ class AbstractNet:
     @classmethod
     def max_checkpoint(cls) -> int:
         return max(0, len(cls.CHECKPOINTS) * CHUNK_SIZE - 1)
+
+    @classmethod
+    def rev_genesis_bytes(cls) -> bytes:
+        return bytes.fromhex(bitcoin.rev_hex(cls.GENESIS))
 
 
 class BitcoinMainnet(AbstractNet):

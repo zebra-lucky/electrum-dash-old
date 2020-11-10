@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QTabBar, QTextEdit, QStylePainter,
                              QVBoxLayout, QHBoxLayout, QLabel, QApplication,
                              QCheckBox)
 
-from electrum_dash  import constants
+from electrum_dash import constants
 from electrum_dash.dash_tx import SPEC_TX_NAMES
 from electrum_dash.i18n import _
 from electrum_dash.network import deserialize_proxy

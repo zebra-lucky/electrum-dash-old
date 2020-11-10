@@ -3,14 +3,21 @@ include README.rst
 include electrum-dash.desktop
 include *.py
 include electrum-dash
-include contrib/requirements/requirements.txt
-include contrib/requirements/requirements-hw.txt
 recursive-include packages *.py
 recursive-include packages cacert.pem
 graft debian
 
+include contrib/requirements/requirements*.txt
+include contrib/deterministic-build/requirements*.txt
+include contrib/make_libsecp256k1.sh
+include contrib/build_tools_util.sh
+
 graft electrum_dash
 prune electrum_dash/tests
+graft contrib/udev
+
+exclude electrum_dash/*.so
+exclude electrum_dash/*.so.0
 
 global-exclude __pycache__
 global-exclude *.py[co~]
