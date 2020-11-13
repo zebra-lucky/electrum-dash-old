@@ -1,0 +1,3 @@
+opt/venvs/electrum-dash/bin/electrum-dash usr/bin/electrum-dash
+opt/venvs/electrum-dash/share/pixmaps/electrum-dash.png usr/share/pixmaps/electrum-dash.png
+opt/venvs/electrum-dash/share/applications/electrum-dash.desktop usr/share/applications/electrum-dash.desktop
