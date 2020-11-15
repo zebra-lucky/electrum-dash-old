@@ -13,7 +13,6 @@ include contrib/make_libsecp256k1.sh
 include contrib/build_tools_util.sh
 
 graft electrum_dash
-prune electrum_dash/tests
 graft contrib/udev
 
 exclude electrum_dash/*.so
