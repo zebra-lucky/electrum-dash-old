@@ -309,13 +309,11 @@ if __name__ == '__main__':
     # config is an object passed to the various constructors (wallet, interface, gui)
     if is_android:
         from jnius import autoclass
-        build_config = autoclass("org.dash.electrum.electrum_dash.BuildConfig")
-
         from plyer.platforms.android import activity
         package_name = activity.getPackageName().lower()
         if package_name.endswith('testnet'):
             args.testnet = True
-
+        build_config = autoclass(f'{package_name}.BuildConfig')
         config_options = {
             'verbosity': '*' if build_config.DEBUG else '',
             'cmd': 'gui',

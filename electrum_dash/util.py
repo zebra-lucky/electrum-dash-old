@@ -432,7 +432,9 @@ def android_ext_dir():
     return primary_external_storage_path()
 
 def android_backup_dir():
-    d = os.path.join(android_ext_dir(), 'org.electrum.electrum')
+    from plyer.platforms.android import activity
+    package_name = activity.getPackageName().lower()
+    d = os.path.join(android_ext_dir(), package_name)
     if not os.path.exists(d):
         os.mkdir(d)
     return d

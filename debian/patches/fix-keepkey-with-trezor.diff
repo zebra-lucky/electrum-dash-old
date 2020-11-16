@@ -2,8 +2,8 @@ Index: electrum-dash-post-3.2.2/electrum-dash
 ===================================================================
 --- electrum-dash-post-3.2.2.orig/electrum-dash
 +++ electrum-dash-post-3.2.2/electrum-dash
-@@ -28,6 +28,8 @@ import sys
- import warnings
+@@ -27,6 +27,8 @@ import sys
+ import sys
  
  
 +os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION']='python'

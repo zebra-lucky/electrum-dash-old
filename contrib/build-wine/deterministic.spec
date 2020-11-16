@@ -1,6 +1,6 @@
 # -*- mode: python -*-
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
 
 
 for i, x in enumerate(sys.argv):
@@ -67,9 +67,9 @@ datas += collect_data_files('keepkeylib')
 
 binaries = []
 # Add libusb so Trezor and Safe-T mini will work
-binaries += [('C:/Python36/libusb-1.0.dll', '.')]
+binaries += [('C:/Python37/libusb-1.0.dll', '.')]
 binaries += [('C:/x11_hash/libx11hash-0.dll', '.')]
-binaries += [('C:/libsecp256k1/libsecp256k1.dll', '.')]
+binaries += [('C:/libsecp256k1/libsecp256k1-0.dll', '.')]
 binaries += [('C:/zbarw/libzbar-0.dll', '.')]
 
 # Workaround for "Retro Look":
@@ -176,27 +176,7 @@ conexe = EXE(pyz,
           name=os.path.join('build\\pyi.win32\\electrum',
                             'console-%s' % cmdline_name))
 
-# trezorctl separate executable
-tctl_a = Analysis(['C:/Python36/Scripts/trezorctl'],
-                  hiddenimports=[
-                    'pkgutil',
-                    'win32api',
-                  ],
-                  excludes=excludes,
-                  runtime_hooks=['pyi_tctl_runtimehook.py'])
-
-tctl_pyz = PYZ(tctl_a.pure)
-
-tctl_exe = EXE(tctl_pyz,
-           tctl_a.scripts,
-           exclude_binaries=True,
-           debug=False,
-           strip=False,
-           upx=False,
-           console=True,
-           name=os.path.join('build\\pyi.win32\\electrum', 'trezorctl.exe'))
-
-coll = COLLECT(exe, conexe, #tctl_exe,
+coll = COLLECT(exe, conexe,
                a.binaries,
                a.datas,
                strip=False,

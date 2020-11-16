@@ -23,13 +23,14 @@ class LibGMPRecipe(Recipe):
         # are building with a standalone toolchain
         env = environ.copy()
         env['ARCH'] = _arch = self.select_build_arch(arch)
+        env['CC'] = arch.get_clang_exe(with_target=True)
         env['GMP_ROOT'] = self.get_build_dir(arch.arch)
         env['CROSSHOME'] = join(env['GMP_ROOT'],
                                 'standalone-%s-toolchain' % env['ARCH'])
         env['PATH'] = '%s:%s' % (join(env['CROSSHOME'], 'bin'),
                                  env['PATH'])
         # flags from https://github.com/Rupan/gmp
-        env['BASE_CFLAGS'] = ('-O2 -g -pedantic -fomit-frame-pointer'
+        env['BASE_CFLAGS'] = ('-O2 -fPIC -g -pedantic -fomit-frame-pointer'
                               ' -Wa,--noexecstack -ffunction-sections'
                               ' -funwind-tables -no-canonical-prefixes'
                               ' -fno-strict-aliasing')

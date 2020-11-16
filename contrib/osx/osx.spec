@@ -2,7 +2,8 @@
 import os
 import os.path
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import (collect_data_files, collect_submodules,
+                                     collect_dynamic_libs)
 
 
 for i, x in enumerate(sys.argv):
@@ -163,24 +164,7 @@ exe = EXE(pyz,
           icon='electrum_dash/gui/icons/electrum-dash.ico',
           name=os.path.join('build/electrum-dash/electrum-dash', cmdline_name))
 
-# trezorctl separate bin
-tctl_a = Analysis([os.path.join(PY36BINDIR, 'trezorctl')],
-                  hiddenimports=['pkgutil'],
-                  excludes=excludes,
-                  runtime_hooks=['pyi_tctl_runtimehook.py'])
-
-tctl_pyz = PYZ(tctl_a.pure)
-
-tctl_exe = EXE(tctl_pyz,
-           tctl_a.scripts,
-           exclude_binaries=True,
-           debug=False,
-           strip=False,
-           upx=False,
-           console=True,
-           name=os.path.join('build/electrum-dash/electrum-dash', 'trezorctl.bin'))
-
-coll = COLLECT(exe, #tctl_exe,
+coll = COLLECT(exe,
                a.binaries,
                a.datas,
                strip=False,

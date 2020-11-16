@@ -42,7 +42,7 @@ docker run --rm \
     --env APP_ANDROID_ARCH=$APP_ANDROID_ARCH \
     --env APK_VERSION_CODE=$ELECTRUM_DASH_VERSION_CODE \
     -v $(pwd)/electrum-dash:/home/buildozer/build \
-    -t zebralucky/electrum-dash-winebuild:Kivy33x bash -c \
+    -t zebralucky/electrum-dash-winebuild:Kivy40x bash -c \
     "$DOCKER_CMD"
 
 FNAME_TAIL=release-unsigned.apk
@@ -51,6 +51,3 @@ if [[ $ELECTRUM_MAINNET == "false" ]]; then
 else
   PATHNAME_START=electrum-dash/bin/Electrum_DASH
 fi
-
-sudo mv $PATHNAME_START-$DASH_ELECTRUM_APK_VERSION-$FNAME_TAIL \
-  $PATHNAME_START-$DASH_ELECTRUM_APK_VERSION-$APP_ANDROID_ARCH-$FNAME_TAIL
