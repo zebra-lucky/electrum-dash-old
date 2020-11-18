@@ -41,6 +41,7 @@
  * Dependencies: pyaes is no longer needed (#6563)
  * Ledger: fix "The derivation path is unusual" warnings (#6512)
    (needs Dash app 1.4.8+ installed on device)
+ * Legacy masternode modules was removed since unused
 
 
 # Release 3.3.8.7
