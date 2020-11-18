@@ -508,6 +508,13 @@ class ElectrumWindow(App):
                     app_intent.setAction(Intent.ACTION_VIEW)
                     app_intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     activity.startActivity(app_intent)
+
+                    def _run_task(activity, app_intent):
+                        time.sleep(0.25)
+                        activity.startActivity(app_intent)
+
+                    args = (activity, app_intent)
+                    threading.Thread(target=_run_task, args=args).start()
                 except Exception as e:
                     return f'Error on lauhcing {app_name}: {str(e)}'
         if not found:
