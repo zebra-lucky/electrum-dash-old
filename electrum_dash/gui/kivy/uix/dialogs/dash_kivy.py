@@ -148,7 +148,7 @@ class TorWarnDialog(Factory.Popup):
             ok_btn.bind(on_press=self.on_ok)
             vbox.add_widget(ok_btn)
 
-    def on_ok(self):
+    def on_ok(self, instance):
         self.continue_load()
         self.can_hide = True
         self.dismiss()
