@@ -1404,15 +1404,15 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
             return
         if not isinstance(tx, PartialTransaction):
             return
-        # add info to a temporary tx copy; including xpubs
-        # and full derivation paths as hw keystores might want them
-        tmp_tx = copy.deepcopy(tx)
-        tmp_tx.add_info_from_wallet(self, include_xpubs_and_full_paths=True)
         # update ProTxBase transactions when password is available
         extra_payload = None
         if tx.tx_type:
             extra_payload = tx.extra_payload
             extra_payload.update_before_sign(tx, self, password)
+        # add info to a temporary tx copy; including xpubs
+        # and full derivation paths as hw keystores might want them
+        tmp_tx = copy.deepcopy(tx)
+        tmp_tx.add_info_from_wallet(self, include_xpubs_and_full_paths=True)
         # sign. start with ready keystores.
         keystores = self.get_keystores()
         if self.psman.ps_keystore is not None:

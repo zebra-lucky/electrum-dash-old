@@ -44,7 +44,7 @@ class SComboBox(QComboBox):
 
 class OutputsList(QListWidget):
     '''Widget that displays available 1000 DASH outputs.'''
-    outputSelected = pyqtSignal(dict, name='outputSelected')
+    outputSelected = pyqtSignal(object, name='outputSelected')
     def __init__(self, parent=None):
         super(OutputsList, self).__init__(parent)
         self.outputs = {}
@@ -54,7 +54,7 @@ class OutputsList(QListWidget):
 
     def add_output(self, d):
         '''Add a valid output.'''
-        label = d.to_str()
+        label = d.prevout.to_str()
         self.outputs[label] = d
         item = QListWidgetItem(label)
         item.setFont(QFont(MONOSPACE_FONT))
@@ -1095,12 +1095,12 @@ class CollateralWizardPage(QWizardPage):
         self.frozen_cb.setChecked(False)
         return False
 
-    def on_set_output(self, vin):
+    def on_set_output(self, coin):
         self.hide_error()
-        self.hash.setText(vin.get('prevout_hash', ''))
-        self.index.setText(str(vin.get('prevout_n', '')))
-        self.addr.setText(vin.get('address', ''))
-        self.value.setText(str(vin.get('value', '')))
+        self.hash.setText(coin.prevout.txid.hex())
+        self.index.setText(str(coin.prevout.out_idx))
+        self.addr.setText(coin.address)
+        self.value.setText(str(coin.value_sats()))
         self.completeChanged.emit()
 
     def initializePage(self):
