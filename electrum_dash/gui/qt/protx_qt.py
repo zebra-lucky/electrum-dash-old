@@ -861,8 +861,6 @@ class Dip3TabWidget(QTabWidget):
             self.w_up_srv_btn.hide()
             self.w_up_reg_btn.hide()
             return
-        self.w_add_btn.hide()
-        self.w_file_btn.hide()
 
         idx = sel.selectedRows()[0]
         self.w_cur_alias = idx.data()
@@ -870,6 +868,12 @@ class Dip3TabWidget(QTabWidget):
         self.w_cur_idx = idx
 
         mn = self.manager.mns.get(self.w_cur_alias)
+        if mn is None:
+            return
+
+        self.w_add_btn.hide()
+        self.w_file_btn.hide()
+
         owned = mn.is_owned
         operated = mn.is_operated
         protx_hash = mn.protx_hash
