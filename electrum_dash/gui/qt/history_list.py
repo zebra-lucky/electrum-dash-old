@@ -558,8 +558,9 @@ class HistoryModel(QAbstractItemModel, Logger):
         self.logger.info(f"refreshing... reason: {reason}")
         assert self.parent.gui_thread == threading.current_thread(), 'must be called from GUI thread'
         assert self.view, 'view not set'
-        if self.view.maybe_defer_update():
-            return
+        # Comment out due to unstable works of maybe_defer_update
+        #if self.view.maybe_defer_update():
+        #    return
         group_ps = self.parent.wallet.psman.group_history
         self.set_visibility_of_columns(group_ps)
         self.get_data_thread.data_call_args = (group_ps, )
