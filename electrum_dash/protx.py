@@ -28,13 +28,14 @@ import threading
 from collections import defaultdict
 
 from . import util
-from .bitcoin import TYPE_ADDRESS, is_b58_address, b58_address_to_hash160
+from .bitcoin import address_to_script, is_b58_address, b58_address_to_hash160
 from .dash_tx import (TxOutPoint, ProTxService, DashProRegTx, DashProUpServTx,
                       DashProUpRegTx, DashProUpRevTx,
                       SPEC_PRO_REG_TX, SPEC_PRO_UP_SERV_TX,
                       SPEC_PRO_UP_REG_TX, SPEC_PRO_UP_REV_TX)
 from .transaction import Transaction
 from .util import bfh
+from .json_db import StoredDict
 from .logging import Logger
 
 
@@ -111,11 +112,15 @@ class ProTxMN:
 
     @classmethod
     def from_dict(cls, d):
+        d = dict(d)
         mn = ProTxMN()
         for f in cls.fields:
             if f not in d:
                 raise ProTxMNExc('Key %s is missing in supplied dict')
-            v = copy.deepcopy(d[f])
+            v = d[f]
+            if isinstance(v, StoredDict):
+                v = dict(v)
+            v = copy.deepcopy(v)
             if f == 'collateral':
                 v['hash'] = bfh(v['hash'])[::-1]
                 setattr(mn, f, TxOutPoint(**v))
@@ -307,8 +312,7 @@ class ProTxManager(Logger):
         if not is_b58_address(mn.payout_address):
             raise ProRegTxExc('Payout address is not address')
 
-        scriptPayout = bfh(Transaction.pay_script(TYPE_ADDRESS,
-                                                  mn.payout_address))
+        scriptPayout = bfh(address_to_script(mn.payout_address))
         KeyIdOwner = b58_address_to_hash160(mn.owner_addr)[1]
         PubKeyOperator = bfh(mn.pubkey_operator)
         KeyIdVoting = b58_address_to_hash160(mn.voting_addr)[1]
@@ -341,8 +345,7 @@ class ProTxManager(Logger):
         if mn.op_payout_address:
             if not is_b58_address(mn.op_payout_address):
                 raise ProRegTxExc('Operator payout address is not address')
-            scriptOpPayout = bfh(Transaction.pay_script(TYPE_ADDRESS,
-                                                        mn.op_payout_address))
+            scriptOpPayout = bfh(address_to_script(mn.op_payout_address))
         else:
             scriptOpPayout = b''
 
@@ -371,8 +374,7 @@ class ProTxManager(Logger):
         if not is_b58_address(mn.payout_address):
             raise ProRegTxExc('Payout address is not address')
 
-        scriptPayout = bfh(Transaction.pay_script(TYPE_ADDRESS,
-                                                  mn.payout_address))
+        scriptPayout = bfh(address_to_script(mn.payout_address))
         PubKeyOperator = bfh(mn.pubkey_operator)
         KeyIdVoting = b58_address_to_hash160(mn.voting_addr)[1]
 
@@ -393,8 +395,7 @@ class ProTxManager(Logger):
                 keyid_owner = b58_address_to_hash160(mn.owner_addr)[1]
                 pubkey_operator = bfh(mn.pubkey_operator)
                 keyid_voting = b58_address_to_hash160(mn.voting_addr)[1]
-                script_payout = bfh(Transaction.pay_script(TYPE_ADDRESS,
-                                                           mn.payout_address))
+                script_payout = bfh(address_to_script(mn.payout_address))
                 if (mn.type == ep.type and mn.mode == ep.mode
                         and mn.collateral.hash_is_null
                         and str(mn.service) == str(ep_service)

@@ -1600,15 +1600,12 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                 min_rounds=min_rounds, no_ps_data=no_ps_data,
                 tx_type=tx_type, extra_payload=extra_payload)
             if tx.tx_type:
-                try:
-                    tx.extra_payload.check_after_tx_prepared(tx)
-                except DashTxError as e:
-                    self.show_message(str(e))
-                    return
+                tx.extra_payload.check_after_tx_prepared(tx)
             return tx
         try:
             tx = make_tx(None)
-        except (NotEnoughFunds, NoDynamicFeeEstimates, MultipleSpendMaxTxOutputs) as e:
+        except (NotEnoughFunds, NoDynamicFeeEstimates,
+                MultipleSpendMaxTxOutputs, DashTxError) as e:
             self.max_button.setChecked(False)
             self.show_error(str(e))
             return
@@ -1735,10 +1732,12 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if not invoice:
             return
         is_ps = self.ps_cb.isChecked()
+        tx_type, extra_payload = self.extra_payload.get_extra_data()
         self.wallet.save_invoice(invoice)
         self.invoice_list.update()
         self.do_clear()
-        self.do_pay_invoice(invoice, is_ps=is_ps)
+        self.do_pay_invoice(invoice, is_ps=is_ps,
+                            tx_type=tx_type, extra_payload=extra_payload)
 
     def pay_multiple_invoices(self, invoices):
         outputs = []
@@ -1746,17 +1745,21 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             outputs += invoice.outputs
         psman = self.wallet.psman
         is_ps = self.ps_cb.isChecked()
+        tx_type, extra_payload = self.extra_payload.get_extra_data()
         min_rounds = None if not is_ps else psman.mix_rounds
         self.pay_onchain_dialog(self.get_coins(min_rounds=min_rounds), outputs,
-                                is_ps=is_ps)
+                                is_ps=is_ps,
+                                tx_type=tx_type, extra_payload=extra_payload)
 
-    def do_pay_invoice(self, invoice: 'Invoice', is_ps):
+    def do_pay_invoice(self, invoice: 'Invoice', is_ps=False,
+                       tx_type=0, extra_payload=b''):
         if invoice.type == PR_TYPE_ONCHAIN:
             assert isinstance(invoice, OnchainInvoice)
             psman = self.wallet.psman
             min_rounds = None if not is_ps else psman.mix_rounds
             self.pay_onchain_dialog(self.get_coins(min_rounds=min_rounds),
-                                    invoice.outputs, is_ps=is_ps)
+                                    invoice.outputs, is_ps=is_ps,
+                                    tx_type=tx_type, extra_payload=extra_payload)
         else:
             raise Exception('unknown invoice type')
 
@@ -1884,7 +1887,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
     def pay_onchain_dialog(self, inputs: Sequence[PartialTxInput],
                            outputs: List[PartialTxOutput], *,
-                           external_keypairs=None, is_ps=False) -> None:
+                           external_keypairs=None, is_ps=False,
+                           tx_type=0, extra_payload=b'') -> None:
         # trustedcoin requires this
         if run_hook('abort_send', self):
             return
@@ -1892,7 +1896,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         psman = self.wallet.psman
         min_rounds = None if not is_ps else psman.mix_rounds
         no_ps_data = psman.is_hw_ks and not psman.enabled
-        tx_type, extra_payload = self.extra_payload.get_extra_data()
         def make_tx(fee_est):
             tx = self.wallet.make_unsigned_transaction(
                 coins=self.get_coins(min_rounds=min_rounds),
