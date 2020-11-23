@@ -952,7 +952,8 @@ class GetDataThread(QThread):
                 self.need_update.clear()
                 self.res = self.data_call(*self.data_call_args)
                 try:
-                    self.data_ready_sig.emit()
+                    if not self.stopping:
+                        self.data_ready_sig.emit()
                 except AttributeError:
                     pass  # data_ready signal is already unbound on gui close
             except BaseException as e:
@@ -963,7 +964,6 @@ class GetDataThread(QThread):
     def stop(self):
         self.stopping = True
         self.need_update.set()
-        self.wait(0)
 
 
 def import_meta_gui(electrum_window, title, importer, on_success):
