@@ -784,7 +784,7 @@ class SaveDip3WizardPage(QWizardPage):
             ownership = (_('This wallet is owns on new Masternode '
                            '(external operator)'))
         elif new_mn.is_operated:
-            ownership = (_('This wallet is operates on new Masternode'))
+            ownership = (_('This wallet is the operator on the new Masternode'))
         else:
             ownership = _('None')
         self.ownership.setText(ownership)
