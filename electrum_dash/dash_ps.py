@@ -163,7 +163,8 @@ DEFAULT_SUBSCRIBE_SPENT = False
 DEFAULT_ALLOW_OTHERS = False
 
 POOL_MIN_PARTICIPANTS = 3
-POOL_MAX_PARTICIPANTS = 5
+POOL_MIN_PARTICIPANTS_TESTNET = 2
+POOL_MAX_PARTICIPANTS = 20
 
 PRIVATESEND_QUEUE_TIMEOUT = 30
 PRIVATESEND_SESSION_MSG_TIMEOUT = 40
@@ -1359,6 +1360,17 @@ class PSManager(Logger):
             return MAX_MIX_ROUNDS_TESTNET
         else:
             return MAX_MIX_ROUNDS
+
+    @property
+    def pool_min_participants(self):
+        if constants.net.TESTNET:
+            return POOL_MIN_PARTICIPANTS_TESTNET
+        else:
+            return POOL_MIN_PARTICIPANTS
+
+    @property
+    def pool_max_participants(self):
+        return POOL_MAX_PARTICIPANTS
 
     def mix_rounds_data(self, full_txt=False):
         if full_txt:
@@ -5009,9 +5021,9 @@ class PSManager(Logger):
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if icnt != ocnt:
             return 'Transaction has different count of inputs/outputs'
-        if icnt < POOL_MIN_PARTICIPANTS:
+        if icnt < self.pool_min_participants:
             return 'Transaction has too small count of inputs/outputs'
-        if icnt > POOL_MAX_PARTICIPANTS * PRIVATESEND_ENTRY_MAX_SIZE:
+        if icnt > self.pool_max_participants * PRIVATESEND_ENTRY_MAX_SIZE:
             return 'Transaction has too many count of inputs/outputs'
         if mine_icnt < 1:
             return 'Transaction has too small count of mine inputs'
