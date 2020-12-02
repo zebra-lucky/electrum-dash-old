@@ -2032,7 +2032,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         try:
             tx_list = psman.prepare_funds_from_ps_keystore(password)
             for tx in tx_list:
-                show_transaction(tx, self)
+                show_transaction(tx, parent=self)
         except Exception as e:
             self.show_error(f'{str(e)}')
 

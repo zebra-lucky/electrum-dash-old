@@ -2499,6 +2499,7 @@ class PSManager(Logger):
                 tx.add_info_from_wallet(self.wallet)
             keypairs = self.get_keypairs()
             signed_txins_cnt = tx.sign(keypairs)
+            tx.finalize_psbt()
             keypairs.clear()
             if mine_txins_cnt is None:
                 mine_txins_cnt = len(tx.inputs())
@@ -3210,8 +3211,6 @@ class PSManager(Logger):
             if tx and tx.is_complete():
                 return tx
         except BaseException as e:
-            import traceback
-            traceback.print_exc()
             self.logger.wfl_err(f'prepare_funds_from_hw_wallet: {str(e)}')
 
     async def _prepare_funds_from_hw_wallet(self):
@@ -3257,9 +3256,7 @@ class PSManager(Logger):
 
     def check_funds_on_ps_keystore(self):
         w = self.wallet
-        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
-                            mature_only=True, include_ps=True)
-        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        coins = w.get_utxos(None, mature_only=True, include_ps=True)
         ps_ks_coins = [c for c in coins if c.is_ps_ks]
         if ps_ks_coins:
             return True
