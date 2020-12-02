@@ -13,6 +13,7 @@ from math import floor, ceil
 from uuid import uuid4
 
 from . import constants, util
+from .bip32 import convert_bip32_intpath_to_strpath
 from .bitcoin import (COIN, address_to_script,
                       is_address, pubkey_to_address)
 from .dash_tx import (STANDARD_TX, PSTxTypes, SPEC_TX_NAMES, PSCoinRounds,
@@ -1080,6 +1081,15 @@ class PSManager(Logger):
         if addr and bool(idx):
             if addr != self.derive_address(*idx):
                 raise PSKsInternalAddressCorruption()
+
+    def get_address_path_str(self, address):
+        intpath = self.get_address_index(address)
+        if intpath is None:
+            return None
+        if self.ps_keystore:
+            addr_deriv_offset = self.ps_keystore.addr_deriv_offset
+            intpath = (addr_deriv_offset*2 + intpath[0], intpath[1])
+        return convert_bip32_intpath_to_strpath(intpath)
 
     def create_new_address(self, for_change=False):
         assert type(for_change) is bool
