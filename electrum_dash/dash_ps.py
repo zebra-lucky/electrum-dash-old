@@ -937,6 +937,31 @@ class PSManager(Logger):
         await self.find_untracked_ps_txs()
         self.wallet.save_db()
 
+    def can_find_untracked(self):
+        w = self.wallet
+        network = self.network
+        if network is None:
+            return False
+
+        server_height = network.get_server_height()
+        if server_height == 0:
+            return False
+
+        local_height = network.get_local_height()
+        if local_height < server_height:
+            return False
+
+        with w.lock:
+            unverified_no_islock = []
+            for txid in w.unverified_tx:
+                if txid not in w.db.islocks:
+                    unverified_no_islock.append(txid)
+            if (unverified_no_islock
+                    or not w.is_up_to_date()
+                    or not w.synchronizer.is_up_to_date()):
+                return False
+        return True
+
     @property
     def state(self):
         return self._state
@@ -5498,6 +5523,14 @@ class PSManager(Logger):
         else:
             self.trigger_callback('ps-state-changes', w, None, None)
         try:
+            logged_awaiting = False
+            while not self.can_find_untracked():
+                if not logged_awaiting:
+                    logged_awaiting = True
+                    self.logger.info('awaiting wallet sync')
+                await asyncio.sleep(1)
+            if logged_awaiting:
+                self.logger.info('wallet synced')
             _find = self._find_untracked_ps_txs
             found = await self.loop.run_in_executor(None, _find, log)
             if found:

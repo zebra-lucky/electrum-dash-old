@@ -95,6 +95,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         psman = self.wallet.psman
         psman.state = PSStates.Ready
         psman.loop = asyncio.get_event_loop()
+        psman.can_find_untracked = lambda: True
 
     def tearDown(self):
         super(PSWalletTestCase, self).tearDown()
