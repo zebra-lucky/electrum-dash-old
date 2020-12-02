@@ -3154,40 +3154,6 @@ class PSWalletTestCase(TestCaseForTestnet):
         filtered_line = filter_log_line(test_line % w.dummy_address())
         assert filtered_line == test_line % FILTERED_ADDR
 
-    def test_is_mine_lookahead(self):
-        w = self.wallet
-        psman = w.psman
-
-        last_recv_addr = w.db.get_receiving_addresses(slice_start=-1)[0]
-        last_recv_index = w.get_address_index(last_recv_addr)[1]
-        last_change_addr = w.db.get_change_addresses(slice_start=-1)[0]
-        last_change_index = w.get_address_index(last_change_addr)[1]
-
-        not_in_wallet_recv_addrs = []
-        for ri in range(last_recv_index + 1, last_recv_index + 101):
-            sequence = [0, ri]
-            generated_addr = w.derive_address(0, ri)
-            assert not w.is_mine(generated_addr)
-            not_in_wallet_recv_addrs.append(generated_addr)
-
-        not_in_wallet_change_addrs = []
-        for ci in range(last_change_index + 1, last_change_index + 101):
-            sequence = [1, ci]
-            generated_addr = w.derive_address(1, ci)
-            assert not w.is_mine(generated_addr)
-            not_in_wallet_change_addrs.append(generated_addr)
-
-        assert psman._is_mine_lookahead(not_in_wallet_recv_addrs[9])
-
-        assert psman._is_mine_lookahead(not_in_wallet_change_addrs[9],
-                                   for_change=True)
-
-        for addr in not_in_wallet_recv_addrs:
-            assert psman._is_mine_lookahead(addr)
-
-        for addr in not_in_wallet_change_addrs:
-            assert psman._is_mine_lookahead(addr, for_change=True)
-
     def test_calc_denoms_by_values(self):
         w = self.wallet
         psman = w.psman
