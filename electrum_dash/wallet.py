@@ -1387,6 +1387,7 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
                              else self.get_txin_type(address))
         txout.is_mine = True
         txout.is_change = self.is_change(address)
+        txout.is_ps_ks = ps_ks
         if isinstance(self, Multisig_Wallet):
             txout.num_sig = self.m
         self._add_txinout_derivation_info(txout, address,

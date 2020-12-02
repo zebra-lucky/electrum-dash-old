@@ -456,7 +456,7 @@ class TrezorPlugin(HW_PluginBase):
             address = txout.address
             use_create_by_derivation = False
 
-            if txout.is_mine and not has_change:
+            if txout.is_mine and not txout.is_ps_ks and not has_change:
                 # prioritise hiding outputs on the 'change' branch from user
                 # because no more than one change address allowed
                 # note: ^ restriction can be removed once we require fw
