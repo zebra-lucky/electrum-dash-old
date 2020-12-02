@@ -5077,76 +5077,6 @@ class PSManager(Logger):
         else:
             return False
 
-    def _is_mine_lookahead(self, addr, for_change=False, look_ahead_cnt=100,
-                           ps_ks=False):
-        # need look_ahead_cnt is max 16 sessions * avg 5 addresses is ~ 80
-        w = self.wallet
-        if w.is_mine(addr):
-            return True
-        if self.state in self.mixing_running_states:
-            return False
-
-        imported_addrs = getattr(w.db, 'imported_addresses', {})
-        if not ps_ks and imported_addrs:
-            return False
-
-        if for_change:
-            last_wallet_addr = w.db.get_change_addresses(slice_start=-1,
-                                                         ps_ks=ps_ks)[0]
-            if ps_ks:
-                last_wallet_index = self.get_address_index(last_wallet_addr)[1]
-            else:
-                last_wallet_index = w.get_address_index(last_wallet_addr)[1]
-        else:
-            last_wallet_addr = w.db.get_receiving_addresses(slice_start=-1,
-                                                            ps_ks=ps_ks)[0]
-            if ps_ks:
-                last_wallet_index = self.get_address_index(last_wallet_addr)[1]
-            else:
-                last_wallet_index = w.get_address_index(last_wallet_addr)[1]
-
-        # prepare cache
-        if ps_ks:
-            cache = getattr(self, '_is_mine_lookahead_cache_ps_ks', {})
-        else:
-            cache = getattr(self, '_is_mine_lookahead_cache', {})
-        if not cache:
-            cache['change'] = {}
-            cache['recv'] = {}
-        if ps_ks:
-            self._is_mine_lookahead_cache_ps_ks = cache
-        else:
-            self._is_mine_lookahead_cache = cache
-
-        cache_type = 'change' if for_change else 'recv'
-        cache = cache[cache_type]
-        if 'first_idx' not in cache:
-            cache['addrs'] = addrs = list()
-            cache['first_idx'] = first_idx = last_wallet_index + 1
-        else:
-            addrs = cache['addrs']
-            first_idx = cache['first_idx']
-            if addr in addrs:
-                return True
-            elif first_idx < last_wallet_index + 1:
-                difference = last_wallet_index + 1 - first_idx
-                cache['addrs'] = addrs = addrs[difference:]
-                cache['first_idx'] = first_idx = last_wallet_index + 1
-
-        # generate new addrs and check match
-        idx = first_idx + len(addrs)
-        while len(addrs) < look_ahead_cnt:
-            if ps_ks:
-                generated_addr = self.derive_address(for_change, idx)
-            else:
-                generated_addr = w.derive_address(for_change, idx)
-            if generated_addr not in addrs:
-                addrs.append(generated_addr)
-            if addr in addrs:
-                return True
-            idx += 1
-        return False
-
     def _calc_rounds_for_denominate_tx(self, new_outpoints, input_rounds):
         output_rounds = list(map(lambda x: x+1, input_rounds[:]))
         if self.is_hw_ks:
@@ -5187,13 +5117,8 @@ class PSManager(Logger):
         new_outpoints = []
         for i, o in enumerate(tx.outputs()):
             addr = o.address
-            if self.ps_keystore:
-                if (not self._is_mine_lookahead(addr, ps_ks=True)
-                        and not self._is_mine_lookahead(addr)):
-                    continue
-            else:
-                if not self._is_mine_lookahead(addr):
-                    continue
+            if not w.is_mine(addr):
+                continue
             new_outpoints.append((f'{txid}:{i}', addr, o.value))
 
         input_rounds = []
@@ -5234,13 +5159,8 @@ class PSManager(Logger):
         rm_outpoints = []
         for i, o in enumerate(tx.outputs()):
             addr = o.address
-            if self.ps_keystore:
-                if (not self._is_mine_lookahead(addr, ps_ks=True)
-                        and not self._is_mine_lookahead(addr)):
-                    continue
-            else:
-                if not self._is_mine_lookahead(addr):
-                    continue
+            if not w.is_mine(addr):
+                continue
             rm_outpoints.append((f'{txid}:{i}', addr))
 
         restored_ps_addrs = set()
