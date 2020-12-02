@@ -4598,7 +4598,7 @@ class PSManager(Logger):
                 outputs.append((o, txid, idx))
             io_values = (inputs, outputs,
                          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt)
-            return func(self, txid, io_values, full_check)
+            return func(self, txid, tx, io_values, full_check)
         return func_wrapper
 
     def _add_spent_ps_outpoints_ps_data(self, txid, tx):
@@ -4691,7 +4691,7 @@ class PSManager(Logger):
         self.restore_spent_addrs(restored_ps_addrs)
 
     @unpack_io_values
-    def _check_new_denoms_tx_err(self, txid, io_values, full_check):
+    def _check_new_denoms_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -4823,7 +4823,7 @@ class PSManager(Logger):
                 w.db.pop_ps_other(rm_outpoint)
 
     @unpack_io_values
-    def _check_new_collateral_tx_err(self, txid, io_values, full_check):
+    def _check_new_collateral_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -4932,7 +4932,7 @@ class PSManager(Logger):
                 w.db.pop_ps_other(rm_outpoint)
 
     @unpack_io_values
-    def _check_pay_collateral_tx_err(self, txid, io_values, full_check):
+    def _check_pay_collateral_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -5041,7 +5041,7 @@ class PSManager(Logger):
                 w.db.pop_ps_collateral(rm_outpoint)
 
     @unpack_io_values
-    def _check_denominate_tx_err(self, txid, io_values, full_check):
+    def _check_denominate_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if icnt != ocnt:
@@ -5073,6 +5073,20 @@ class PSManager(Logger):
             return
 
         w = self.wallet
+        # additional check with is_mine for find untracked
+        if self.state not in self.mixing_running_states:
+            mine_icnt = mine_ocnt = 0
+            for txin in tx.inputs():
+                addr = w.get_txin_address(txin)
+                if w.is_mine(addr):
+                    mine_icnt += 1
+            for o in tx.outputs():
+                addr = o.address
+                if w.is_mine(addr):
+                    mine_ocnt += 1
+            if mine_icnt != mine_ocnt:
+                return f'Differ mine_icnt/mine_ocnt: {mine_icnt}/{mine_ocnt}'
+
         for i, prev_h, prev_n, is_mine, tx_type in inputs:
             if not is_mine:
                 continue
@@ -5210,7 +5224,7 @@ class PSManager(Logger):
                 self.pop_ps_denom(rm_outpoint)
 
     @unpack_io_values
-    def _check_other_ps_coins_tx_err(self, txid, io_values, full_check):
+    def _check_other_ps_coins_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
 
@@ -5222,7 +5236,7 @@ class PSManager(Logger):
         return 'Transaction has no outputs with ps denoms/collateral addresses'
 
     @unpack_io_values
-    def _check_privatesend_tx_err(self, txid, io_values, full_check):
+    def _check_privatesend_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -5245,7 +5259,7 @@ class PSManager(Logger):
                 return f'Transaction input mix_rounds too small'
 
     @unpack_io_values
-    def _check_spend_ps_coins_tx_err(self, txid, io_values, full_check):
+    def _check_spend_ps_coins_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
