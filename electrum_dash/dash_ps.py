@@ -13,6 +13,7 @@ from math import floor, ceil
 from uuid import uuid4
 
 from . import constants, util
+from .bip32 import convert_bip32_intpath_to_strpath
 from .bitcoin import (COIN, address_to_script,
                       is_address, pubkey_to_address)
 from .dash_tx import (STANDARD_TX, PSTxTypes, SPEC_TX_NAMES, PSCoinRounds,
@@ -162,7 +163,8 @@ DEFAULT_SUBSCRIBE_SPENT = False
 DEFAULT_ALLOW_OTHERS = False
 
 POOL_MIN_PARTICIPANTS = 3
-POOL_MAX_PARTICIPANTS = 5
+POOL_MIN_PARTICIPANTS_TESTNET = 2
+POOL_MAX_PARTICIPANTS = 20
 
 PRIVATESEND_QUEUE_TIMEOUT = 30
 PRIVATESEND_SESSION_MSG_TIMEOUT = 40
@@ -935,6 +937,31 @@ class PSManager(Logger):
         await self.find_untracked_ps_txs()
         self.wallet.save_db()
 
+    def can_find_untracked(self):
+        w = self.wallet
+        network = self.network
+        if network is None:
+            return False
+
+        server_height = network.get_server_height()
+        if server_height == 0:
+            return False
+
+        local_height = network.get_local_height()
+        if local_height < server_height:
+            return False
+
+        with w.lock:
+            unverified_no_islock = []
+            for txid in w.unverified_tx:
+                if txid not in w.db.islocks:
+                    unverified_no_islock.append(txid)
+            if (unverified_no_islock
+                    or not w.is_up_to_date()
+                    or not w.synchronizer.is_up_to_date()):
+                return False
+        return True
+
     @property
     def state(self):
         return self._state
@@ -1080,6 +1107,15 @@ class PSManager(Logger):
         if addr and bool(idx):
             if addr != self.derive_address(*idx):
                 raise PSKsInternalAddressCorruption()
+
+    def get_address_path_str(self, address):
+        intpath = self.get_address_index(address)
+        if intpath is None:
+            return None
+        if self.ps_keystore:
+            addr_deriv_offset = self.ps_keystore.addr_deriv_offset
+            intpath = (addr_deriv_offset*2 + intpath[0], intpath[1])
+        return convert_bip32_intpath_to_strpath(intpath)
 
     def create_new_address(self, for_change=False):
         assert type(for_change) is bool
@@ -1349,6 +1385,17 @@ class PSManager(Logger):
             return MAX_MIX_ROUNDS_TESTNET
         else:
             return MAX_MIX_ROUNDS
+
+    @property
+    def pool_min_participants(self):
+        if constants.net.TESTNET:
+            return POOL_MIN_PARTICIPANTS_TESTNET
+        else:
+            return POOL_MIN_PARTICIPANTS
+
+    @property
+    def pool_max_participants(self):
+        return POOL_MAX_PARTICIPANTS
 
     def mix_rounds_data(self, full_txt=False):
         if full_txt:
@@ -2452,6 +2499,7 @@ class PSManager(Logger):
                 tx.add_info_from_wallet(self.wallet)
             keypairs = self.get_keypairs()
             signed_txins_cnt = tx.sign(keypairs)
+            tx.finalize_psbt()
             keypairs.clear()
             if mine_txins_cnt is None:
                 mine_txins_cnt = len(tx.inputs())
@@ -3163,8 +3211,6 @@ class PSManager(Logger):
             if tx and tx.is_complete():
                 return tx
         except BaseException as e:
-            import traceback
-            traceback.print_exc()
             self.logger.wfl_err(f'prepare_funds_from_hw_wallet: {str(e)}')
 
     async def _prepare_funds_from_hw_wallet(self):
@@ -3210,9 +3256,7 @@ class PSManager(Logger):
 
     def check_funds_on_ps_keystore(self):
         w = self.wallet
-        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
-                            mature_only=True, include_ps=True)
-        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        coins = w.get_utxos(None, mature_only=True, include_ps=True)
         ps_ks_coins = [c for c in coins if c.is_ps_ks]
         if ps_ks_coins:
             return True
@@ -4551,7 +4595,7 @@ class PSManager(Logger):
                 outputs.append((o, txid, idx))
             io_values = (inputs, outputs,
                          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt)
-            return func(self, txid, io_values, full_check)
+            return func(self, txid, tx, io_values, full_check)
         return func_wrapper
 
     def _add_spent_ps_outpoints_ps_data(self, txid, tx):
@@ -4644,7 +4688,7 @@ class PSManager(Logger):
         self.restore_spent_addrs(restored_ps_addrs)
 
     @unpack_io_values
-    def _check_new_denoms_tx_err(self, txid, io_values, full_check):
+    def _check_new_denoms_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -4776,7 +4820,7 @@ class PSManager(Logger):
                 w.db.pop_ps_other(rm_outpoint)
 
     @unpack_io_values
-    def _check_new_collateral_tx_err(self, txid, io_values, full_check):
+    def _check_new_collateral_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -4885,7 +4929,7 @@ class PSManager(Logger):
                 w.db.pop_ps_other(rm_outpoint)
 
     @unpack_io_values
-    def _check_pay_collateral_tx_err(self, txid, io_values, full_check):
+    def _check_pay_collateral_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -4994,14 +5038,14 @@ class PSManager(Logger):
                 w.db.pop_ps_collateral(rm_outpoint)
 
     @unpack_io_values
-    def _check_denominate_tx_err(self, txid, io_values, full_check):
+    def _check_denominate_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if icnt != ocnt:
             return 'Transaction has different count of inputs/outputs'
-        if icnt < POOL_MIN_PARTICIPANTS:
+        if icnt < self.pool_min_participants:
             return 'Transaction has too small count of inputs/outputs'
-        if icnt > POOL_MAX_PARTICIPANTS * PRIVATESEND_ENTRY_MAX_SIZE:
+        if icnt > self.pool_max_participants * PRIVATESEND_ENTRY_MAX_SIZE:
             return 'Transaction has too many count of inputs/outputs'
         if mine_icnt < 1:
             return 'Transaction has too small count of mine inputs'
@@ -5026,6 +5070,20 @@ class PSManager(Logger):
             return
 
         w = self.wallet
+        # additional check with is_mine for find untracked
+        if self.state not in self.mixing_running_states:
+            mine_icnt = mine_ocnt = 0
+            for txin in tx.inputs():
+                addr = w.get_txin_address(txin)
+                if w.is_mine(addr):
+                    mine_icnt += 1
+            for o in tx.outputs():
+                addr = o.address
+                if w.is_mine(addr):
+                    mine_ocnt += 1
+            if mine_icnt != mine_ocnt:
+                return f'Differ mine_icnt/mine_ocnt: {mine_icnt}/{mine_ocnt}'
+
         for i, prev_h, prev_n, is_mine, tx_type in inputs:
             if not is_mine:
                 continue
@@ -5054,76 +5112,6 @@ class PSManager(Logger):
             return True
         else:
             return False
-
-    def _is_mine_lookahead(self, addr, for_change=False, look_ahead_cnt=100,
-                           ps_ks=False):
-        # need look_ahead_cnt is max 16 sessions * avg 5 addresses is ~ 80
-        w = self.wallet
-        if w.is_mine(addr):
-            return True
-        if self.state in self.mixing_running_states:
-            return False
-
-        imported_addrs = getattr(w.db, 'imported_addresses', {})
-        if not ps_ks and imported_addrs:
-            return False
-
-        if for_change:
-            last_wallet_addr = w.db.get_change_addresses(slice_start=-1,
-                                                         ps_ks=ps_ks)[0]
-            if ps_ks:
-                last_wallet_index = self.get_address_index(last_wallet_addr)[1]
-            else:
-                last_wallet_index = w.get_address_index(last_wallet_addr)[1]
-        else:
-            last_wallet_addr = w.db.get_receiving_addresses(slice_start=-1,
-                                                            ps_ks=ps_ks)[0]
-            if ps_ks:
-                last_wallet_index = self.get_address_index(last_wallet_addr)[1]
-            else:
-                last_wallet_index = w.get_address_index(last_wallet_addr)[1]
-
-        # prepare cache
-        if ps_ks:
-            cache = getattr(self, '_is_mine_lookahead_cache_ps_ks', {})
-        else:
-            cache = getattr(self, '_is_mine_lookahead_cache', {})
-        if not cache:
-            cache['change'] = {}
-            cache['recv'] = {}
-        if ps_ks:
-            self._is_mine_lookahead_cache_ps_ks = cache
-        else:
-            self._is_mine_lookahead_cache = cache
-
-        cache_type = 'change' if for_change else 'recv'
-        cache = cache[cache_type]
-        if 'first_idx' not in cache:
-            cache['addrs'] = addrs = list()
-            cache['first_idx'] = first_idx = last_wallet_index + 1
-        else:
-            addrs = cache['addrs']
-            first_idx = cache['first_idx']
-            if addr in addrs:
-                return True
-            elif first_idx < last_wallet_index + 1:
-                difference = last_wallet_index + 1 - first_idx
-                cache['addrs'] = addrs = addrs[difference:]
-                cache['first_idx'] = first_idx = last_wallet_index + 1
-
-        # generate new addrs and check match
-        idx = first_idx + len(addrs)
-        while len(addrs) < look_ahead_cnt:
-            if ps_ks:
-                generated_addr = self.derive_address(for_change, idx)
-            else:
-                generated_addr = w.derive_address(for_change, idx)
-            if generated_addr not in addrs:
-                addrs.append(generated_addr)
-            if addr in addrs:
-                return True
-            idx += 1
-        return False
 
     def _calc_rounds_for_denominate_tx(self, new_outpoints, input_rounds):
         output_rounds = list(map(lambda x: x+1, input_rounds[:]))
@@ -5165,13 +5153,8 @@ class PSManager(Logger):
         new_outpoints = []
         for i, o in enumerate(tx.outputs()):
             addr = o.address
-            if self.ps_keystore:
-                if (not self._is_mine_lookahead(addr, ps_ks=True)
-                        and not self._is_mine_lookahead(addr)):
-                    continue
-            else:
-                if not self._is_mine_lookahead(addr):
-                    continue
+            if not w.is_mine(addr):
+                continue
             new_outpoints.append((f'{txid}:{i}', addr, o.value))
 
         input_rounds = []
@@ -5212,13 +5195,8 @@ class PSManager(Logger):
         rm_outpoints = []
         for i, o in enumerate(tx.outputs()):
             addr = o.address
-            if self.ps_keystore:
-                if (not self._is_mine_lookahead(addr, ps_ks=True)
-                        and not self._is_mine_lookahead(addr)):
-                    continue
-            else:
-                if not self._is_mine_lookahead(addr):
-                    continue
+            if not w.is_mine(addr):
+                continue
             rm_outpoints.append((f'{txid}:{i}', addr))
 
         restored_ps_addrs = set()
@@ -5243,7 +5221,7 @@ class PSManager(Logger):
                 self.pop_ps_denom(rm_outpoint)
 
     @unpack_io_values
-    def _check_other_ps_coins_tx_err(self, txid, io_values, full_check):
+    def _check_other_ps_coins_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
 
@@ -5255,7 +5233,7 @@ class PSManager(Logger):
         return 'Transaction has no outputs with ps denoms/collateral addresses'
 
     @unpack_io_values
-    def _check_privatesend_tx_err(self, txid, io_values, full_check):
+    def _check_privatesend_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -5278,7 +5256,7 @@ class PSManager(Logger):
                 return f'Transaction input mix_rounds too small'
 
     @unpack_io_values
-    def _check_spend_ps_coins_tx_err(self, txid, io_values, full_check):
+    def _check_spend_ps_coins_tx_err(self, txid, tx, io_values, full_check):
         (inputs, outputs,
          icnt, mine_icnt, others_icnt, ocnt, op_return_ocnt) = io_values
         if others_icnt > 0:
@@ -5556,6 +5534,14 @@ class PSManager(Logger):
         else:
             self.trigger_callback('ps-state-changes', w, None, None)
         try:
+            logged_awaiting = False
+            while not self.can_find_untracked():
+                if not logged_awaiting:
+                    logged_awaiting = True
+                    self.logger.info('awaiting wallet sync')
+                await asyncio.sleep(1)
+            if logged_awaiting:
+                self.logger.info('wallet synced')
             _find = self._find_untracked_ps_txs
             found = await self.loop.run_in_executor(None, _find, log)
             if found:

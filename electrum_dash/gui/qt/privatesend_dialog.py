@@ -21,7 +21,6 @@ from .util import (HelpLabel, MessageBoxMixin, read_QIcon, custom_message_box,
                    ColorScheme, icon_path, WindowModalDialog, CloseButton,
                    Buttons, CancelButton, OkButton)
 from .password_dialog import PasswordLayout, PW_NEW, PW_CHANGE
-from .transaction_dialog import show_transaction
 from .qrtextedit import ShowQRTextEdit
 from .seed_dialog import SeedLayout
 

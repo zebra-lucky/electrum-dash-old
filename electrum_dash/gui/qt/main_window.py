@@ -2032,7 +2032,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         try:
             tx_list = psman.prepare_funds_from_ps_keystore(password)
             for tx in tx_list:
-                show_transaction(tx, self)
+                show_transaction(tx, parent=self)
         except Exception as e:
             self.show_error(f'{str(e)}')
 
@@ -3227,7 +3227,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             self.show_warning(_('Please restart Dash Electrum to activate the new GUI settings'), title=_('Success'))
 
     def closeEvent(self, event):
-        # It seems in some rare cases this closeEvent() is called twice
         psman = self.wallet.psman
         if psman.state in psman.mixing_running_states and not psman.is_waiting:
             if not self.question(psman.WAIT_MIXING_STOP_MSG):
@@ -3249,13 +3248,20 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                 self.send_funds_to_main_ks(mwin=self, parent=self)
                 event.ignore()
                 return
-        self.history_list.hm.get_data_thread.stop()
-        self.address_list.am.get_data_thread.stop()
-        self.utxo_list.cm.get_data_thread.stop()
+        # It seems in some rare cases this closeEvent() is called twice
         if not self.cleaned_up:
+            self.stop_get_data_threads()
             self.cleaned_up = True
             self.clean_up()
         event.accept()
+
+    def stop_get_data_threads(self):
+        self.history_list.hm.get_data_thread.stop()
+        self.address_list.am.get_data_thread.stop()
+        self.utxo_list.cm.get_data_thread.stop()
+        self.history_list.hm.get_data_thread.wait()
+        self.address_list.am.get_data_thread.wait()
+        self.utxo_list.cm.get_data_thread.wait()
 
     def clean_up(self):
         hide_ps_dialog(self)

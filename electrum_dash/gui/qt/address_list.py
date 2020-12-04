@@ -132,7 +132,7 @@ class AddressModel(QAbstractItemModel, Logger):
         self.wallet = self.parent.wallet
         self.addr_items = list()
         # setup bg thread to get updated data
-        self.data_ready.connect(self.on_get_data, Qt.BlockingQueuedConnection)
+        self.data_ready.connect(self.on_get_data, Qt.QueuedConnection)
         self.get_data_thread = GetDataThread(self, self.get_addresses,
                                              self.data_ready, self)
         self.get_data_thread.start()

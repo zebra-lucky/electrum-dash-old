@@ -1387,6 +1387,7 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
                              else self.get_txin_type(address))
         txout.is_mine = True
         txout.is_change = self.is_change(address)
+        txout.is_ps_ks = ps_ks
         if isinstance(self, Multisig_Wallet):
             txout.num_sig = self.m
         self._add_txinout_derivation_info(txout, address,
@@ -2347,9 +2348,8 @@ class Deterministic_Wallet(Abstract_Wallet):
 
     def get_address_path_str(self, address, ps_ks=False):
         if ps_ks:
-            intpath = self.psman.get_address_index(address)
-        else:
-            intpath = self.get_address_index(address)
+            return self.psman.get_address_path_str(address)
+        intpath = self.get_address_index(address)
         if intpath is None:
             return None
         return convert_bip32_intpath_to_strpath(intpath)

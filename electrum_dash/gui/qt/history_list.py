@@ -119,7 +119,7 @@ class HistoryModel(QAbstractItemModel, Logger):
         self.tx_group_expand_icn = read_QIcon('tx_group_expand.png')
         self.tx_group_collapse_icn = read_QIcon('tx_group_collapse.png')
         # setup bg thread to get updated data
-        self.data_ready.connect(self.on_get_data, Qt.BlockingQueuedConnection)
+        self.data_ready.connect(self.on_get_data, Qt.QueuedConnection)
         self.get_data_thread = GetDataThread(self, self.get_history_data,
                                              self.data_ready, self)
         self.get_data_thread.data_call_args = (self.group_ps, )
