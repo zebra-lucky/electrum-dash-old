@@ -45,6 +45,9 @@ $PIP_CMD install --no-dependencies -I x11_hash>=1.4
 $PIP_CMD install --no-dependencies -I \
     -r contrib/deterministic-build/requirements-mac-build.txt
 
+# Fix to work with macOS Big Sur
+$PIP_CMD install -I PyQt5==5.13.1
+
 pushd electrum_dash
 git clone https://github.com/zebra-lucky/electrum-dash-locale/ locale-repo
 mv locale-repo/locale .
