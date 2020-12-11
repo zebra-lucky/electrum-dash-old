@@ -2,8 +2,6 @@
 set -ev
 
 if [[ -n $TRAVIS_TAG ]]; then
-    brew install libusb
-
     PYTHON_VERSION=3.7.6
     PYFTP=https://www.python.org/ftp/python/$PYTHON_VERSION
     PYPKG_NAME=python-$PYTHON_VERSION-macosx10.6.pkg
