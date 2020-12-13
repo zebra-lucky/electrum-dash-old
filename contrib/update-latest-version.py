@@ -27,6 +27,7 @@ try:
     from electrum_dash.storage import WalletStorage
     from electrum_dash.util import InvalidPassword
     from electrum_dash.wallet import Wallet
+    from electrum_dash.wallet_db import WalletDB
 except ImportError as e:
     print('Import error:', e)
 
@@ -76,12 +77,12 @@ def get_connected_hw_devices(plugins):
 def get_passwd_for_hw_device_encrypted_storage(plugins):
     devices = get_connected_hw_devices(plugins)
     if len(devices) == 0:
-        print_msg('Error: No connected hw device found. '
-                  'Cannot decrypt this wallet.')
+        print('Error: No connected hw device found. '
+              'Cannot decrypt this wallet.')
         sys.exit(1)
     elif len(devices) > 1:
-        print_msg('Warning: multiple hardware devices detected. '
-                  'The first one will be used to decrypt the wallet.')
+        print('Warning: multiple hardware devices detected. '
+              'The first one will be used to decrypt the wallet.')
     name, device_info = devices[0]
     plugin = plugins.get_plugin(name)
     derivation = storage.get_derivation_used_for_hw_device_encryption()
@@ -152,7 +153,12 @@ class SignApp(object):
             else:
                 password = get_password(storage.decrypt)
 
-        self.wallet = Wallet(self.storage)
+        db = WalletDB(self.storage.read(), manual_upgrades=True)
+        if db.requires_upgrade():
+            print('Error: Wallet db need to be upgraded.'
+                  ' Do it with the wallet app')
+            sys.exit(1)
+        self.wallet = Wallet(db, self.storage, config=self.config)
 
         if self.wallet.has_password() and not password:
             password = get_password(self.wallet.check_password)
