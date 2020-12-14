@@ -26,7 +26,7 @@ wine python -m pip install --no-dependencies --no-warn-script-location \
 wine python -m pip install --no-dependencies --no-warn-script-location \
     -r contrib/deterministic-build/requirements-binaries.txt
 wine python -m pip install --no-dependencies --no-warn-script-location \
-    -r contrib/deterministic-build/requirements-wine-build.txt
+    -r contrib/deterministic-build/requirements-build-wine.txt
 
 wine pyinstaller --clean -y \
     --name electrum-dash-$DASH_ELECTRUM_VERSION.exe \

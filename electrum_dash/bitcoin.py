@@ -24,11 +24,11 @@
 # SOFTWARE.
 
 import hashlib
-from typing import List, Tuple, TYPE_CHECKING, Optional, Union
+from typing import List, Tuple, TYPE_CHECKING, Optional, Union, Sequence
 import enum
 from enum import IntEnum, Enum
 
-from .util import bfh, bh2u, BitcoinException, assert_bytes, to_bytes, inv_dict
+from .util import bfh, bh2u, BitcoinException, assert_bytes, to_bytes, inv_dict, is_hex_str
 from . import version
 from . import constants
 from . import ecc
@@ -291,6 +291,24 @@ def add_number_to_script(i: int) -> bytes:
     return bfh(push_script(script_num_to_hex(i)))
 
 
+def construct_script(items: Sequence[Union[str, int, bytes, opcodes]]) -> str:
+    """Constructs bitcoin script from given items."""
+    script = ''
+    for item in items:
+        if isinstance(item, opcodes):
+            script += item.hex()
+        elif type(item) is int:
+            script += add_number_to_script(item).hex()
+        elif isinstance(item, (bytes, bytearray)):
+            script += push_script(item.hex())
+        elif isinstance(item, str):
+            assert is_hex_str(item)
+            script += push_script(item)
+        else:
+            raise Exception(f'unexpected item for script: {item!r}')
+    return script
+
+
 def relayfee(network: 'Network' = None) -> int:
     """Returns feerate in sat/kbyte."""
     from .simple_config import FEERATE_DEFAULT_RELAY, FEERATE_MAX_RELAY
@@ -383,9 +401,7 @@ def address_to_script(addr: str, *, net=None) -> str:
     if addrtype == net.ADDRTYPE_P2PKH:
         script = pubkeyhash_to_p2pkh_script(bh2u(hash_160_))
     elif addrtype == net.ADDRTYPE_P2SH:
-        script = opcodes.OP_HASH160.hex()
-        script += push_script(bh2u(hash_160_))
-        script += opcodes.OP_EQUAL.hex()
+        script = construct_script([opcodes.OP_HASH160, hash_160_, opcodes.OP_EQUAL])
     else:
         raise BitcoinException(f'unknown address type: {addrtype}')
     return script
@@ -421,13 +437,16 @@ def script_to_scripthash(script: str) -> str:
     return bh2u(bytes(reversed(h)))
 
 def public_key_to_p2pk_script(pubkey: str) -> str:
-    return push_script(pubkey) + opcodes.OP_CHECKSIG.hex()
+    return construct_script([pubkey, opcodes.OP_CHECKSIG])
 
 def pubkeyhash_to_p2pkh_script(pubkey_hash160: str) -> str:
-    script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160]).hex()
-    script += push_script(pubkey_hash160)
-    script += bytes([opcodes.OP_EQUALVERIFY, opcodes.OP_CHECKSIG]).hex()
-    return script
+    return construct_script([
+        opcodes.OP_DUP,
+        opcodes.OP_HASH160,
+        pubkey_hash160,
+        opcodes.OP_EQUALVERIFY,
+        opcodes.OP_CHECKSIG
+    ])
 
 
 __b58chars = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'

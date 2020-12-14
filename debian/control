@@ -16,7 +16,8 @@ Build-Depends:
  libudev-dev,
  libgmp-dev,
  libsecp256k1-0,
- electrum-dash-pypi-bdeps
+ electrum-dash-pypi-bdeps (>= 4.0.4.0~),
+ electrum-dash-pypi-bdeps-updates (>= 4.0.7.0~)
 Standards-Version: 4.1.3
 Homepage: http://electrum.dash.org/
 X-Python3-Version: >= 3.6

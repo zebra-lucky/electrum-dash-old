@@ -62,7 +62,8 @@ from .bitcoin import is_address, address_to_script, is_minikey, relayfee, dust_t
 from .crypto import sha256d
 from . import keystore
 from .dash_tx import SPEC_TX_NAMES, PSCoinRounds
-from .keystore import load_keystore, Hardware_KeyStore, KeyStore, KeyStoreWithMPK, AddressIndexGeneric
+from .keystore import (load_keystore, Hardware_KeyStore, KeyStore, KeyStoreWithMPK,
+                       AddressIndexGeneric, CannotDerivePubkey)
 from .util import multisig_type
 from .storage import StorageEncryptionVersion, WalletStorage
 from .wallet_db import WalletDB
@@ -162,10 +163,18 @@ async def sweep_preparations(privkeys, network: 'Network', imax=100):
     return inputs, keypairs
 
 
-def sweep(privkeys, *, network: 'Network', config: 'SimpleConfig',
-          to_address: str, fee: int = None, imax=100,
-          locktime=None, tx_version=None) -> PartialTransaction:
-    inputs, keypairs = network.run_from_another_thread(sweep_preparations(privkeys, network, imax))
+async def sweep(
+        privkeys,
+        *,
+        network: 'Network',
+        config: 'SimpleConfig',
+        to_address: str,
+        fee: int = None,
+        imax=100,
+        locktime=None,
+        tx_version=None
+) -> PartialTransaction:
+    inputs, keypairs = await sweep_preparations(privkeys, network, imax)
     total = sum(txin.value_sats() for txin in inputs)
     if fee is None:
         outputs = [PartialTxOutput(scriptpubkey=bfh(bitcoin.address_to_script(to_address)),
@@ -508,10 +517,11 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
         """Returns a map: pubkey -> (keystore, derivation_suffix)"""
         return {}
 
-    def get_tx_info(self, tx) -> TxWalletDetails:
-        is_relevant, is_mine, v, fee = self.get_wallet_delta(tx)
-        if fee is None and isinstance(tx, PartialTransaction):
-            fee = tx.get_fee()
+    def get_tx_info(self, tx: Transaction) -> TxWalletDetails:
+        tx_wallet_delta = self.get_wallet_delta(tx)
+        is_relevant = tx_wallet_delta.is_relevant
+        is_any_input_ismine = tx_wallet_delta.is_any_input_ismine
+        fee = tx_wallet_delta.fee
         exp_n = None
         can_broadcast = False
         tx_hash = tx.txid()  # note: txid can be None! e.g. when called from GUI tx dialog
@@ -558,17 +568,16 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
                 status = _("Signed")
                 can_broadcast = self.network is not None
         else:
+            assert isinstance(tx, PartialTransaction)
             s, r = tx.signature_count()
             status = _("Unsigned") if s == 0 else _('Partially signed') + ' (%d/%d)'%(s,r)
 
         if is_relevant:
-            if is_mine:
-                if fee is not None:
-                    amount = v + fee
-                else:
-                    amount = v
+            if tx_wallet_delta.is_all_input_ismine:
+                assert fee is not None
+                amount = tx_wallet_delta.delta + fee
             else:
-                amount = v
+                amount = tx_wallet_delta.delta
         else:
             amount = None
 
@@ -1034,7 +1043,7 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
                and self.config.has_fee_mempool():
                 fee_per_byte = fee / size
                 exp_n = self.config.fee_to_depth(fee_per_byte)
-                if exp_n:
+                if exp_n is not None:
                     extra.append('%.2f MB'%(exp_n/1000000))
             if height == TX_HEIGHT_LOCAL:
                 status = 3
@@ -1690,7 +1699,11 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
         return out
 
     @abstractmethod
-    def get_fingerprint(self):
+    def get_fingerprint(self) -> str:
+        """Returns a string that can be used to identify this wallet.
+        Used e.g. by Labels plugin, and LN channel backups.
+        Returns empty string "" for wallets that don't have an ID.
+        """
         pass
 
     def can_import_privkey(self):
@@ -1810,20 +1823,6 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
     def pubkeys_to_address(self, pubkeys: Sequence[str]) -> Optional[str]:
         pass
 
-    def txin_value(self, txin: TxInput) -> Optional[int]:
-        if isinstance(txin, PartialTxInput):
-            v = txin.value_sats()
-            if v: return v
-        txid = txin.prevout.txid.hex()
-        prev_n = txin.prevout.out_idx
-        for addr in self.db.get_txo_addresses(txid):
-            d = self.db.get_txo_addr(txid, addr)
-            for n, v, cb in d:
-                if n == prev_n:
-                    return v
-        # may occur if wallet is not synchronized
-        return None
-
     def price_at_timestamp(self, txid, price_func):
         """Returns fiat price of bitcoin at the time tx got confirmed."""
         timestamp = self.get_tx_height(txid).timestamp
@@ -1833,7 +1832,7 @@ class Abstract_Wallet(AddressSynchronizer, ABC):
         coins = self.get_utxos(domain)
         now = time.time()
         p = price_func(now)
-        ap = sum(self.coin_price(coin.prevout.txid.hex(), price_func, ccy, self.txin_value(coin)) for coin in coins)
+        ap = sum(self.coin_price(coin.prevout.txid.hex(), price_func, ccy, self.get_txin_value(coin)) for coin in coins)
         lp = sum([coin.value_sats() for coin in coins]) * p / Decimal(COIN)
         return lp - ap
 
@@ -2361,7 +2360,10 @@ class Deterministic_Wallet(Abstract_Wallet):
                 # note: we already know the pubkey belongs to the keystore,
                 #       but the script template might be different
                 if len(der_suffix) != 2: continue
-                my_address = self.derive_address(*der_suffix)
+                try:
+                    my_address = self.derive_address(*der_suffix)
+                except CannotDerivePubkey:
+                    my_address = None
                 if my_address == address:
                     self._ephemeral_addr_to_addr_index[address] = list(der_suffix)
                     return True
@@ -2544,7 +2546,7 @@ def create_new_wallet(*, path, config: SimpleConfig, passphrase=None, password=N
         raise Exception("Remove the existing wallet first!")
     db = WalletDB('', manual_upgrades=False)
 
-    seed = Mnemonic('en').make_seed(seed_type)
+    seed = Mnemonic('en').make_seed(seed_type=seed_type)
     k = keystore.from_seed(seed, passphrase)
     db.put('keystore', k.dump())
     db.put('wallet_type', 'standard')
@@ -2554,7 +2556,6 @@ def create_new_wallet(*, path, config: SimpleConfig, passphrase=None, password=N
     wallet.update_password(old_pw=None, new_pw=password, encrypt_storage=encrypt_file)
     wallet.synchronize()
     msg = "Please keep your seed in a safe place; if you lose it, you will not be able to restore your wallet."
-
     wallet.save_db()
     return {'seed': seed, 'wallet': wallet, 'msg': msg}
 

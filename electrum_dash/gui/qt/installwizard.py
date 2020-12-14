@@ -107,8 +107,10 @@ def wizard_dialog(func):
             except GoBack:
                 if not wizard.can_go_back():
                     wizard.close()
-                # to go back from the current dialog, we just let the caller unroll the stack:
-                raise
+                    raise UserCancelled
+                else:
+                    # to go back from the current dialog, we just let the caller unroll the stack:
+                    raise
             # next dialog
             try:
                 while True:
@@ -483,7 +485,7 @@ class InstallWizard(QDialog, MessageBoxMixin, BaseWizard):
         return self.seed_input(title, message, test, options)
 
     @wizard_dialog
-    def confirm_seed_dialog(self, run_next, test):
+    def confirm_seed_dialog(self, run_next, seed, test):
         self.app.clipboard().clear()
         title = _('Confirm Seed')
         message = ' '.join([
@@ -608,11 +610,12 @@ class InstallWizard(QDialog, MessageBoxMixin, BaseWizard):
             title: str,
             message1: str,
             choices: List[Tuple[str, str, str]],
+            hide_choices: bool = False,
             message2: str,
             test_text: Callable[[str], int],
             run_next,
             default_choice_idx: int = 0,
-            get_account_xpub=None
+            get_account_xpub=None,
     ) -> Tuple[str, str]:
         vbox = QVBoxLayout()
 
@@ -638,7 +641,8 @@ class InstallWizard(QDialog, MessageBoxMixin, BaseWizard):
             line.setText(c_default_text[idx])
         clayout = ChoicesLayout(message1, c_titles, on_choice_click,
                                 checked_index=default_choice_idx)
-        vbox.addLayout(clayout.layout())
+        if not hide_choices:
+            vbox.addLayout(clayout.layout())
 
         vbox.addWidget(WWLabel(message2))
 

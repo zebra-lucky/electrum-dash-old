@@ -47,7 +47,8 @@ from .bitcoin import (TYPE_ADDRESS, TYPE_SCRIPT, hash_160,
                       hash160_to_p2sh, hash160_to_p2pkh,
                       var_int, TOTAL_COIN_SUPPLY_LIMIT_IN_BTC, COIN,
                       int_to_hex, push_script, b58_address_to_hash160,
-                      opcodes, add_number_to_script, base_decode, base_encode)
+                      opcodes, add_number_to_script, base_decode, base_encode,
+                      construct_script)
 from .crypto import sha256d
 from .dash_tx import (ProTxBase, read_extra_payload, serialize_extra_payload,
                       to_varbytes, DashTxError)
@@ -478,10 +479,7 @@ def parse_output(vds: BCDataStream) -> TxOutput:
 def multisig_script(public_keys: Sequence[str], m: int) -> str:
     n = len(public_keys)
     assert 1 <= m <= n <= 15, f'm {m}, n {n}'
-    op_m = bh2u(add_number_to_script(m))
-    op_n = bh2u(add_number_to_script(n))
-    keylist = [push_script(k) for k in public_keys]
-    return op_m + ''.join(keylist) + op_n + opcodes.OP_CHECKMULTISIG.hex()
+    return construct_script([m, *public_keys, n, opcodes.OP_CHECKMULTISIG])
 
 
 
@@ -669,24 +667,25 @@ class Transaction:
 
         _type = txin.script_type
         pubkeys, sig_list = self.get_siglist(txin, estimate_size=estimate_size)
-        script = ''.join(push_script(x) for x in sig_list)
         if _type in ('address', 'unknown') and estimate_size:
             _type = self.guess_txintype_from_address(txin.address)
         if _type == 'p2pk':
-            return script
+            return construct_script([sig_list[0]])
         elif _type == 'p2sh':
             # put op_0 before script
-            script = '00' + script
             redeem_script = multisig_script(pubkeys, txin.num_sig)
-            script += push_script(redeem_script)
-            return script
+            return construct_script([0, *sig_list, redeem_script])
         elif _type == 'p2pkh':
-            script += push_script(pubkeys[0])
-            return script
+            return construct_script([sig_list[0], pubkeys[0]])
         raise UnknownTxinType(f'cannot construct scriptSig for txin_type: {_type}')
 
     @classmethod
     def get_preimage_script(cls, txin: 'PartialTxInput') -> str:
+        if txin.redeem_script:
+            if opcodes.OP_CODESEPARATOR in [x[0] for x in script_GetOp(txin.redeem_script)]:
+                raise Exception('OP_CODESEPARATOR black magic is not supported')
+            return txin.redeem_script.hex()
+
         pubkeys = [pk.hex() for pk in txin.pubkeys]
         if txin.script_type in ['p2sh']:
             return multisig_script(pubkeys, txin.num_sig)

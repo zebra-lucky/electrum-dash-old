@@ -229,6 +229,7 @@ class BaseTxDialog(QDialog, MessageBoxMixin):
 
     def do_broadcast(self):
         self.main_window.push_top_level_window(self)
+        self.main_window.save_pending_invoice()
         try:
             self.main_window.broadcast_transaction(self.tx)
         finally:
@@ -419,7 +420,7 @@ class BaseTxDialog(QDialog, MessageBoxMixin):
             time_str = dttm.isoformat(' ')[:-3]
             self.date_label.setText(_("Date: {}").format(time_str))
             self.date_label.show()
-        elif exp_n:
+        elif exp_n is not None:
             text = '%.2f MB'%(exp_n/1000000)
             self.date_label.setText(_('Position in mempool: {} from tip').format(text))
             self.date_label.show()
@@ -538,8 +539,9 @@ class BaseTxDialog(QDialog, MessageBoxMixin):
                 if addr is None:
                     addr = ''
                 cursor.insertText(addr, text_format(addr))
-                if isinstance(txin, PartialTxInput) and txin.value_sats() is not None:
-                    cursor.insertText(format_amount(txin.value_sats()), ext)
+                txin_value = self.wallet.get_txin_value(txin)
+                if txin_value is not None:
+                    cursor.insertText(format_amount(txin_value), ext)
             cursor.insertBlock()
 
         self.outputs_header.setText(_("Outputs") + ' (%d)'%len(self.tx.outputs()))

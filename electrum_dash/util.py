@@ -44,15 +44,15 @@ import ssl
 import ipaddress
 from ipaddress import IPv4Address, IPv6Address
 import random
-import attr
+import secrets
 
+import attr
 import aiohttp
 from aiohttp_socks import ProxyConnector, ProxyType
 import aiorpcx
 from aiorpcx import TaskGroup
 import certifi
 import dns.resolver
-import ecdsa
 
 from .i18n import _
 from .logging import get_logger, Logger, ShortcutInjectingFilter
@@ -236,6 +236,8 @@ class Fiat(object):
             return "{:.2f}".format(self.value) + ' ' + self.ccy
 
     def __eq__(self, other):
+        if not isinstance(other, Fiat):
+            return False
         if self.ccy != other.ccy:
             return False
         if isinstance(self.value, Decimal) and isinstance(other.value, Decimal) \
@@ -616,38 +618,24 @@ def is_hex_str(text: Any) -> bool:
     return True
 
 
-def is_non_negative_integer(val) -> bool:
-    try:
-        val = int(val)
-        if val >= 0:
-            return True
-    except:
-        pass
+def is_integer(val: Any) -> bool:
+    return isinstance(val, int)
+
+
+def is_non_negative_integer(val: Any) -> bool:
+    if is_integer(val):
+        return val >= 0
     return False
 
 
-def is_integer(val) -> bool:
-    try:
-        int(val)
-    except:
-        return False
-    else:
-        return True
+def is_int_or_float(val: Any) -> bool:
+    return isinstance(val, (int, float))
 
 
-def is_real_number(val, *, as_str: bool = False) -> bool:
-    if as_str:  # only accept str
-        if not isinstance(val, str):
-            return False
-    else:  # only accept int/float/etc.
-        if isinstance(val, str):
-            return False
-    try:
-        Decimal(val)
-    except:
-        return False
-    else:
-        return True
+def is_non_negative_int_or_float(val: Any) -> bool:
+    if is_int_or_float(val):
+        return val >= 0
+    return False
 
 
 def chunks(items, size: int):
@@ -1196,6 +1184,7 @@ def create_and_start_event_loop() -> Tuple[asyncio.AbstractEventLoop,
                                          args=(stopping_fut,),
                                          name='EventLoop')
     loop_thread.start()
+    loop._mythread = loop_thread
     return loop, stopping_fut, loop_thread
 
 
@@ -1303,7 +1292,7 @@ def list_enabled_bits(x: int) -> Sequence[int]:
 
 
 def resolve_dns_srv(host: str):
-    srv_records = dns.resolver.query(host, 'SRV')
+    srv_records = dns.resolver.resolve(host, 'SRV')
     # priority: prefer lower
     # weight: tie breaker; prefer higher
     srv_records = sorted(srv_records, key=lambda x: (x.priority, -x.weight))
@@ -1319,7 +1308,9 @@ def resolve_dns_srv(host: str):
 def randrange(bound: int) -> int:
     """Return a random integer k such that 1 <= k < bound, uniformly
     distributed across that range."""
-    return ecdsa.util.randrange(bound)
+    # secrets.randbelow(bound) returns a random int: 0 <= r < bound,
+    # hence transformations:
+    return secrets.randbelow(bound - 1) + 1
 
 
 class CallbackManager:

@@ -27,7 +27,6 @@ from kivy.uix.image import Image
 from kivy.lang import Builder
 from kivy.factory import Factory
 from kivy.utils import platform
-from kivy.logger import Logger
 
 from electrum_dash.util import profiler, parse_URI, format_time, InvalidPassword, NotEnoughFunds, Fiat
 from electrum_dash.invoices import (PR_TYPE_ONCHAIN, PR_DEFAULT_EXPIRATION_WHEN_CREATING,
@@ -40,6 +39,7 @@ from electrum_dash.plugin import run_hook
 from electrum_dash.wallet import InternalAddressCorruption
 from electrum_dash import simple_config
 from electrum_dash.simple_config import FEERATE_WARNING_HIGH_FEE, FEE_RATIO_HIGH_WARNING
+from electrum_dash.logging import Logger
 from electrum_dash.dash_tx import PSTxTypes, SPEC_TX_NAMES
 
 from .dialogs.question import Question
@@ -355,12 +355,17 @@ class HistoryScreen(CScreen):
             history_card.layout_manager.select_node(selected_node)
 
 
-class SendScreen(CScreen):
+class SendScreen(CScreen, Logger):
 
     kvname = 'send'
     payment_request = None  # type: Optional[PaymentRequest]
     parsed_URI = None
     is_ps = False
+
+    def __init__(self, **kwargs):
+        CScreen.__init__(self, **kwargs)
+        Logger.__init__(self)
+        self.is_max = False
 
     def set_URI(self, text: str):
         if not self.app.wallet:
@@ -376,6 +381,7 @@ class SendScreen(CScreen):
         self.message = uri.get('message', '')
         self.ps_txt = self.privatesend_txt()
         self.amount = self.app.format_amount_and_units(amount) if amount else ''
+        self.is_max = False
         self.payment_request = None
 
     def update(self):
@@ -394,6 +400,7 @@ class SendScreen(CScreen):
         status_str = item.get_status_str(status)
         assert isinstance(item, OnchainInvoice)
         key = item.id
+        address = item.get_address()
         is_bip70 = bool(item.bip70)
         return {
             'is_bip70': is_bip70,
@@ -401,7 +408,8 @@ class SendScreen(CScreen):
             'status': status,
             'status_str': status_str,
             'key': key,
-            'memo': item.message,
+            'memo': item.message or _('No Description'),
+            'address': address,
             'amount': self.app.format_amount_and_units(item.get_amount_sat() or 0),
         }
 
@@ -414,6 +422,7 @@ class SendScreen(CScreen):
         self.payment_request = None
         self.is_bip70 = False
         self.parsed_URI = None
+        self.is_max = False
 
     def set_request(self, pr: 'PaymentRequest'):
         self.address = pr.get_requestor()
@@ -448,11 +457,14 @@ class SendScreen(CScreen):
         if not self.amount:
             self.app.show_error(_('Please enter an amount'))
             return
-        try:
-            amount = self.app.get_amount(self.amount)
-        except:
-            self.app.show_error(_('Invalid amount') + ':\n' + self.amount)
-            return
+        if self.is_max:
+            amount = '!'
+        else:
+            try:
+                amount = self.app.get_amount(self.amount)
+            except:
+                self.app.show_error(_('Invalid amount') + ':\n' + self.amount)
+                return
         message = self.message
         if self.payment_request:
             outputs = self.payment_request.get_outputs()
@@ -471,6 +483,9 @@ class SendScreen(CScreen):
         invoice = self.read_invoice()
         if not invoice:
             return
+        self.save_invoice(invoice)
+
+    def save_invoice(self, invoice):
         self.app.wallet.save_invoice(invoice)
         self.do_clear()
         self.update()
@@ -479,9 +494,6 @@ class SendScreen(CScreen):
         invoice = self.read_invoice()
         if not invoice:
             return
-        self.app.wallet.save_invoice(invoice)
-        self.do_clear()
-        self.update()
         self.do_pay_invoice(invoice)
 
     def do_pay_invoice(self, invoice):
@@ -503,7 +515,7 @@ class SendScreen(CScreen):
             self.app.show_error(_("Not enough funds"))
             return
         except Exception as e:
-            Logger.exception('')
+            self.logger.exception('')
             self.app.show_error(repr(e))
             return
         fee = tx.get_fee()
@@ -525,11 +537,12 @@ class SendScreen(CScreen):
         elif feerate > FEERATE_WARNING_HIGH_FEE:
             msg.append(_('Warning') + ': ' + _("The fee for this transaction seems unusually high.")
                        + f' (feerate: {feerate:.1f} duffs/kB)')
-        self.app.protected('\n'.join(msg), self.send_tx, (tx,))
+        self.app.protected('\n'.join(msg), self.send_tx, (tx, invoice))
 
-    def send_tx(self, tx, password):
+    def send_tx(self, tx, invoice, password):
         if self.app.wallet.has_password() and password is None:
             return
+        self.save_invoice(invoice)
         def on_success(tx):
             if tx.is_complete():
                 self.app.broadcast(tx)
@@ -593,6 +606,7 @@ class ReceiveScreen(CScreen):
     def __init__(self, **kwargs):
         super(ReceiveScreen, self).__init__(**kwargs)
         Clock.schedule_interval(lambda dt: self.update(), 5)
+        self.is_max = False # not used for receiving (see app.amount_dialog)
 
     def expiry(self):
         return self.app.electrum_config.get('request_expiry', PR_DEFAULT_EXPIRATION_WHEN_CREATING)
@@ -658,7 +672,7 @@ class ReceiveScreen(CScreen):
         ci['address'] = address
         ci['key'] = key
         ci['amount'] = self.app.format_amount_and_units(amount) if amount else ''
-        ci['memo'] = description
+        ci['memo'] = description or _('No Description')
         ci['status'] = status
         ci['status_str'] = status_str
         return ci

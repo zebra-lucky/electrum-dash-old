@@ -32,8 +32,8 @@ from PyQt5.QtGui import QFontMetrics, QFont
 
 from electrum_dash import bitcoin
 from electrum_dash.util import bfh
-from electrum_dash.transaction import push_script, PartialTxOutput
-from electrum_dash.bitcoin import opcodes
+from electrum_dash.transaction import PartialTxOutput
+from electrum_dash.bitcoin import opcodes, construct_script
 from electrum_dash.logging import Logger
 
 from .qrtextedit import ScanQRTextEdit
@@ -52,9 +52,10 @@ normal_style = "QPlainTextEdit { }"
 
 
 class PayToLineError(NamedTuple):
-    idx: int  # index of line
     line_content: str
     exc: Exception
+    idx: int = 0  # index of line
+    is_multiline: bool = False
 
 
 class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
@@ -73,7 +74,7 @@ class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
         self.c = None
         self.textChanged.connect(self.check_text)
         self.outputs = []  # type: List[PartialTxOutput]
-        self.errors = []  # type: Sequence[PayToLineError]
+        self.errors = []  # type: List[PayToLineError]
         self.is_pr = False
         self.is_alias = False
         self.update_size()
@@ -94,7 +95,10 @@ class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
         self.setStyleSheet(util.ColorScheme.RED.as_stylesheet(True))
 
     def parse_address_and_amount(self, line) -> PartialTxOutput:
-        x, y = line.split(',')
+        try:
+            x, y = line.split(',')
+        except ValueError:
+            raise Exception("expected two comma-separated values: (address, amount)") from None
         scriptpubkey = self.parse_output(x)
         amount = self.parse_amount(y)
         return PartialTxOutput(scriptpubkey=scriptpubkey, value=amount)
@@ -103,20 +107,24 @@ class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
         try:
             address = self.parse_address(x)
             return bfh(bitcoin.address_to_script(address))
-        except:
+        except Exception:
+            pass
+        try:
             script = self.parse_script(x)
             return bfh(script)
+        except Exception:
+            pass
+        raise Exception("Invalid address or script.")
 
     def parse_script(self, x):
         script = ''
         for word in x.split():
             if word[0:3] == 'OP_':
                 opcode_int = opcodes[word]
-                assert opcode_int < 256  # opcode is single-byte
-                script += bitcoin.int_to_hex(opcode_int)
+                script += construct_script([opcode_int])
             else:
                 bfh(word)  # to test it is hex data
-                script += push_script(word)
+                script += construct_script([word])
         return script
 
     def parse_amount(self, x):
@@ -138,31 +146,51 @@ class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
             return
         # filter out empty lines
         lines = [i for i in self.lines() if i]
-        outputs = []  # type: List[PartialTxOutput]
-        total = 0
+
         self.payto_scriptpubkey = None
         self.lightning_invoice = None
+        self.outputs = []
+
         if len(lines) == 1:
             data = lines[0]
+            # try bip21 URI
             if data.startswith("dash:") or data.startswith("pay:"):
                 self.win.pay_to_URI(data)
                 return
+            # try "address, amount" on-chain format
+            try:
+                self._parse_as_multiline(lines, raise_errors=True)
+            except Exception as e:
+                pass
+            else:
+                return
+            # try address/script
             try:
                 self.payto_scriptpubkey = self.parse_output(data)
-            except:
-                pass
-            if self.payto_scriptpubkey:
+            except Exception as e:
+                self.errors.append(PayToLineError(line_content=data, exc=e))
+            else:
                 self.win.set_onchain(True)
                 self.win.lock_amount(False)
                 return
+        else:
+            # there are multiple lines
+            self._parse_as_multiline(lines, raise_errors=False)
 
+    def _parse_as_multiline(self, lines, *, raise_errors: bool):
+        outputs = []  # type: List[PartialTxOutput]
+        total = 0
         is_max = False
         for i, line in enumerate(lines):
             try:
                 output = self.parse_address_and_amount(line)
             except Exception as e:
-                self.errors.append(PayToLineError(idx=i, line_content=line.strip(), exc=e))
-                continue
+                if raise_errors:
+                    raise
+                else:
+                    self.errors.append(PayToLineError(
+                        idx=i, line_content=line.strip(), exc=e, is_multiline=True))
+                    continue
             outputs.append(output)
             if output.value == '!':
                 is_max = True

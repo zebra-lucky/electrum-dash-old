@@ -39,7 +39,7 @@ pr_color = {
 }
 
 pr_tooltips = {
-    PR_UNPAID:_('Pending'),
+    PR_UNPAID:_('Unpaid'),
     PR_PAID:_('Paid'),
     PR_UNKNOWN:_('Unknown'),
     PR_EXPIRED:_('Expired'),
@@ -82,8 +82,6 @@ class Invoice(StoredObject):
             if self.exp > 0:
                 expiration = self.exp + self.time
                 status_str = _('Expires') + ' ' + age(expiration, include_seconds=True)
-            else:
-                status_str = _('Pending')
         return status_str
 
     def get_amount_sat(self) -> Union[int, Decimal, str, None]:
@@ -111,7 +109,7 @@ class OnchainInvoice(Invoice):
     requestor = attr.ib(type=str, kw_only=True)  # type: Optional[str]
 
     def get_address(self) -> str:
-        assert len(self.outputs) == 1
+        """returns the first address, to be displayed in GUI"""
         return self.outputs[0].address
 
     def get_amount_sat(self) -> Union[int, str]:
