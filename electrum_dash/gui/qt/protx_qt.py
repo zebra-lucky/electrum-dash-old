@@ -206,8 +206,11 @@ class WalletMNsModel(QAbstractTableModel):
     def reload_data(self):
         self.beginResetModel()
         self.mns = sorted(self.manager.mns.values(), key=lambda x: x.alias)
-        protx_mns = {h: mn.as_dict()
-                     for h, mn in self.mn_list.protx_mns.items()}
+        if self.mn_list:
+            protx_mns = {h: mn.as_dict()
+                         for h, mn in self.mn_list.protx_mns.items()}
+        else:
+            protx_mns = {}
         for mn in self.mns:
             h = mn.protx_hash
 
@@ -446,7 +449,8 @@ class Dip3TabWidget(QTabWidget):
         self.w_cur_idx = None
 
         self.wallet_mn_tab = self.create_wallet_mn_tab()
-        self.registerd_mn_tab = self.create_registered_mn_tab()
+        if self.mn_list:
+            self.registerd_mn_tab = self.create_registered_mn_tab()
         self.searchable_list = self.w_model
         self.currentChanged.connect(self.on_tabs_current_changed)
 
@@ -690,7 +694,7 @@ class Dip3TabWidget(QTabWidget):
         vbox.addWidget(self.w_view)
         w.setLayout(vbox)
         self.addTab(w, read_QIcon('tab_dip3.png'), _('Wallet MNs'))
-        if not self.mn_list.protx_loading:
+        if self.mn_list and not self.mn_list.protx_loading:
             self.w_model.reload_data()
         return w
 
