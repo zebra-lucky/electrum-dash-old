@@ -1524,7 +1524,6 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             lambda: self.fiat_send_e.setFrozen(self.amount_e.isReadOnly()))
 
         self.max_button = EnterButton(_("Max"), self.spend_max)
-        self.max_button.setFixedWidth(100)
         self.max_button.setCheckable(True)
         grid.addWidget(self.max_button, 4, 3)
 
