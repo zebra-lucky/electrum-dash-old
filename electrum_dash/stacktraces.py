@@ -12,6 +12,7 @@ import shutil
 import threading
 import traceback
 import collections
+import stat
 
 
 class StackTraces(threading.Thread):
@@ -170,15 +171,19 @@ class StackTraces(threading.Thread):
             if self._traceback_path is not None:
                 filename, traceback = self._traceback()
                 with open(filename + '.tmp', 'w') as fout:
+                    os.chmod(filename + '.tmp', stat.S_IREAD)
                     fout.write(traceback)
                 shutil.move(filename + '.tmp', filename)
+                os.chmod(filename, stat.S_IREAD)
 
         if stats:
             if self._stats_path is not None:
                 filename, stats = self._stats(True)
                 with open(filename + '.tmp', 'w') as fout:
+                    os.chmod(filename + '.tmp', stat.S_IREAD)
                     fout.write(stats)
                 shutil.move(filename + '.tmp', filename)
+                os.chmod(filename, stat.S_IREAD)
 
     def _get_filename(self, path, pattern, ext):
         filename = os.path.join(path, pattern)
