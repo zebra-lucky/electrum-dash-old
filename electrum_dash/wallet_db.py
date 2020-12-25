@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 OLD_SEED_VERSION = 4        # electrum versions < 2.0
 NEW_SEED_VERSION = 11       # electrum versions >= 2.0
-FINAL_SEED_VERSION = 32     # electrum >= 2.7 will set this to prevent
+FINAL_SEED_VERSION = 33     # electrum >= 2.7 will set this to prevent
                             # old versions from overwriting new format
 
 
@@ -182,6 +182,7 @@ class WalletDB(JsonDB):
         self._convert_version_30()
         self._convert_version_31()
         self._convert_version_32()
+        self._convert_version_33()
         self.put('seed_version', FINAL_SEED_VERSION)  # just to be sure
         self.upgrade_done = True
 
@@ -485,7 +486,7 @@ class WalletDB(JsonDB):
             return
         # convert txi & txo
         txi = self.get('txi', {})
-        for tx_hash, d in txi.items():
+        for tx_hash, d in list(txi.items()):
             d2 = {}
             for addr, l in d.items():
                 d2[addr] = {}
@@ -494,7 +495,7 @@ class WalletDB(JsonDB):
             txi[tx_hash] = d2
         self.data['txi'] = txi
         txo = self.get('txo', {})
-        for tx_hash, d in txo.items():
+        for tx_hash, d in list(txo.items()):
             d2 = {}
             for addr, l in d.items():
                 d2[addr] = {}
@@ -633,6 +634,20 @@ class WalletDB(JsonDB):
                         if not (item['type'] == PR_TYPE_ONCHAIN and item['outputs'] is None)}
         self.data['invoices'] = invoices_new
         self.data['seed_version'] = 32
+
+    def _convert_version_33(self):
+        if not self._is_upgrade_method_needed(32, 32):
+            return
+
+        from .invoices import PR_TYPE_ONCHAIN
+        requests = self.data.get('payment_requests', {})
+        invoices = self.data.get('invoices', {})
+        for d in [invoices, requests]:
+            for key, item in list(d.items()):
+                if item['type'] == PR_TYPE_ONCHAIN:
+                    item['height'] = item.get('height') or 0
+
+        self.data['seed_version'] = 33
 
     def _convert_imported(self):
         if not self._is_upgrade_method_needed(0, 13):

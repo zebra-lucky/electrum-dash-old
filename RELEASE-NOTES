@@ -1,3 +1,9 @@
+# Release 4.0.9 - (Dec 18, 2020)
+ * fix decoding BIP21 URIs with uppercase schema (d40bedb2)
+ * psbt: put full derivation paths into PSBT by default (c8155129)
+ * invoices: allow address-reuse (#6609, #6852)
+ * A few other minor bugfixes.
+
 # Release 4.0.7.0
  * Dependencies: as part of adapting to new dnspython,
    - python-ecdsa is no longer needed at all,

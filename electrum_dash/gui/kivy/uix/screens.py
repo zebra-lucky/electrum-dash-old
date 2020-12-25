@@ -45,6 +45,7 @@ from electrum_dash.dash_tx import PSTxTypes, SPEC_TX_NAMES
 from .dialogs.question import Question
 from .context_menu import ContextMenu
 
+from electrum_dash.gui.kivy import KIVY_GUI_PATH
 from electrum_dash.gui.kivy.i18n import _
 
 if TYPE_CHECKING:
@@ -132,9 +133,9 @@ TX_ICONS = [
 ]
 
 
-Builder.load_file('electrum_dash/gui/kivy/uix/ui_screens/history.kv')
-Builder.load_file('electrum_dash/gui/kivy/uix/ui_screens/send.kv')
-Builder.load_file('electrum_dash/gui/kivy/uix/ui_screens/receive.kv')
+Builder.load_file(KIVY_GUI_PATH + '/uix/ui_screens/history.kv')
+Builder.load_file(KIVY_GUI_PATH + '/uix/ui_screens/send.kv')
+Builder.load_file(KIVY_GUI_PATH + '/uix/ui_screens/receive.kv')
 
 
 class GetHistoryDataThread(threading.Thread):
@@ -175,7 +176,7 @@ class HistoryScreen(CScreen):
     def __init__(self, **kwargs):
         self.ra_dialog = None
         super(HistoryScreen, self).__init__(**kwargs)
-        atlas_path = 'atlas://electrum_dash/gui/kivy/theming/light/'
+        atlas_path = f'atlas://{KIVY_GUI_PATH}/theming/light/'
         self.atlas_path = atlas_path
         self.group_icn_empty = atlas_path + 'kv_tx_group_empty'
         self.group_icn_head = atlas_path + 'kv_tx_group_head'
@@ -649,8 +650,11 @@ class ReceiveScreen(CScreen):
         message = self.message
         addr = self.address or self.app.wallet.get_unused_address()
         if not addr:
-            self.app.show_info(_('No address available. Please remove some of your pending requests.'))
-            return
+            if not self.app.wallet.is_deterministic():
+                addr = self.app.wallet.get_receiving_address()
+            else:
+                self.app.show_info(_('No address available. Please remove some of your pending requests.'))
+                return
         self.address = addr
         req = self.app.wallet.make_payment_request(addr, amount, message, self.expiry())
         self.app.wallet.add_payment_request(req)

@@ -62,7 +62,8 @@ from electrum_dash.util import (format_time,
                                 UserFacingException,
                                 get_new_wallet_name, send_exception_to_crash_reporter,
                                 InvalidBitcoinURI, NotEnoughFunds, FILE_OWNER_MODE,
-                                NoDynamicFeeEstimates, MultipleSpendMaxTxOutputs)
+                                NoDynamicFeeEstimates, MultipleSpendMaxTxOutputs,
+                                DASH_BIP21_URI_SCHEME, PAY_BIP21_URI_SCHEME)
 from electrum_dash.invoices import PR_TYPE_ONCHAIN, PR_DEFAULT_EXPIRATION_WHEN_CREATING, Invoice
 from electrum_dash.invoices import PR_PAID, PR_FAILED, pr_expiration_values, OnchainInvoice
 from electrum_dash.transaction import (Transaction, PartialTxInput,
@@ -2928,7 +2929,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if not data:
             return
         # if the user scanned a dash URI
-        if str(data).startswith("dash:") or str(data).startswith("pay:"):
+        data_l = data.lower()
+        if (data_l.startswith(DASH_BIP21_URI_SCHEME + ':')
+            or data_l.startswith(PAY_BIP21_URI_SCHEME + ':')):
             self.pay_to_URI(data)
             return
         # else if the user scanned an offline signed tx

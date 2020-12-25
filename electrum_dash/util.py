@@ -811,6 +811,12 @@ def block_explorer_URL(config: 'SimpleConfig', kind: str, item: str) -> Optional
 #_ud = re.compile('%([0-9a-hA-H]{2})', re.MULTILINE)
 #urldecode = lambda x: _ud.sub(lambda m: chr(int(m.group(1), 16)), x)
 
+
+# note: when checking against these, use .lower() to support case-insensitivity
+DASH_BIP21_URI_SCHEME = 'dash'
+PAY_BIP21_URI_SCHEME = 'pay'
+
+
 class InvalidBitcoinURI(Exception): pass
 
 
@@ -829,7 +835,7 @@ def parse_URI(uri: str, on_pr: Callable = None, *, loop=None) -> dict:
         return {'address': uri}
 
     u = urllib.parse.urlparse(uri)
-    if u.scheme not in ['dash', 'pay']:
+    if u.scheme not in [DASH_BIP21_URI_SCHEME, PAY_BIP21_URI_SCHEME]:
         raise InvalidBitcoinURI("Not a Dash URI")
     address = u.path
 
@@ -922,7 +928,14 @@ def create_bip21_uri(addr, amount_sat: Optional[int], message: Optional[str],
             raise Exception(f"illegal key for URI: {repr(k)}")
         v = urllib.parse.quote(v)
         query.append(f"{k}={v}")
-    p = urllib.parse.ParseResult(scheme='dash', netloc='', path=addr, params='', query='&'.join(query), fragment='')
+    p = urllib.parse.ParseResult(
+        scheme=DASH_BIP21_URI_SCHEME,
+        netloc='',
+        path=addr,
+        params='',
+        query='&'.join(query),
+        fragment='',
+    )
     return str(urllib.parse.urlunparse(p))
 
 

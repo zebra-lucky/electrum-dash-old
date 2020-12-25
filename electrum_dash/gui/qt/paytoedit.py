@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import QLineEdit
 from PyQt5.QtGui import QFontMetrics, QFont
 
 from electrum_dash import bitcoin
-from electrum_dash.util import bfh
+from electrum_dash.util import bfh, DASH_BIP21_URI_SCHEME, PAY_BIP21_URI_SCHEME
 from electrum_dash.transaction import PartialTxOutput
 from electrum_dash.bitcoin import opcodes, construct_script
 from electrum_dash.logging import Logger
@@ -154,7 +154,9 @@ class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
         if len(lines) == 1:
             data = lines[0]
             # try bip21 URI
-            if data.startswith("dash:") or data.startswith("pay:"):
+            data_l = data.lower()
+            if (data_l.startswith(DASH_BIP21_URI_SCHEME + ':')
+                or data_l.startswith(PAY_BIP21_URI_SCHEME + ':')):
                 self.win.pay_to_URI(data)
                 return
             # try "address, amount" on-chain format
@@ -247,7 +249,9 @@ class PayToEdit(CompletionTextEdit, ScanQRTextEdit, Logger):
 
     def qr_input(self):
         data = super(PayToEdit,self).qr_input()
-        if data.startswith("dash:") or data.startswith("pay:"):
+        data_l = data.lower()
+        if (data_l.startswith(DASH_BIP21_URI_SCHEME + ':')
+            or data_l.startswith(PAY_BIP21_URI_SCHEME + ':')):
             self.win.pay_to_URI(data)
             # TODO: update fee
 

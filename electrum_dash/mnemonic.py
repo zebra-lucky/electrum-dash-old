@@ -243,7 +243,7 @@ def is_old_seed(seed: str) -> bool:
 def seed_type(x: str) -> str:
     if is_old_seed(x):
         return 'old'
-    elif is_new_seed(x):
+    elif is_new_seed(x, version.SEED_PREFIX):
         return 'standard'
     return ''
 
