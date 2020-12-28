@@ -113,6 +113,27 @@ def prompt_password(prompt, confirm=True):
     return password
 
 
+def run_stacktraces(log=False):
+    try:
+        from electrum_dash.stacktraces import StackTraces
+        ext = '.html'
+        stacktraces_path = os.path.join(config.electrum_path(),
+                                        'stacktraces{ext}')
+        tracer = StackTraces(stacktraces_path,
+                             traceback_interval=10,
+                             traceback=ext[1:],
+                             stats=False)
+        tracer.start()
+        if not log:
+            return
+        stacktraces_path_full = stacktraces_path.format(ext=ext)
+        _logger.error(f'stacktraces writes to: file://{stacktraces_path_full}')
+        _logger.error(f'stacktraces file can contain sensitive information,'
+                      f' please remove it manually after use!')
+    except Exception as e:
+        _logger.error(f'can not run stacktraces: {str(e)}')
+
+
 def init_cmdline(config_options, wallet_path, server):
     cmdname = config.get('cmd')
     cmd = known_commands[cmdname]
@@ -352,19 +373,14 @@ if __name__ == '__main__':
     if not config.get('force_mainnet'):
         if config.get('testnet'):
             constants.set_testnet()
-            try:
-                from electrum_dash.stacktraces import StackTraces
-                stacktraces_path = os.path.join(config.electrum_path(),
-                                                'stacktraces{ext}')
-                tracer = StackTraces(stacktraces_path,
-                                     traceback_interval=10,
-                                     traceback='html',
-                                     stats=False)
-                tracer.start()
-            except:
-                pass
         elif config.get('regtest'):
             constants.set_regtest()
+
+    if constants.net == constants.BitcoinMainnet:
+        if config_options['run_stacktraces']:
+            run_stacktraces(log=True)
+    else:
+        run_stacktraces()
 
     cmdname = config.get('cmd')
 

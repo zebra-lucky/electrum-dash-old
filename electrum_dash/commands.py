@@ -1135,6 +1135,7 @@ def add_global_options(parser):
     group.add_argument("--regtest", action="store_true", dest="regtest", default=False, help="Use Regtest")
     group.add_argument("--force-mainnet", action="store_true", dest="force_mainnet", default=False, help="Force Mainnet")
     group.add_argument("-o", "--offline", action="store_true", dest="offline", default=False, help="Run offline")
+    group.add_argument("--run-stacktraces", action="store_true", dest="run_stacktraces", default=False, help="Run stacktraces thread")
 
 def add_wallet_option(parser):
     parser.add_argument("-w", "--wallet", dest="wallet_path", help="wallet path")
