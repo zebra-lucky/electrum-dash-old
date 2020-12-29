@@ -1,4 +1,4 @@
-# Release 4.0.9 - (Dec 18, 2020)
+# Release 4.0.9.0
  * fix decoding BIP21 URIs with uppercase schema (d40bedb2)
  * psbt: put full derivation paths into PSBT by default (c8155129)
  * invoices: allow address-reuse (#6609, #6852)
