@@ -22,7 +22,7 @@ Standards-Version: 4.1.3
 Homepage: http://electrum.dash.org/
 X-Python3-Version: >= 3.6
 
-Package: electrum-dash
+Package: electrum-dash-venv
 Architecture: amd64
 Depends:
  dpkg (>= 1.16.1),
@@ -31,6 +31,55 @@ Depends:
  libudev1,
  python3 (>= 3.5.36~),
  ${misc:Pre-Depends}
+Description: Easy to use Dash client - Python venv module
+ This package provides a lightweight Dash client which protects
+ you from losing your Dash coins in a backup mistake or computer
+ failure. Also, Dash Electrum does not require waiting time because it does
+ not download the Dash blockchain.
+ .
+ This package provides the "electrum_dash" Python 3 module which can be used
+ to access a Dash wallet from Python programs.
+
+Package: electrum-dash
+Architecture: amd64
+Section: python
+Depends:
+ electrum-dash-venv (= ${binary:Version})
+Replaces: dash-electrum (<= ${binary:Version})
+Breaks: dash-electrum (<= ${binary:Version})
+Description: Easy to use Dash client
+ This package provides a lightweight Dash client which protects
+ you from losing your Dash coins in a backup mistake or computer
+ failure. Also, Dash Electrum does not require waiting time because it does
+ not download the Dash blockchain.
+ .
+ Features of Dash Electrum:
+ .
+   * Instant on: Your client does not download the blockchain. It uses a
+     network of specialized servers that index the blockchain.
+   * Forgiving: Your wallet can be recovered from a secret seed.
+   * Safe: Your seed and private keys are encrypted on your hard drive.
+     They are never sent to the servers.
+   * Low trust: Information received from the servers is verified using
+     SPV. Servers are authenticated using SSL.
+   * No downtimes: Your client is not tied to a particular server; it
+     will switch instantly if your server is down.
+   * Ubiquitous: You can use the same wallet on different computers, they
+     will synchronize automatically.
+   * Cold Storage: Sign transactions from a computer that is always
+     offline. Broadcast them using a machine that does not have your keys.
+   * Reachable: You can export your private keys into other Dash
+     clients.
+   * Established: Dash Electrum is open source and was first released in
+     November 2011.
+
+Package: dash-electrum
+Architecture: amd64
+Section: python
+Depends:
+ electrum-dash-venv (= ${binary:Version})
+Replaces: electrum-dash (<= ${binary:Version})
+Breaks: electrum-dash (<= ${binary:Version})
 Description: Easy to use Dash client
  This package provides a lightweight Dash client which protects
  you from losing your Dash coins in a backup mistake or computer
