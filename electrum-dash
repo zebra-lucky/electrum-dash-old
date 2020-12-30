@@ -112,7 +112,7 @@ def prompt_password(prompt, confirm=True):
     return password
 
 
-def run_stacktraces(log=False):
+def run_stacktraces(config, log=False):
     try:
         from electrum_dash.stacktraces import StackTraces
         ext = '.html'
@@ -386,9 +386,9 @@ def main():
 
     if constants.net == constants.BitcoinMainnet:
         if config_options['run_stacktraces']:
-            run_stacktraces(log=True)
+            run_stacktraces(config, log=True)
     else:
-        run_stacktraces()
+        run_stacktraces(config)
 
     cmdname = config.get('cmd')
 
