@@ -655,6 +655,8 @@ class Transaction:
         addrtype, hash_160_ = b58_address_to_hash160(addr)
         if addrtype == constants.net.ADDRTYPE_P2PKH:
             return 'p2pkh'
+        elif addrtype == constants.net.ADDRTYPE_P2SH:
+            return 'p2sh'
         raise Exception(f'unrecognized address: {repr(addr)}')
 
     @classmethod
