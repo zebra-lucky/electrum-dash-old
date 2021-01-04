@@ -377,8 +377,13 @@ QPushButton, #blue_toolbutton { /* Global Button Style */
     padding: 5px 23px;
 }
 
-QPushButton:hover, #blue_toolbutton:hover {
+QPushButton:hover, #blue_toolbutton:hover, StatusBarButton:hover {
     background-color:qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: .01 #4ca5dc, stop: .1 #4ca5dc, stop: .95 #4ca5dc, stop: 1 #1D80B5);
+}
+
+StatusBarButton:hover {
+    border: 0;
+    border-radius:3px;
 }
 
 QPushButton:focus, #blue_toolbutton:focus {

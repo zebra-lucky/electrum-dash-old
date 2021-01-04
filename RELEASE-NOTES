@@ -1,4 +1,29 @@
-# Release 4.0.4.0
+# Release 4.0.9.0
+ * fix decoding BIP21 URIs with uppercase schema (d40bedb2)
+ * psbt: put full derivation paths into PSBT by default (c8155129)
+ * invoices: allow address-reuse (#6609, #6852)
+ * A few other minor bugfixes.
+
+# Release 4.0.7.0
+ * Dependencies: as part of adapting to new dnspython,
+   - python-ecdsa is no longer needed at all,
+   - cryptography is now required (min 2.6), the user can no
+     longer choose between cryptography and pycryptodomex
+ * Fix 'Max' button in kivy (#6169)
+ * Various fixes for Kivy/Android install wizard
+ * Fixes for recently released macOS 11 Big Sur
+ * user interface: some minor changes that aim to improve usability
+ * other minor GUI fixes
+ * Ledger:
+   - fix enumerating devices with new bitcoin app (1.5.1) (b78cbcff)
+   - fix compat with HW.1 (200f547a)
+ * Trezor One: need to use latest firmware (1.9.3) to work with
+   current terzorlib
+ * Fixed Offilne mode
+ * A few other minor bugfixes.
+
+
+# Release 4.0.4.1
 
  * Partially Signed Bitcoin Transactions (PSBT, BIP-174) are supported
    (#5721). The previous Electrum partial transaction format is no

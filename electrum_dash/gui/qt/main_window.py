@@ -46,7 +46,7 @@ from PyQt5.QtWidgets import (QMessageBox, QComboBox, QSystemTrayIcon, QTabWidget
                              QHBoxLayout, QPushButton, QScrollArea, QTextEdit,
                              QShortcut, QMainWindow, QCompleter, QInputDialog,
                              QWidget, QSizePolicy, QStatusBar, QToolTip, QDialog,
-                             QMenu, QAction, QStackedWidget)
+                             QMenu, QAction, QStackedWidget, QToolButton)
 
 import electrum_dash
 from electrum_dash import (keystore, ecc, constants, util, bitcoin, commands,
@@ -62,7 +62,8 @@ from electrum_dash.util import (format_time,
                                 UserFacingException,
                                 get_new_wallet_name, send_exception_to_crash_reporter,
                                 InvalidBitcoinURI, NotEnoughFunds, FILE_OWNER_MODE,
-                                NoDynamicFeeEstimates, MultipleSpendMaxTxOutputs)
+                                NoDynamicFeeEstimates, MultipleSpendMaxTxOutputs,
+                                DASH_BIP21_URI_SCHEME, PAY_BIP21_URI_SCHEME)
 from electrum_dash.invoices import PR_TYPE_ONCHAIN, PR_DEFAULT_EXPIRATION_WHEN_CREATING, Invoice
 from electrum_dash.invoices import PR_PAID, PR_FAILED, pr_expiration_values, OnchainInvoice
 from electrum_dash.transaction import (Transaction, PartialTxInput,
@@ -89,7 +90,7 @@ from .util import (read_QIcon, ColorScheme, text_dialog, icon_path, WaitingDialo
                    import_meta_gui, export_meta_gui,
                    filename_field, address_field, char_width_in_lineedit, webopen,
                    TRANSACTION_FILE_EXTENSION_FILTER_ANY, MONOSPACE_FONT)
-from .util import ButtonsTextEdit
+from .util import ButtonsTextEdit, ButtonsLineEdit
 from .installwizard import WIF_HELP_TEXT
 from .history_list import HistoryList, HistoryModel
 from .update_checker import UpdateCheck, UpdateCheckThread
@@ -105,11 +106,15 @@ if TYPE_CHECKING:
     from . import ElectrumGui
 
 
-class StatusBarButton(QPushButton):
+class StatusBarButton(QToolButton):
+
     def __init__(self, icon, tooltip, func):
-        QPushButton.__init__(self, icon, '')
+        QToolButton.__init__(self)
+        self.setText('')
+        self.setIcon(icon)
         self.setToolTip(tooltip)
-        self.setFlat(True)
+        self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.setAutoRaise(True)
         self.setMaximumWidth(31)
         self.clicked.connect(self.onPress)
         self.func = func
@@ -233,6 +238,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         self.pluginsdialog = None
         self.showing_cert_mismatch_error = False
         self.tl_windows = []
+        self.pending_invoice = None
         Logger.__init__(self)
 
         self.tx_notification_queue = queue.Queue()
@@ -978,18 +984,18 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if len(txns) >= 3:
             total_amount = 0
             for tx in txns:
-                is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(tx)
-                if not is_relevant:
+                tx_wallet_delta = self.wallet.get_wallet_delta(tx)
+                if not tx_wallet_delta.is_relevant:
                     continue
-                total_amount += v
+                total_amount += tx_wallet_delta.delta
             self.notify(_("{} new transactions: Total amount received in the new transactions {}")
                         .format(len(txns), self.format_amount_and_units(total_amount)))
         else:
             for tx in txns:
-                is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(tx)
-                if not is_relevant:
+                tx_wallet_delta = self.wallet.get_wallet_delta(tx)
+                if not tx_wallet_delta.is_relevant:
                     continue
-                self.notify(_("New transaction: {}").format(self.format_amount_and_units(v)))
+                self.notify(_("New transaction: {}").format(self.format_amount_and_units(tx_wallet_delta.delta)))
 
     def notify(self, message):
         if self.tray:
@@ -1251,7 +1257,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
 
         self.clear_invoice_button = QPushButton(_('Clear'))
         self.clear_invoice_button.clicked.connect(self.clear_receive_tab)
-        self.create_invoice_button = QPushButton(_('Request'))
+        self.create_invoice_button = QPushButton(_('New Address'))
         self.create_invoice_button.setIcon(read_QIcon("dashcoin.png"))
         self.create_invoice_button.setToolTip('Create on-chain request')
         self.create_invoice_button.clicked.connect(lambda: self.create_invoice())
@@ -1528,7 +1534,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         grid.addWidget(self.max_button, 4, 3)
 
         self.save_button = EnterButton(_("Save"), self.do_save_invoice)
-        self.send_button = EnterButton(_("Pay"), self.do_pay)
+        self.send_button = EnterButton(_("Pay") + "...", self.do_pay)
         self.clear_button = EnterButton(_("Clear"), self.do_clear)
 
         buttons = QHBoxLayout()
@@ -1602,9 +1608,13 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                 tx.extra_payload.check_after_tx_prepared(tx)
             return tx
         try:
-            tx = make_tx(None)
-        except (NotEnoughFunds, NoDynamicFeeEstimates,
-                MultipleSpendMaxTxOutputs, DashTxError) as e:
+            try:
+                tx = make_tx(None)
+            except (NotEnoughFunds, NoDynamicFeeEstimates) as e:
+                # Check if we had enough funds excluding fees,
+                # if so, still provide opportunity to set lower fees.
+                tx = make_tx(0)
+        except (MultipleSpendMaxTxOutputs, NotEnoughFunds, DashTxError) as e:
             self.max_button.setChecked(False)
             self.show_error(str(e))
             return
@@ -1665,9 +1675,16 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if not pr:
             errors = self.payto_e.get_errors()
             if errors:
-                self.show_warning(_("Invalid Lines found:") + "\n\n" +
-                                  '\n'.join([_("Line #") + f"{err.idx+1}: {err.line_content[:40]}... ({repr(err.exc)})"
-                                             for err in errors]))
+                if len(errors) == 1 and not errors[0].is_multiline:
+                    err = errors[0]
+                    self.show_warning(_("Failed to parse 'Pay to' line") + ":\n" +
+                                      f"{err.line_content[:40]}...\n\n"
+                                      f"{err.exc!r}")
+                else:
+                    self.show_warning(_("Invalid Lines found:") + "\n\n" +
+                                      '\n'.join([_("Line #") +
+                                                 f"{err.idx+1}: {err.line_content[:40]}... ({err.exc!r})"
+                                                 for err in errors]))
                 return True
 
             if self.payto_e.is_alias and self.payto_e.validated is False:
@@ -1719,23 +1736,26 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
             URI=self.payto_URI)
 
     def do_save_invoice(self):
-        invoice = self.read_invoice()
-        if not invoice:
+        self.pending_invoice = self.read_invoice()
+        if not self.pending_invoice:
             return
-        self.wallet.save_invoice(invoice)
+        self.save_pending_invoice()
+
+    def save_pending_invoice(self):
+        if not self.pending_invoice:
+            return
         self.do_clear()
+        self.wallet.save_invoice(self.pending_invoice)
         self.invoice_list.update()
+        self.pending_invoice = None
 
     def do_pay(self):
-        invoice = self.read_invoice()
-        if not invoice:
+        self.pending_invoice = self.read_invoice()
+        if not self.pending_invoice:
             return
         is_ps = self.ps_cb.isChecked()
         tx_type, extra_payload = self.extra_payload.get_extra_data()
-        self.wallet.save_invoice(invoice)
-        self.invoice_list.update()
-        self.do_clear()
-        self.do_pay_invoice(invoice, is_ps=is_ps,
+        self.do_pay_invoice(self.pending_invoice, is_ps=is_ps,
                             tx_type=tx_type, extra_payload=extra_payload)
 
     def pay_multiple_invoices(self, invoices):
@@ -1942,6 +1962,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if cancelled:
             return
         if is_send:
+            self.save_pending_invoice()
             def sign_done(success):
                 if success:
                     self.broadcast_or_show(tx)
@@ -2393,7 +2414,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
                                              self.password_dialog,
                                              **{**kwargs, 'wallet': self.wallet})
         for m in dir(c):
-            if m[0]=='_' or m in ['network','wallet','config']: continue
+            if m[0]=='_' or m in ['network','wallet','config','daemon']: continue
             methods[m] = mkfunc(c._run, m)
 
         console.updateNamespace(methods)
@@ -2908,7 +2929,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         if not data:
             return
         # if the user scanned a dash URI
-        if str(data).startswith("dash:") or str(data).startswith("pay:"):
+        data_l = data.lower()
+        if (data_l.startswith(DASH_BIP21_URI_SCHEME + ':')
+            or data_l.startswith(PAY_BIP21_URI_SCHEME + ':')):
             self.pay_to_URI(data)
             return
         # else if the user scanned an offline signed tx

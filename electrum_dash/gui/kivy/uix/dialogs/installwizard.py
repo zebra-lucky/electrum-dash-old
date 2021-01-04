@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 Builder.load_string('''
 #:import Window kivy.core.window.Window
 #:import _ electrum_dash.gui.kivy.i18n._
+#:import KIVY_GUI_PATH electrum_dash.gui.kivy.KIVY_GUI_PATH
 
 
 <WizardTextInput@TextInput>
@@ -43,8 +44,8 @@ Builder.load_string('''
     background_color: (1, 1, 1, 1) if self.focus else (0.454, 0.698, 0.909, 1)
     foreground_color: (0.31, 0.31, 0.31, 1) if self.focus else (0.835, 0.909, 0.972, 1)
     hint_text_color: self.foreground_color
-    background_active: 'atlas://electrum_dash/gui/kivy/theming/light/create_act_text_active'
-    background_normal: 'atlas://electrum_dash/gui/kivy/theming/light/create_act_text_active'
+    background_active: f'atlas://{KIVY_GUI_PATH}/theming/light/create_act_text_active'
+    background_normal: f'atlas://{KIVY_GUI_PATH}/theming/light/create_act_text_active'
     size_hint_y: None
     height: '48sp'
 
@@ -93,7 +94,7 @@ Builder.load_string('''
                 size_hint: 1, None
                 height: self.texture_size[1] if self.opacity else 0
                 font_size: '33sp'
-                font_name: 'electrum_dash/gui/kivy/data/fonts/tron/Tr2n.ttf'
+                font_name: f'{KIVY_GUI_PATH}/data/fonts/tron/Tr2n.ttf'
             Label:
                 color: root.text_color
                 text: 'TESTNET' if app.testnet else ''
@@ -310,7 +311,7 @@ Builder.load_string('''
     width: self.texture_size[0]
     height: '30dp'
     on_release:
-        self.parent.new_word(self.text)
+        if self.parent: self.parent.new_word(self.text)
 
 
 <SeedButton@Button>:
@@ -321,7 +322,7 @@ Builder.load_string('''
     font_size: '18dp'
     text_size: self.width - dp(24), self.height - dp(12)
     color: .1, .1, .1, 1
-    background_normal: 'atlas://electrum_dash/gui/kivy/theming/light/white_bg_round_top'
+    background_normal: f'atlas://{KIVY_GUI_PATH}/theming/light/white_bg_round_top'
     background_down: self.background_normal
     size_hint_y: None
 
@@ -350,7 +351,7 @@ Builder.load_string('''
         height: '30dp'
         width: '30dp'
         size_hint: 1, None
-        icon: 'atlas://electrum_dash/gui/kivy/theming/light/gear'
+        icon: f'atlas://{KIVY_GUI_PATH}/theming/light/gear'
         on_release:
             root.options_dialog() if root.options_dialog else None
 
@@ -486,7 +487,7 @@ Builder.load_string('''
             id: scan
             height: '48sp'
             on_release: root.scan_xpub()
-            icon: 'atlas://electrum_dash/gui/kivy/theming/light/camera'
+            icon: f'atlas://{KIVY_GUI_PATH}/theming/light/camera'
             size_hint: 1, None
         WizardButton:
             text: _('Paste')
@@ -607,12 +608,11 @@ class WizardDialog(EventsDialog):
         self._on_release = False
 
     def _size_dialog(self, dt):
-        app = App.get_running_app()
-        if app.ui_mode[0] == 'p':
+        if self.app.ui_mode[0] == 'p':
             self.size = Window.size
         else:
             #tablet
-            if app.orientation[0] == 'p':
+            if self.app.orientation[0] == 'p':
                 #portrait
                 self.size = Window.size[0]/1.67, Window.size[1]/1.4
             else:
@@ -627,14 +627,11 @@ class WizardDialog(EventsDialog):
     def on_keyboard(self, instance, key, keycode, codepoint, modifier):
         if key == 27:
             if self.wizard.can_go_back():
-                self._on_release = True
-                self.dismiss()
                 self.wizard.go_back()
             else:
-                app = App.get_running_app()
-                if not app.is_exit:
-                    app.is_exit = True
-                    app.show_info(_('Press again to exit'))
+                if not self.app.is_exit:
+                    self.app.is_exit = True
+                    self.app.show_info(_('Press again to exit'))
                 else:
                     self._on_release = False
                     self.dismiss()
@@ -644,18 +641,19 @@ class WizardDialog(EventsDialog):
         Window.unbind(size=self._trigger_size_dialog,
                       rotation=self._trigger_size_dialog,
                       on_keyboard=self.on_keyboard)
-        app = App.get_running_app()
-        if app.wallet is None and not self._on_release:
-            app.stop()
+        if self.app.wallet is None and not self._on_release:
+            self.app.stop()
 
     def get_params(self, button):
         return (None,)
 
     def on_release(self, button):
+        if self._on_release is True:
+            return
         self._on_release = True
         self.dismiss()
         if not button:
-            self.parent.dispatch('on_wizard_complete', None, None)
+            self.wizard.terminate(aborted=True)
             return
         if button is self.ids.back:
             self.wizard.go_back()
@@ -734,7 +732,6 @@ class WizardTOSDialog(WizardDialog):
         self.ids.next.text = 'Accept'
         self.ids.next.disabled = False
         self.message = kwargs['tos']
-        self.message2 = _('Enter your email address:')
 
 class WizardEmailDialog(WizardDialog):
 
@@ -759,8 +756,7 @@ class WizardConfirmDialog(WizardDialog):
 
     def on_parent(self, instance, value):
         if value:
-            app = App.get_running_app()
-            self._back = _back = partial(app.dispatch, 'on_back')
+            self._back = _back = partial(self.app.dispatch, 'on_back')
 
     def get_params(self, button):
         return (True,)
@@ -787,8 +783,7 @@ class WizardChoiceDialog(WizardDialog):
 
     def on_parent(self, instance, value):
         if value:
-            app = App.get_running_app()
-            self._back = _back = partial(app.dispatch, 'on_back')
+            self._back = _back = partial(self.app.dispatch, 'on_back')
 
     def get_params(self, button):
         return (button.action,)
@@ -854,7 +849,6 @@ class ShowSeedDialog(WizardDialog):
 
     def on_parent(self, instance, value):
         if value:
-            app = App.get_running_app()
             self._back = _back = partial(self.ids.back.dispatch, 'on_release')
 
     def options_dialog(self):
@@ -972,7 +966,6 @@ class RestoreSeedDialog(WizardDialog):
             #tis._keyboard.bind(on_key_down=self.on_key_down)
             self._back = _back = partial(self.ids.back.dispatch,
                                          'on_release')
-            app = App.get_running_app()
 
     def on_key_down(self, keyboard, keycode, key, modifiers):
         if keycode[0] in (13, 271):
@@ -1001,6 +994,7 @@ class ConfirmSeedDialog(RestoreSeedDialog):
     def __init__(self, *args, **kwargs):
         RestoreSeedDialog.__init__(self, *args, **kwargs)
         self.ids.seed_dialog_header.ids.options_button.disabled = True
+        self.ids.text_input_seed.text = kwargs['seed']
 
     def get_params(self, b):
         return (self.get_text(),)
@@ -1069,49 +1063,23 @@ class AddXpubDialog(WizardDialog):
 
 
 class InstallWizard(BaseWizard, Widget):
-    '''
-    events::
-        `on_wizard_complete` Fired when the wizard is done creating/ restoring
-        wallet/s.
-    '''
 
-    __events__ = ('on_wizard_complete', )
-
-    def on_wizard_complete(self, storage, db):
-        """overriden by main_window"""
-        pass
-
-    def waiting_dialog(self, task, msg, on_finished=None):
-        '''Perform a blocking task in the background by running the passed
-        method in a thread.
-        '''
-        def target():
-            # run your threaded function
-            try:
-                task()
-            except Exception as err:
-                self.show_error(str(err))
-            # on  completion hide message
-            Clock.schedule_once(lambda dt: app.info_bubble.hide(now=True), -1)
-            if on_finished:
-                def protected_on_finished():
-                    try:
-                        on_finished()
-                    except Exception as e:
-                        self.show_error(str(e))
-                Clock.schedule_once(lambda dt: protected_on_finished(), -1)
-
-        app = App.get_running_app()
-        app.show_info_bubble(
-            text=msg, icon='atlas://electrum_dash/gui/kivy/theming/light/important',
-            pos=Window.center, width='200sp', arrow_pos=None, modal=True)
-        t = threading.Thread(target = target)
-        t.start()
+    def __init__(self, *args, **kwargs):
+        BaseWizard.__init__(self, *args, **kwargs)
+        self.app = App.get_running_app()
 
     def terminate(self, *, storage=None, db=None, aborted=False):
-        if storage is None and not aborted:
+        # storage must be None because manual upgrades are disabled on Kivy
+        assert storage is None
+        if not aborted:
+            password = self.pw_args.password
             storage, db = self.create_storage(self.path)
-        self.dispatch('on_wizard_complete', storage, db)
+            self.app.on_wizard_success(storage, db, password)
+        else:
+            try: os.unlink(self.path)
+            except FileNotFoundError: pass
+            self.reset_stack()
+            self.confirm_dialog(message=_('Wallet creation failed'), run_next=lambda x: self.app.on_wizard_aborted())
 
     def choice_dialog(self, **kwargs):
         choices = kwargs['choices']
@@ -1163,8 +1131,7 @@ class InstallWizard(BaseWizard, Widget):
     def show_message(self, msg): self.show_error(msg)
 
     def show_error(self, msg):
-        app = App.get_running_app()  # type: ElectrumWindow
-        Clock.schedule_once(lambda dt: app.show_error(msg))
+        Clock.schedule_once(lambda dt: self.app.show_error(msg))
 
     def request_password(self, run_next, force_disable_encrypt_cb=False):
         if force_disable_encrypt_cb:
@@ -1176,10 +1143,9 @@ class InstallWizard(BaseWizard, Widget):
             run_next(pw, True)
         def on_failure():
             self.show_error(_('Password mismatch'))
-            self.run('request_password', run_next)
-        app = App.get_running_app()
+            self.request_password(run_next)
         popup = PasswordDialog(
-            app,
+            self.app,
             check_password=lambda x:True,
             on_success=on_success,
             on_failure=on_failure,

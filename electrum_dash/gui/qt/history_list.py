@@ -349,7 +349,7 @@ class HistoryModel(QAbstractItemModel, Logger):
                 return QVariant(res)
             elif col not in [HistoryColumns.DESCRIPTION,
                              HistoryColumns.DIP2] and role == Qt.TextAlignmentRole:
-                return QVariant(Qt.AlignRight | Qt.AlignVCenter)
+                return QVariant(int(Qt.AlignRight | Qt.AlignVCenter))
             elif col != HistoryColumns.DESCRIPTION and role == Qt.FontRole:
                 monospace_font = QFont(MONOSPACE_FONT)
                 return QVariant(monospace_font)
@@ -692,7 +692,7 @@ class HistoryModel(QAbstractItemModel, Logger):
         extra_flags = Qt.NoItemFlags # type: Qt.ItemFlag
         if idx.column() in self.view.editable_columns:
             extra_flags |= Qt.ItemIsEditable
-        return super().flags(idx) | extra_flags
+        return super().flags(idx) | int(extra_flags)
 
     @staticmethod
     def tx_mined_info_from_tx_item(tx_item):

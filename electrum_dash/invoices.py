@@ -39,7 +39,7 @@ pr_color = {
 }
 
 pr_tooltips = {
-    PR_UNPAID:_('Pending'),
+    PR_UNPAID:_('Unpaid'),
     PR_PAID:_('Paid'),
     PR_UNKNOWN:_('Unknown'),
     PR_EXPIRED:_('Expired'),
@@ -82,8 +82,6 @@ class Invoice(StoredObject):
             if self.exp > 0:
                 expiration = self.exp + self.time
                 status_str = _('Expires') + ' ' + age(expiration, include_seconds=True)
-            else:
-                status_str = _('Pending')
         return status_str
 
     def get_amount_sat(self) -> Union[int, Decimal, str, None]:
@@ -109,16 +107,17 @@ class OnchainInvoice(Invoice):
     outputs = attr.ib(kw_only=True, converter=_decode_outputs)  # type: List[PartialTxOutput]
     bip70 = attr.ib(type=str, kw_only=True)  # type: Optional[str]
     requestor = attr.ib(type=str, kw_only=True)  # type: Optional[str]
+    height = attr.ib(type=int, kw_only=True, validator=attr.validators.instance_of(int))
 
     def get_address(self) -> str:
-        assert len(self.outputs) == 1
+        """returns the first address, to be displayed in GUI"""
         return self.outputs[0].address
 
     def get_amount_sat(self) -> Union[int, str]:
         return self.amount_sat or 0
 
     @classmethod
-    def from_bip70_payreq(cls, pr: 'PaymentRequest') -> 'OnchainInvoice':
+    def from_bip70_payreq(cls, pr: 'PaymentRequest', height:int) -> 'OnchainInvoice':
         return OnchainInvoice(
             type=PR_TYPE_ONCHAIN,
             amount_sat=pr.get_amount(),
@@ -129,4 +128,5 @@ class OnchainInvoice(Invoice):
             exp=pr.get_expiration_date() - pr.get_time(),
             bip70=pr.raw.hex(),
             requestor=pr.get_requestor(),
+            height=height,
         )

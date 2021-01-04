@@ -66,6 +66,7 @@ Builder.load_string('''
                     amount: ''
                     fiat_amount: ''
                     is_fiat: False
+                    is_max: False
                     on_fiat_amount: if self.is_fiat: self.amount = app.fiat_to_btc(self.fiat_amount)
                     on_amount: if not self.is_fiat: self.fiat_amount = app.btc_to_fiat(self.amount)
                     size_hint: 1, None
@@ -109,6 +110,7 @@ Builder.load_string('''
                         on_release:
                             kb.is_fiat = False
                             kb.amount = app.get_max_amount(is_ps=root.is_ps)
+                            kb.is_max = True
                             root.recalc_available_amount()
                     Button:
                         size_hint: 1, None
@@ -117,6 +119,7 @@ Builder.load_string('''
                         on_release:
                             kb.amount = ''
                             kb.fiat_amount = ''
+                            kb.is_max = False
                 Widget:
                     size_hint: 1, 0.1
                 BoxLayout:
@@ -188,7 +191,7 @@ class AmountDialog(Factory.Popup):
     def on_finish(self):
         btc = self.ids.btc
         kb = self.ids.kb
-        amount = btc.text if kb.amount else ''
+        amount = '!' if kb.is_max else btc.text if kb.amount else ''
         if self.is_spend:
             self.callback(amount)
         else:

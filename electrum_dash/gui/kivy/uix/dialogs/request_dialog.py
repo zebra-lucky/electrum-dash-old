@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 
 Builder.load_string('''
+#:import KIVY_GUI_PATH electrum_dash.gui.kivy.KIVY_GUI_PATH
+
 <RequestDialog@Popup>
     id: popup
     amount_str: ''
@@ -65,12 +67,12 @@ Builder.load_string('''
                     text: _('Delete')
                     on_release: root.delete_dialog()
                 IconButton:
-                    icon: 'atlas://electrum_dash/gui/kivy/theming/light/copy'
+                    icon: f'atlas://{KIVY_GUI_PATH}/theming/light/copy'
                     size_hint: 0.5, None
                     height: '48dp'
                     on_release: root.copy_to_clipboard()
                 IconButton:
-                    icon: 'atlas://electrum_dash/gui/kivy/theming/light/share'
+                    icon: f'atlas://{KIVY_GUI_PATH}/theming/light/share'
                     size_hint: 0.5, None
                     height: '48dp'
                     on_release: root.do_share()
@@ -105,6 +107,10 @@ class RequestDialog(Factory.Popup):
         self.status = self.app.wallet.get_request_status(self.key)
         self.status_str = req.get_status_str(self.status)
         self.status_color = pr_color[self.status]
+        if self.status == PR_UNPAID:
+            address = req.get_address()
+            if self.app.wallet.is_used(address):
+                self.warning = _('Warning') + ': ' + _('This address is being reused')
 
     def on_dismiss(self):
         self.app.request_popup = None
