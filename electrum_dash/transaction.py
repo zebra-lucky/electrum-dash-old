@@ -671,6 +671,12 @@ class Transaction:
         pubkeys, sig_list = self.get_siglist(txin, estimate_size=estimate_size)
         if _type in ('address', 'unknown') and estimate_size:
             _type = self.guess_txintype_from_address(txin.address)
+            if _type == 'p2sh':
+                # mimic upstream code for p2wpkh-p2sh type
+                # next two lines use code from upstream p2wpkh_nested_script
+                pkh = hash_160(bfh(pubkeys[0]))
+                redeem_script = construct_script([0, pkh])
+                return construct_script([redeem_script])
         if _type == 'p2pk':
             return construct_script([sig_list[0]])
         elif _type == 'p2sh':
