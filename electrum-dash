@@ -385,7 +385,7 @@ def main():
             constants.set_regtest()
 
     if constants.net == constants.BitcoinMainnet:
-        if config_options['run_stacktraces']:
+        if config_options.get('run_stacktraces'):
             run_stacktraces(config, log=True)
     else:
         run_stacktraces(config)
