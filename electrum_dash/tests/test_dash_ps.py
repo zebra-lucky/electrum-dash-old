@@ -75,6 +75,8 @@ class WalletGetTxHeigthMock:
 class PSWalletTestCase(TestCaseForTestnet):
 
     def setUp(self):
+        dash_ps.MIN_NEW_DENOMS_DELAY = 0
+        dash_ps.MAX_NEW_DENOMS_DELAY = 0
         super(PSWalletTestCase, self).setUp()
         self.user_dir = tempfile.mkdtemp()
         self.wallet_path = os.path.join(self.user_dir, 'wallet_ps1')
@@ -1954,6 +1956,47 @@ class PSWalletTestCase(TestCaseForTestnet):
         assert 34161 == calc_tx_fee(1, 1000, 1000, max_size=True)
         assert 183014 == calc_tx_fee(1000, 1000, 1000, max_size=True)
 
+    def test_get_next_coins_to_denominate(self):
+        dash_ps.MIN_NEW_DENOMS_DELAY = 3
+        dash_ps.MAX_NEW_DENOMS_DELAY = 3
+
+        w = self.wallet
+        psman = w.psman
+
+        now = time.time()
+        psman.last_denoms_tx_time = now
+
+        coro = psman.get_next_coins_to_denominate()
+        coins = asyncio.get_event_loop().run_until_complete(coro)
+        assert time.time() - now > 3.0
+        total_val = coins['total_val']
+        assert total_val == 802806773
+        coins = coins['coins']
+        assert len(coins) == 2
+        assert coins[0].address == coins[1].address
+        assert coins[0].value_sats() + coins[1].value_sats() == total_val
+
+        # freeze found coins to test next coins found
+        w.set_frozen_state_of_coins(coins, True)
+
+        coro = psman.get_next_coins_to_denominate()
+        coins = asyncio.get_event_loop().run_until_complete(coro)
+        total_val = coins['total_val']
+        assert total_val == 100001000
+        coins = coins['coins']
+        assert len(coins) == 1
+        assert coins[0].value_sats() == total_val
+
+        # freeze all to test coins absence
+        w.set_frozen_state_of_coins(w.get_utxos(None), True)
+
+        coro = psman.get_next_coins_to_denominate()
+        coins = asyncio.get_event_loop().run_until_complete(coro)
+        total_val = coins['total_val']
+        assert total_val == 0
+        coins = coins['coins']
+        assert len(coins) == 0
+
     def test_create_new_denoms_wfl(self):
         w = self.wallet
         psman = w.psman
@@ -2063,17 +2106,27 @@ class PSWalletTestCase(TestCaseForTestnet):
         asyncio.get_event_loop().run_until_complete(coro)
         psman.state = PSStates.Mixing
 
+        # freeze coins except smallest
+        coins = sorted(w.get_utxos(), key=lambda x: -x.value_sats())[:-1]
+        w.set_frozen_state_of_coins(coins, True)
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        assert len(coins) == 1
+        assert coins[0].value_sats() == 1000000
+
         coro = psman.create_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         wfl = psman.new_denoms_wfl
         assert wfl.completed
 
         # assert coins left less of half_minimal_denom
-        c, u, x = w.get_balance(include_ps=False)
         new_collateral_cnt = 19
         new_collateral_fee = calc_tx_fee(1, 2, fee_per_kb, max_size=True)
         half_minimal_denom = MIN_DENOM_VAL // 2
-        assert (c + u -
+        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        assert len(coins) == 1
+        assert (coins[0].value_sats() -
                 CREATE_COLLATERAL_VAL * new_collateral_cnt -
                 new_collateral_fee * new_collateral_cnt) < half_minimal_denom
 
@@ -2320,6 +2373,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         tx_order = wfl.tx_order
         tx_data = wfl.tx_data
 
+        assert psman.last_denoms_tx_time == 0
         # check not broadcasted (no network)
         assert wfl.next_to_send(w) == tx_data[tx_order[0]]
         coro = psman.broadcast_new_denoms_wfl()
@@ -2330,6 +2384,7 @@ class PSWalletTestCase(TestCaseForTestnet):
             assert tx_data[txid].sent is None
         assert wfl.next_to_send(w) == tx_data[tx_order[0]]
 
+        assert psman.last_denoms_tx_time == 0
         # check not broadcasted (mock network method raises)
         psman.network = NetworkBroadcastMock(pass_cnt=0)
         coro = psman.broadcast_new_denoms_wfl()
@@ -2339,6 +2394,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         for txid in wfl.tx_order:
             assert tx_data[txid].sent is None
 
+        assert psman.last_denoms_tx_time == 0
         # check not broadcasted (skipped) if tx is in wallet.unverified_tx
         assert wfl.next_to_send(w) == tx_data[tx_order[0]]
         for i, txid in enumerate(tx_order):
@@ -2356,6 +2412,7 @@ class PSWalletTestCase(TestCaseForTestnet):
             w.unverified_tx.pop(txid)
         assert wfl.next_to_send(w) == tx_data[tx_order[0]]
 
+        assert psman.last_denoms_tx_time == 0
         # check not broadcasted (mock network) but recently send failed
         psman.network = NetworkBroadcastMock()
         coro = psman.broadcast_new_denoms_wfl()
@@ -2372,6 +2429,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         for txid in wfl.tx_order:
             assert not tx_data[txid].sent
 
+        assert psman.last_denoms_tx_time == 0
         # check broadcasted (mock network)
         for txid in wfl.tx_order:
             tx_data[txid].next_send = None
@@ -2387,6 +2445,7 @@ class PSWalletTestCase(TestCaseForTestnet):
         coro = psman.broadcast_new_denoms_wfl()
         asyncio.get_event_loop().run_until_complete(coro)
         assert psman.new_denoms_wfl is None
+        assert time.time() - psman.last_denoms_tx_time < 100
 
     def test_process_by_new_denoms_wfl(self):
         w = self.wallet
@@ -2656,6 +2715,16 @@ class PSWalletTestCase(TestCaseForTestnet):
 
         psman.last_mix_stop_time = time.time() - psman.wait_for_mn_txs_time
         assert psman.double_spend_warn == ''
+
+    def test_last_denoms_tx_time(self):
+        w = self.wallet
+        psman = w.psman
+        assert psman.last_denoms_tx_time == 0
+        assert w.db.get_ps_data('last_denoms_tx_time') is None
+        now = time.time()
+        psman.last_denoms_tx_time = now
+        assert psman.last_denoms_tx_time == now
+        assert w.db.get_ps_data('last_denoms_tx_time') == now
 
     def test_broadcast_transaction(self):
         w = self.wallet
@@ -3114,12 +3183,12 @@ class PSWalletTestCase(TestCaseForTestnet):
         tx3 = Transaction(wfl.tx_data[txid].raw_tx)
 
         outputs = tx0.outputs()
-        assert len(outputs) == 41
+        assert len(outputs) == 40
         change = outputs[33]
         assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
 
         outputs = tx1.outputs()
-        assert len(outputs) == 24
+        assert len(outputs) == 29
         change = outputs[22]
         assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
 
@@ -3133,7 +3202,8 @@ class PSWalletTestCase(TestCaseForTestnet):
         change = outputs[7]
         assert change.address == 'yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF'
 
-        spendable = ['yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF']
+        spendable = ['yRUktd39y5aU3JCgvZSx2NVfwPnv5nB2PF',
+                     'yeeU1n6Bm4Y3rz7Y1JZb9gQAbsc4uv4Y5j']
         assert sorted(psman._keypairs_cache[KP_SPENDABLE].keys()) == spendable
 
     def test_filter_log_line(self):

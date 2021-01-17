@@ -169,7 +169,10 @@ POOL_MAX_PARTICIPANTS = 20
 PRIVATESEND_QUEUE_TIMEOUT = 30
 PRIVATESEND_SESSION_MSG_TIMEOUT = 40
 
-WAIT_FOR_MN_TXS_TIME_SEC = 120
+WAIT_FOR_MN_TXS_TIME_SEC = 120  # await tx from MN (collateral, denominate)
+
+MIN_NEW_DENOMS_DELAY = 30       # minimum delay betweeen new denoms txs
+MAX_NEW_DENOMS_DELAY = 300      # maximum delay betweeen new denoms txs
 
 
 # PSManager states
@@ -1759,6 +1762,14 @@ class PSManager(Logger):
         self.wallet.db.set_ps_data('last_mix_stop_time', time)
 
     @property
+    def last_denoms_tx_time(self):
+        return self.wallet.db.get_ps_data('last_denoms_tx_time', 0)  # Jan 1970
+
+    @last_denoms_tx_time.setter
+    def last_denoms_tx_time(self, time):
+        self.wallet.db.set_ps_data('last_denoms_tx_time', time)
+
+    @property
     def last_mixed_tx_time(self):
         return self.wallet.db.get_ps_data('last_mixed_tx_time', 0)  # Jan 1970
 
@@ -2971,13 +2982,13 @@ class PSManager(Logger):
             w.synchronizer.remove_addr(addr)
 
     def calc_need_denoms_amounts(self, coins=None, use_cache=False,
-                                 on_keep_amount=False):
+                                 on_keep_amount=False, no_change=True):
         w = self.wallet
         fee_per_kb = self.config.fee_per_kb()
         if fee_per_kb is None:
             raise NoDynamicFeeEstimates()
 
-        if coins is not None:  # calc on coins selected from GUI
+        if coins and no_change:  # calc on coins selected from GUI
             return self._calc_denoms_amounts_from_coins(coins, fee_per_kb)
 
         if use_cache:
@@ -2990,10 +3001,10 @@ class PSManager(Logger):
         if need_val < old_denoms_val:  # already have need value of denoms
             return []
 
-        # calc spendable coins val
-        coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
-                            mature_only=True)
-        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        if not coins:
+            coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
+                                mature_only=True)
+            coins = [c for c in coins if not w.is_frozen_coin(c)]
         coins_val = sum([c.value_sats() for c in coins])
         if coins_val < MIN_DENOM_VAL and not on_keep_amount:
             return []  # no coins to create denoms
@@ -3866,7 +3877,8 @@ class PSManager(Logger):
         if len(coins) > 1:
             return None, ('Can not create new denoms,'
                           ' too many coins selected')
-        wfl, outputs_amounts = self._start_new_denoms_wfl(coins)
+        wfl, outputs_amounts = self._start_new_denoms_wfl(coins,
+                                                          no_change=True)
         if not outputs_amounts:
             return None, ('Can not create new denoms,'
                           ' not enough coins selected')
@@ -3874,12 +3886,13 @@ class PSManager(Logger):
             return None, ('Can not create new denoms as other new'
                           ' denoms creation process is in progress')
         last_tx_idx = len(outputs_amounts) - 1
-        w = self.wallet
         for i, tx_amounts in enumerate(outputs_amounts):
             try:
+                w = self.wallet
                 txid, tx = self._make_new_denoms_tx(wfl, tx_amounts,
                                                     last_tx_idx, i,
-                                                    coins, password)
+                                                    coins, password,
+                                                    no_change=True)
                 if not w.add_transaction(tx):
                     raise Exception(f'Transaction with txid: {txid}'
                                     f' conflicts with current history')
@@ -3924,9 +3937,53 @@ class PSManager(Logger):
                                  f' {wfl.lid}')
                 return None, err
 
+    async def get_next_coins_to_denominate(self):
+        rand_interval = random.randint(MIN_NEW_DENOMS_DELAY,
+                                       MAX_NEW_DENOMS_DELAY)
+        log_info = True
+        while time.time() - self.last_denoms_tx_time < rand_interval:
+            if log_info:
+                s = time.time() - self.last_denoms_tx_time - rand_interval
+                self.logger.info(f'Waiting {s} seconds before starting'
+                                 f' new denoms workflow')
+                log_info = False
+            await asyncio.sleep(1)
+
+        w = self.wallet
+        coins = w.get_utxos(None,
+                            excluded_addresses=w.frozen_addresses,
+                            mature_only=True,
+                            confirmed_only=True,
+                            consider_islocks=True)
+        coins = [c for c in coins if not w.is_frozen_coin(c)]
+        if self.w_ks_type != 'bip32':  # filter coins from ps_keystore
+            coins = [c for c in coins if c.is_ps_ks]
+        if not coins:
+            return {'total_val': 0, 'coins': []}
+        coins_by_address = {}
+        for c in coins:
+            addr = c.address
+            if addr not in coins_by_address:
+                coins_by_address[addr] = {'total_val': c.value_sats(),
+                                          'coins': [c]}
+            else:
+                coins_by_address[addr]['total_val'] += c.value_sats()
+                coins_by_address[addr]['coins'].append(c)
+        coins = sorted(coins_by_address.values(), key=lambda x: x['total_val'],
+                       reverse=True)
+        self.logger.debug(f'Selected coins for new denoms tx,'
+                          f' value={coins[0]["total_val"]},'
+                          f' count={len(coins[0]["coins"])}')
+        return coins[0]
+
     async def create_new_denoms_wfl(self):
+        coins_data = await self.get_next_coins_to_denominate()
+        coins = coins_data['coins']
+        if not coins:
+            return
         _start = self._start_new_denoms_wfl
-        wfl, outputs_amounts = await self.loop.run_in_executor(None, _start)
+        wfl, outputs_amounts = await self.loop.run_in_executor(None, _start,
+                                                               coins)
         if not wfl:
             return
         last_tx_idx = len(outputs_amounts) - 1
@@ -3936,13 +3993,15 @@ class PSManager(Logger):
                 _make_tx = self._make_new_denoms_tx
                 txid, tx = await self.loop.run_in_executor(None, _make_tx,
                                                            wfl, tx_amounts,
-                                                           last_tx_idx, i)
+                                                           last_tx_idx, i,
+                                                           coins)
                 # add_transaction need run in network therad
                 if not w.add_transaction(tx):
                     raise Exception(f'Transaction with txid: {txid}'
                                     f' conflicts with current history')
 
                 def _after_create_tx():
+                    coins = []
                     with self.new_denoms_wfl_lock:
                         self.logger.info(f'Created new denoms tx: {txid},'
                                          f' workflow: {wfl.lid}')
@@ -3957,7 +4016,21 @@ class PSManager(Logger):
                             self.set_new_denoms_wfl(wfl)
                             self.logger.wfl_ok(f'Completed new denoms'
                                                f' workflow: {wfl.lid}')
-                await self.loop.run_in_executor(None, _after_create_tx)
+                        else:
+                            txin0 = copy.deepcopy(tx.inputs()[0])
+                            txin0_addr = w.get_txin_address(txin0)
+                            utxos = w.get_utxos([txin0_addr])
+                            change_outpoint = None
+                            for change_idx, o in enumerate(tx.outputs()):
+                                if o.address == txin0_addr:
+                                    change_outpoint = f'{txid}:{change_idx}'
+                                    break
+                            for utxo in utxos:
+                                if utxo.prevout.to_str() != change_outpoint:
+                                    continue
+                                coins.append(utxo)
+                    return coins
+                coins = await self.loop.run_in_executor(None, _after_create_tx)
                 w.save_db()
             except Exception as e:
                 self.logger.wfl_err(f'Error creating new denoms tx:'
@@ -3981,8 +4054,9 @@ class PSManager(Logger):
                     await self.stop_mixing_from_async_thread(msg)
                 break
 
-    def _start_new_denoms_wfl(self, coins=None):
-        outputs_amounts = self.calc_need_denoms_amounts(coins=coins)
+    def _start_new_denoms_wfl(self, coins, no_change=False):
+        outputs_amounts = self.calc_need_denoms_amounts(coins=coins,
+                                                        no_change=no_change)
         if not outputs_amounts:
             return None, None
         with self.new_denoms_wfl_lock, \
@@ -3998,7 +4072,7 @@ class PSManager(Logger):
             return wfl, outputs_amounts
 
     def _make_new_denoms_tx(self, wfl, tx_amounts, last_tx_idx, i,
-                            coins=None, password=None):
+                            coins, password=None, no_change=False):
         w = self.wallet
         # try to create new denoms tx with change outupt at first
         use_confirmed = (i == 0)  # for first tx use confirmed coins
@@ -4006,18 +4080,7 @@ class PSManager(Logger):
         oaddrs = self.reserve_addresses(addrs_cnt, data=wfl.uuid)
         outputs = [PartialTxOutput.from_address_and_value(addr, a)
                    for addr, a in zip(oaddrs, tx_amounts)]
-        if coins is None:
-            utxos = w.get_utxos(None,
-                                excluded_addresses=w.frozen_addresses,
-                                mature_only=True,
-                                confirmed_only=use_confirmed,
-                                consider_islocks=True)
-            utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
-            if self.w_ks_type != 'bip32':  # filter coins from ps_keystore
-                utxos = [utxo for utxo in utxos if utxo.is_ps_ks]
-        else:
-            utxos = coins
-        tx = w.make_unsigned_transaction(coins=utxos, outputs=outputs)
+        tx = w.make_unsigned_transaction(coins=coins, outputs=outputs)
         inputs = tx.inputs()
         # check input addresses is in keypairs if keypairs cache available
         if self._keypairs_cache:
@@ -4029,7 +4092,7 @@ class PSManager(Logger):
                                          f' in the keypairs cache:'
                                          f' {not_found_addrs}')
 
-        if coins and i == last_tx_idx:
+        if coins and i == last_tx_idx and no_change:
             tx = PartialTransaction.from_io(inputs[:], outputs[:], locktime=0)
             for txin in tx.inputs():
                 txin.nsequence = 0xffffffff
@@ -4139,6 +4202,7 @@ class PSManager(Logger):
                     self.set_new_denoms_wfl(wfl)
                 self.logger.wfl_done(f'Broadcasted transaction {txid} from new'
                                      f' denoms workflow: {wfl.lid}')
+                self.last_denoms_tx_time = time.time()
                 tx = Transaction(wfl.tx_data[txid].raw_tx)
                 self._process_by_new_denoms_wfl(txid, tx)
                 if not wfl.next_to_send(w):
