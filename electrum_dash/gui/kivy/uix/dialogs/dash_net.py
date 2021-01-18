@@ -10,6 +10,8 @@ from electrum_dash import util
 
 from electrum_dash.gui.kivy.i18n import _
 
+from electrum_dash.gui.kivy.uix.dialogs.question import Question
+
 
 Builder.load_string('''
 #:import _ electrum_dash.gui.kivy.i18n._
@@ -342,6 +344,11 @@ Builder.load_string('''
                     title: _('Banlist') + ': %s' % len(root.banlist)
                     description: _('Banned Dash Peers')
                     action: root.show_banlist
+                CardSeparator
+                SettingsItem:
+                    title: _('ProTx/LLMQ Reset')
+                    description: _('ProTx/LLMQ Data Reset')
+                    action: root.protx_llmq_reset
                 CardSeparator
                 SettingsItem:
                     id: bls_speed_item
@@ -790,6 +797,14 @@ class DashNetDialog(Factory.Popup):
 
     def show_banlist(self, *args):
         BanlistPopup(self).open()
+
+    def protx_llmq_reset(self, *args):
+        mn_list = self.net.mn_list
+        def on_reset(b):
+            if b:
+                mn_list.reset()
+        d = Question(mn_list.RESET_WARN_MSG, on_reset)
+        d.open()
 
     def show_bls_speed(self, *args):
         BlsSpeedPopup(self).open()
