@@ -42,6 +42,7 @@ from .simple_config import SimpleConfig
 from .transaction import Transaction, BCDataStream, SerializationError
 from .util import bfh, bh2u, hfu
 from .verifier import SPV
+from .i18n import _
 
 
 MN_LIST_INSTANCE = None
@@ -90,6 +91,9 @@ class MNList(Logger):
     LLMQ_UNKNOWN = 2
 
     LLMQ_OFFSET = 8
+
+    RESET_WARN_MSG = _('Do you really want to reset ProTx/LLMQ data?'
+                       ' All data will be downloaded again from the network.')
 
     def __init__(self, network, config):
         global MN_LIST_INSTANCE

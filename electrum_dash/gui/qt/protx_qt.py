@@ -394,6 +394,10 @@ class Dip3TabBar(VTabBar):
         gl.addWidget(llmq_ready_l, 7, 0)
         gl.addWidget(self.llmq_ready, 7, 2)
 
+        self.protx_llmq_reset_btn = QPushButton(_('ProTx/LLMQ Reset'))
+        self.protx_llmq_reset_btn.clicked.connect(self.on_protx_llmq_reset)
+        gl.addWidget(self.protx_llmq_reset_btn, 8, 0, 1, -1)
+
         hbox = QHBoxLayout()
         hbox.addStretch(1)
         hbox.addWidget(self.data_w)
@@ -425,6 +429,12 @@ class Dip3TabBar(VTabBar):
         self.protx_ready.setText(protx_ready)
         self.llmq_ready.setText(llmq_ready)
         self.protx_info_completeness.setText(protx_info_completeness)
+
+    @pyqtSlot()
+    def on_protx_llmq_reset(self):
+        mn_list = self.tab_w.mn_list
+        if self.tab_w.gui.question(mn_list.RESET_WARN_MSG):
+            mn_list.reset()
 
 
 class Dip3TabWidget(QTabWidget):
