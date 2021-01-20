@@ -1849,6 +1849,11 @@ class PSManager(Logger):
     def warn_ps_ks_data(self):
         return _('Show warning on exit if PS Keystore contain funds')
 
+    def filter_out_hw_ks_coins(self, coins):
+        if self.is_hw_ks:
+            coins = [c for c in coins if c.is_ps_ks]
+        return coins
+
     def get_ps_data_info(self):
         res = []
         w = self.wallet
@@ -2069,6 +2074,7 @@ class PSManager(Logger):
                                 excluded_addresses=w.frozen_addresses,
                                 mature_only=True)
             utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
+            utxos = self.filter_out_hw_ks_coins(utxos)
             for c in utxos:
                 if c.address not in self._keypairs_cache[KP_SPENDABLE]:
                     return True, prev_kp_state
@@ -2083,7 +2089,8 @@ class PSManager(Logger):
                     return True, prev_kp_state
 
             # check spendable ps coins keys (already saved denoms/collateral)
-            for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
+            for c in self.filter_out_hw_ks_coins(
+                    w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL)):
                 ps_rounds = c.ps_rounds
                 if ps_rounds >= self.mix_rounds:
                     continue
@@ -2186,8 +2193,7 @@ class PSManager(Logger):
                             excluded_addresses=w.frozen_addresses,
                             mature_only=True)
         utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
-        if self.is_hw_ks:
-            utxos = [utxo for utxo in utxos if utxo.is_ps_ks]
+        utxos = self.filter_out_hw_ks_coins(utxos)
         for c in utxos:
             if self.state != PSStates.Mixing:
                 self._cleanup_unfinished_keypairs_cache()
@@ -2217,7 +2223,8 @@ class PSManager(Logger):
         w = self.wallet
         cached = 0
         ps_spendable_cache = self._keypairs_cache[KP_PS_SPENDABLE]
-        for c in w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL):
+        for c in self.filter_out_hw_ks_coins(
+                w.get_utxos(None, min_rounds=PSCoinRounds.COLLATERAL)):
             if self.state != PSStates.Mixing:
                 self._cleanup_unfinished_keypairs_cache()
                 return
@@ -2545,6 +2552,7 @@ class PSManager(Logger):
                             mature_only=True, confirmed_only=True,
                             consider_islocks=True, min_rounds=0)
         coins = [c for c in coins if c.value_sats() > MIN_DENOM_VAL]
+        coins = self.filter_out_hw_ks_coins(coins)
         return sorted(coins, key=lambda x: (x.ps_rounds, -x.value_sats()))
 
     def check_protx_info_completeness(self):
@@ -2776,6 +2784,7 @@ class PSManager(Logger):
                 coins = w.get_utxos(None,
                                     excluded_addresses=w.frozen_addresses)
                 coins = [c for c in coins if not w.is_frozen_coin(c)]
+                coins = self.filter_out_hw_ks_coins(coins)
                 if not coins:
                     await asyncio.sleep(5)
                     continue
@@ -2806,6 +2815,7 @@ class PSManager(Logger):
                 coins = w.get_utxos(None,
                                     excluded_addresses=w.frozen_addresses)
                 coins = [c for c in coins if not w.is_frozen_coin(c)]
+                coins = self.filter_out_hw_ks_coins(coins)
                 if not coins:
                     await asyncio.sleep(5)
                     continue
@@ -3005,6 +3015,7 @@ class PSManager(Logger):
             coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
                                 mature_only=True)
             coins = [c for c in coins if not w.is_frozen_coin(c)]
+            coins = self.filter_out_hw_ks_coins(coins)
         coins_val = sum([c.value_sats() for c in coins])
         if coins_val < MIN_DENOM_VAL and not on_keep_amount:
             return []  # no coins to create denoms
@@ -3279,6 +3290,7 @@ class PSManager(Logger):
             addr, value = ps_collateral
             utxos = w.get_utxos([addr], min_rounds=PSCoinRounds.COLLATERAL,
                                 confirmed_only=True, consider_islocks=True)
+            utxos = self.filter_out_hw_ks_coins(utxos)
             inputs = []
             for utxo in utxos:
                 if utxo.prevout.to_str() != outpoint:
@@ -3627,8 +3639,7 @@ class PSManager(Logger):
                                 mature_only=True, confirmed_only=True,
                                 consider_islocks=True)
             utxos = [utxo for utxo in utxos if not w.is_frozen_coin(utxo)]
-            if self.w_ks_type != 'bip32':  # filter coins from ps_keystore
-                utxos = [utxo for utxo in utxos if utxo.is_ps_ks]
+            utxos = self.filter_out_hw_ks_coins(utxos)
             utxos_val = sum([utxo.value_sats() for utxo in utxos])
             # try calc fee with change output
             new_collateral_fee = calc_tx_fee(len(utxos), 2, fee_per_kb,
@@ -3646,6 +3657,7 @@ class PSManager(Logger):
                                         min_rounds=0)
                     coins = [c for c in coins
                              if c.value_sats() == MIN_DENOM_VAL]
+                    coins = self.filter_out_hw_ks_coins(coins)
                     if not coins:
                         raise NotEnoughFunds()
                     coins = sorted(coins, key=lambda x: x.ps_rounds)
@@ -3956,8 +3968,7 @@ class PSManager(Logger):
                             confirmed_only=True,
                             consider_islocks=True)
         coins = [c for c in coins if not w.is_frozen_coin(c)]
-        if self.w_ks_type != 'bip32':  # filter coins from ps_keystore
-            coins = [c for c in coins if c.is_ps_ks]
+        coins = self.filter_out_hw_ks_coins(coins)
         if not coins:
             return {'total_val': 0, 'coins': []}
         coins_by_address = {}
