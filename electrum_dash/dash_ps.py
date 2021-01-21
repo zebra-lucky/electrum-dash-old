@@ -3012,10 +3012,8 @@ class PSManager(Logger):
             return []
 
         if not coins:
-            coins = w.get_utxos(None, excluded_addresses=w.frozen_addresses,
-                                mature_only=True)
-            coins = [c for c in coins if not w.is_frozen_coin(c)]
-            coins = self.filter_out_hw_ks_coins(coins)
+            coins_data = self._get_next_coins_to_denominate()
+            coins = coins_data['coins']
         coins_val = sum([c.value_sats() for c in coins])
         if coins_val < MIN_DENOM_VAL and not on_keep_amount:
             return []  # no coins to create denoms
@@ -3210,7 +3208,7 @@ class PSManager(Logger):
             main_ks_coins_val = sum([c.value_sats() for c in main_ks_coins])
             ps_ks_coins_val = sum([c.value_sats() for c in coins if c.is_ps_ks])
 
-            outputs_amounts = self.calc_need_denoms_amounts()
+            outputs_amounts = self.calc_need_denoms_amounts(on_keep_amount=True)
             in_cnt = len(coins)
             total_need_val, outputs_amounts = \
                 self._calc_total_need_val(in_cnt, outputs_amounts, fee_per_kb)
@@ -3960,7 +3958,9 @@ class PSManager(Logger):
                                  f' new denoms workflow')
                 log_info = False
             await asyncio.sleep(1)
+        return self._get_next_coins_to_denominate()
 
+    def _get_next_coins_to_denominate(self):
         w = self.wallet
         coins = w.get_utxos(None,
                             excluded_addresses=w.frozen_addresses,
