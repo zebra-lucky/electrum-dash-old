@@ -892,7 +892,8 @@ class CreateSeedWizardPage(QWizardPage):
         self.main_widget = QWidget()
         self.layout.addWidget(self.main_widget)
 
-        self.parent.seed_text = mnemonic.Mnemonic('en').make_seed('standard')
+        self.parent.seed_text = \
+            mnemonic.Mnemonic('en').make_seed(seed_type='standard')
         self.slayout = SeedLayout(seed=self.parent.seed_text, msg=True,
                                   options=['ext'])
         self.main_widget.setLayout(self.slayout)
