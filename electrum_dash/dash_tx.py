@@ -335,7 +335,8 @@ class DashProRegTx(ProTxBase):
                 if o.value == 1000 * COIN:
                     found_idx = i
                     break
-            self.collateralOutpoint = TxOutPoint(b'\x00'*32, found_idx)
+            if found_idx >= 0:
+                self.collateralOutpoint = TxOutPoint(b'\x00'*32, found_idx)
 
         outpoints = [TxOutPoint(bfh(i.prevout.txid.hex())[::-1],
                                 i.prevout.out_idx)

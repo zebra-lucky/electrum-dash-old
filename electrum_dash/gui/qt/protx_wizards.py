@@ -1587,7 +1587,7 @@ class Dip3MasternodeWizard(QWizard):
                                   'address %s' % c_addr)
 
         if p_addr == o_addr or p_addr == v_addr:
-            raise ValidationError('Payout address must differ from owner'
+            raise ValidationError('Payout address must differ from owner '
                                   'and voting addresses')
 
         keystore = self.wallet.keystore

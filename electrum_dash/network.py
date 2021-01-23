@@ -1122,10 +1122,12 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             r"Transaction check failed",
             r"bad-version",
         }
+        found_substrings = []
         for substring in dashd_specific_error_messages:
             if substring in server_msg:
-                return substring
-        # otherwise:
+                found_substrings.append(substring)
+        if found_substrings:
+            return sorted(found_substrings, key=lambda x: -len(x))[0]
         return _("Unknown error")
 
     @best_effort_reliable
