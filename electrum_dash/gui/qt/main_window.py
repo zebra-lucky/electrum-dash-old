@@ -2229,9 +2229,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger):
         for e in [self.payto_e, self.message_e, self.amount_e]:
             e.setText('')
             e.setFrozen(False)
-        self.reset_privatesend()
         self.extra_payload.clear()
         self.hide_extra_payload()
+        self.reset_privatesend()
         self.update_status()
         run_hook('do_clear', self)
 
