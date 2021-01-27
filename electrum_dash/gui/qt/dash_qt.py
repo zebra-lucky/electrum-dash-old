@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+from copy import deepcopy
 
 from PyQt5.QtCore import Qt, QRect, QPoint, QSize
 from PyQt5.QtWidgets import (QTabBar, QTextEdit, QStylePainter,
@@ -161,7 +162,9 @@ class ExtraPayloadWidget(QTextEdit):
         self.setText('')
 
     def get_extra_data(self):
-        return self.tx_type, self.extra_payload
+        # possible repeated use of extra_payload instance for
+        # make_unsigned_transaction, so use deepcopy to not interfere
+        return self.tx_type, deepcopy(self.extra_payload)
 
     def set_extra_data(self, tx_type, extra_payload, mn_alias=None):
         self.tx_type, self.extra_payload = tx_type, extra_payload
